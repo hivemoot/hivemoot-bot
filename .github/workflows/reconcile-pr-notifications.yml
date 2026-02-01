@@ -1,0 +1,39 @@
+name: reconcile-pr-notifications
+
+on:
+  schedule:
+    - cron: "30 * * * *"  # Hourly at :30 (staggered from close-discussions at :00)
+  workflow_dispatch:
+    # Manual trigger for testing
+
+# Prevent overlapping runs across governance workflows
+concurrency:
+  group: hivemoot-governance
+  cancel-in-progress: false
+
+jobs:
+  reconcile-pr-notifications:
+    name: Reconcile PR Notifications
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build TypeScript
+        run: npm run build
+
+      - name: Run reconcile-pr-notifications script
+        run: npm run reconcile-pr-notifications
+        env:
+          APP_ID: ${{ vars.APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}

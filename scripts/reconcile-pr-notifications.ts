@@ -1,0 +1,195 @@
+/**
+ * Scheduled PR Notification Reconciliation
+ *
+ * Catches missed PR notifications by sweeping all phase:ready-to-implement
+ * issues and posting voting-passed notifications to un-notified PRs.
+ *
+ * Covers two gaps:
+ * 1. Backfill — Issues already in ready-to-implement before the live trigger deployed
+ * 2. Retry — If the live trigger's try/catch swallowed an API error
+ *
+ * Uses the bot-comments metadata system for idempotent duplicate detection.
+ * Named generically to support additional PR monitoring logic in the future.
+ */
+
+import { Octokit } from "octokit";
+import {
+  LABELS,
+  PR_MESSAGES,
+} from "../api/config.js";
+import {
+  createPROperations,
+  getOpenPRsForIssue,
+  logger,
+} from "../api/lib/index.js";
+import { NOTIFICATION_TYPES } from "../api/lib/bot-comments.js";
+import { runForAllRepositories, runIfMain } from "./shared/run-installations.js";
+import type { Repository, PRRef } from "../api/lib/index.js";
+import type { PROperations } from "../api/lib/pr-operations.js";
+
+/**
+ * Legacy signature for pre-metadata voting-passed notifications.
+ * Must stay in sync with the phrasing in PR_MESSAGES.issueVotingPassed.
+ */
+const VOTING_PASSED_LEGACY_SIGNATURE = "passed voting and is ready for implementation";
+
+/**
+ * Check if a PR already has a voting-passed notification for this issue.
+ *
+ * Single-pass detection:
+ * 1. Fetch comments once
+ * 2. Check metadata-tagged comments
+ * 3. Fallback to legacy signature text
+ *
+ * Exported for testing.
+ */
+export async function hasVotingPassedNotification(
+  prs: PROperations,
+  ref: PRRef,
+  issueNumber: number
+): Promise<boolean> {
+  const comments = await prs.listCommentsWithBody(ref);
+
+  // Tier 1: Check for metadata-tagged notification comments
+  const hasMetadata = prs.hasNotificationCommentInComments(
+    comments,
+    NOTIFICATION_TYPES.VOTING_PASSED,
+    issueNumber
+  );
+  if (hasMetadata) return true;
+
+  // Tier 2: Fallback for pre-metadata comments from the live trigger.
+  // These contain the legacy signature + "Issue #N".
+  // We scan comment bodies to detect them without requiring metadata.
+  for (const comment of comments) {
+    if (
+      comment.body &&
+      comment.body.includes(VOTING_PASSED_LEGACY_SIGNATURE) &&
+      comment.body.includes(`Issue #${issueNumber}`)
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Process one ready-to-implement issue: find linked PRs, skip notified/implementation ones, notify the rest.
+ * Exported for testing.
+ */
+export async function reconcileIssue(
+  octokit: InstanceType<typeof Octokit>,
+  prs: PROperations,
+  owner: string,
+  repo: string,
+  issueNumber: number
+): Promise<{ notified: number; skipped: number }> {
+  const linkedPRs = await getOpenPRsForIssue(octokit, owner, repo, issueNumber);
+  if (linkedPRs.length === 0) {
+    logger.debug(`No open PRs linked to issue #${issueNumber}`);
+    return { notified: 0, skipped: 0 };
+  }
+
+  // Build exclusion set: PRs already labeled as implementation don't need notification
+  const implementationPRs = await prs.findPRsWithLabel(owner, repo, LABELS.IMPLEMENTATION);
+  const implementationPRNumbers = new Set(implementationPRs.map((pr) => pr.number));
+
+  let notified = 0;
+  let skipped = 0;
+
+  for (const linkedPR of linkedPRs) {
+    if (implementationPRNumbers.has(linkedPR.number)) {
+      skipped++;
+      continue;
+    }
+
+    const ref: PRRef = { owner, repo, prNumber: linkedPR.number };
+
+    const alreadyNotified = await hasVotingPassedNotification(prs, ref, issueNumber);
+    if (alreadyNotified) {
+      skipped++;
+      continue;
+    }
+
+    await prs.comment(
+      ref,
+      PR_MESSAGES.issueVotingPassed(issueNumber, linkedPR.author.login)
+    );
+    logger.info(`Reconciled: notified PR #${linkedPR.number} (@${linkedPR.author.login}) that issue #${issueNumber} is ready`);
+    notified++;
+  }
+
+  return { notified, skipped };
+}
+
+/**
+ * Process a single repository - find all phase:ready-to-implement issues and reconcile each.
+ * Exported for testing.
+ */
+export async function processRepository(
+  octokit: InstanceType<typeof Octokit>,
+  repo: Repository,
+  appId: number
+): Promise<void> {
+  const owner = repo.owner.login;
+  const repoName = repo.name;
+
+  logger.group(`Processing ${repo.full_name}`);
+
+  try {
+    const prs = createPROperations(octokit, { appId });
+
+    // Paginate through all open issues with phase:ready-to-implement label
+    const failedIssues: number[] = [];
+    const readyIterator = octokit.paginate.iterator(
+      octokit.rest.issues.listForRepo,
+      {
+        owner,
+        repo: repoName,
+        state: "open",
+        labels: LABELS.READY_TO_IMPLEMENT,
+        per_page: 100,
+      }
+    );
+
+    for await (const { data: page } of readyIterator) {
+      // Filter out PRs (the issues API also returns PRs with matching labels)
+      const issues = (page as Array<{ number: number; pull_request?: unknown }>).filter(
+        (item) => !item.pull_request
+      );
+
+      for (const issue of issues) {
+        try {
+          const result = await reconcileIssue(octokit, prs, owner, repoName, issue.number);
+          if (result.notified > 0) {
+            logger.info(`Issue #${issue.number}: notified ${result.notified} PR(s), skipped ${result.skipped}`);
+          }
+        } catch (error) {
+          failedIssues.push(issue.number);
+          logger.error(`Failed to reconcile issue #${issue.number}`, error as Error);
+        }
+      }
+    }
+
+    if (failedIssues.length > 0) {
+      throw new Error(
+        `Failed to reconcile ${failedIssues.length} issue(s): ${failedIssues.map((n) => `#${n}`).join(", ")}`
+      );
+    }
+  } finally {
+    logger.groupEnd();
+  }
+}
+
+/**
+ * Main entry point - processes all installations and their repositories
+ */
+async function main(): Promise<void> {
+  await runForAllRepositories({
+    scriptName: "scheduled PR notification reconciliation",
+    processRepository,
+  });
+}
+
+runIfMain(import.meta.url, main);

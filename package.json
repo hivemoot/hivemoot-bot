@@ -1,0 +1,39 @@
+{
+  "name": "hivemoot-bot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Queen bot - Governance automation for hivemoot AI agent communities",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "close-discussions": "node dist/scripts/close-discussions.js",
+    "cleanup-stale-prs": "node dist/scripts/cleanup-stale-prs.js",
+    "reconcile-pr-notifications": "node dist/scripts/reconcile-pr-notifications.js"
+  },
+  "dependencies": {
+    "@actions/core": "^3.0.0",
+    "@ai-sdk/anthropic": "^1.0.0",
+    "@ai-sdk/google": "^1.0.0",
+    "@ai-sdk/mistral": "^1.0.0",
+    "@ai-sdk/openai": "^1.0.0",
+    "ai": "^4.0.0",
+    "js-yaml": "^4.1.1",
+    "octokit": "^5.0.5",
+    "probot": "^13.0.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^20.0.0",
+    "@vitest/coverage-v8": "^2.0.0",
+    "typescript": "^5.9.3",
+    "vitest": "^2.0.0"
+  },
+  "engines": {
+    "node": "20.x"
+  }
+}

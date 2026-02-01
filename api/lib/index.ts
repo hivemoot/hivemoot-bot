@@ -1,0 +1,52 @@
+/**
+ * Library exports
+ *
+ * Central export point for all shared library code.
+ */
+
+// Types
+export type {
+  Issue,
+  Repository,
+  IssueRef,
+  VoteCounts,
+  VotingOutcome,
+  TimelineEvent,
+  LockReason,
+  PRRef,
+  PullRequest,
+  LinkedIssue,
+  PRWithApprovals,
+  IssueComment,
+} from "./types.js";
+
+// GitHub client abstraction
+export { IssueOperations, createIssueOperations } from "./github-client.js";
+export type { GitHubClient, IssueOperations as IssueOperationsType } from "./github-client.js";
+
+// PR operations
+export { PROperations, createPROperations } from "./pr-operations.js";
+export type { PRClient, PROperationsConfig, PROperations as PROperationsType } from "./pr-operations.js";
+
+// GraphQL queries for PR-issue linking
+export {
+  getLinkedIssues,
+  getOpenPRsForIssue,
+} from "./graphql-queries.js";
+export type { GraphQLClient } from "./graphql-queries.js";
+
+// Leaderboard service
+export { LeaderboardService, createLeaderboardService } from "./leaderboard.js";
+export type { LeaderboardClient, LeaderboardService as LeaderboardServiceType } from "./leaderboard.js";
+
+// Governance business logic
+export { GovernanceService, createGovernanceService } from "./governance.js";
+export type { GovernanceServiceConfig } from "./governance.js";
+
+// Logging
+export { logger, createLogger } from "./logger.js";
+export type { Logger } from "./logger.js";
+
+// Repository configuration
+export { loadRepositoryConfig, getDefaultConfig } from "./repo-config.js";
+export type { EffectiveConfig, RepoConfigFile, RepoConfigClient } from "./repo-config.js";

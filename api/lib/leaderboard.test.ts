@@ -187,6 +187,16 @@ describe("formatLeaderboard", () => {
     expect(result).toContain("Best implementation gets merged.");
   });
 
+  it("should encourage readiness when scores exist", () => {
+    const scores: PRWithApprovals[] = [
+      { number: 1, title: "PR", author: "user", approvals: 1 },
+    ];
+
+    const result = formatLeaderboard(scores);
+
+    expect(result).toContain("make sure checks pass");
+  });
+
   it("should handle empty scores array", () => {
     const scores: PRWithApprovals[] = [];
 
@@ -194,6 +204,7 @@ describe("formatLeaderboard", () => {
 
     // Should still produce valid markdown structure
     expect(result).toContain(SIGNATURES.LEADERBOARD);
+    expect(result).toContain("No linked PRs are eligible for the implementation leaderboard yet.");
     expect(result).toContain("| PR | Author | Approvals |");
   });
 

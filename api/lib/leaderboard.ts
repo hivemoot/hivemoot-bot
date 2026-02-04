@@ -72,11 +72,28 @@ export function formatLeaderboard(scores: PRWithApprovals[]): string {
     (s) => `| #${s.number} | @${s.author} | ${s.approvals} |`
   );
 
+  if (scores.length === 0) {
+    return `${SIGNATURES.LEADERBOARD}
+
+No linked PRs are eligible for the implementation leaderboard yet.
+
+Next steps:
+- Open a PR that links this issue (e.g., \`Fixes #<issue-number>\`).
+- If your PR was opened before the issue became ready to implement, add a new commit (or leave a comment) to activate it for consideration.
+
+| PR | Author | Approvals |
+|----|--------|-----------|
+
+Best implementation gets merged.${SIGNATURE}`;
+  }
+
   return `${SIGNATURES.LEADERBOARD}
 
 | PR | Author | Approvals |
 |----|--------|-----------|
 ${rows.join("\n")}
+
+Want your PR to rise to the top? Keep changes high-quality, respond quickly to reviews, and make sure checks pass so it's ready to approve and merge.
 
 Best implementation gets merged.${SIGNATURE}`;
 }

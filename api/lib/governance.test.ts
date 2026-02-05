@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { GovernanceService, createGovernanceService } from "./governance.js";
+import { GovernanceService, createGovernanceService, isUnanimous, isDecisive, type EndVotingOptions } from "./governance.js";
 import type { IssueOperations } from "./github-client.js";
-import type { IssueRef, VoteCounts } from "./types.js";
+import type { IssueRef, VoteCounts, ValidatedVoteResult } from "./types.js";
 import { LABELS, MESSAGES, SIGNATURE } from "../config.js";
 import { SIGNATURES, ERROR_CODES } from "./bot-comments.js";
 import { createModelFromEnv } from "./llm/provider.js";
@@ -41,7 +41,7 @@ describe("GovernanceService", () => {
       unlock: vi.fn().mockResolvedValue(undefined),
       getVoteCounts: vi.fn().mockResolvedValue({ thumbsUp: 0, thumbsDown: 0, confused: 0 }),
       findVotingCommentId: vi.fn().mockResolvedValue(12345),
-      getVoteCountsFromComment: vi.fn().mockResolvedValue({ thumbsUp: 0, thumbsDown: 0, confused: 0 }),
+      getValidatedVoteCounts: vi.fn().mockResolvedValue({ votes: { thumbsUp: 0, thumbsDown: 0, confused: 0 }, voters: [], participants: [] }),
       countVotingComments: vi.fn().mockResolvedValue(0),
       hasHumanHelpComment: vi.fn().mockResolvedValue(false),
       getLabelAddedTime: vi.fn().mockResolvedValue(new Date()),
@@ -234,29 +234,34 @@ describe("GovernanceService", () => {
   });
 
   describe("endVoting", () => {
+    /** Helper: create a ValidatedVoteResult where every vote is from a unique single-reaction voter */
+    function validatedFrom(votes: VoteCounts): ValidatedVoteResult {
+      const total = votes.thumbsUp + votes.thumbsDown + votes.confused;
+      const names = Array.from({ length: total }, (_, i) => `voter-${i}`);
+      return { votes, voters: names, participants: names };
+    }
+
     it("should mark phase:ready-to-implement when thumbsUp > thumbsDown", async () => {
       const votes: VoteCounts = { thumbsUp: 5, thumbsDown: 2, confused: 1 };
-      vi.mocked(mockIssues.getVoteCountsFromComment).mockResolvedValue(votes);
+      vi.mocked(mockIssues.getValidatedVoteCounts).mockResolvedValue(validatedFrom(votes));
 
       const outcome = await governance.endVoting(testRef);
 
       expect(outcome).toBe("phase:ready-to-implement");
       expect(mockIssues.findVotingCommentId).toHaveBeenCalledWith(testRef);
-      expect(mockIssues.getVoteCountsFromComment).toHaveBeenCalledWith(testRef, 12345);
+      expect(mockIssues.getValidatedVoteCounts).toHaveBeenCalledWith(testRef, 12345);
       expect(mockIssues.transition).toHaveBeenCalledWith(testRef, {
         removeLabel: LABELS.VOTING,
         addLabel: LABELS.READY_TO_IMPLEMENT,
         comment: MESSAGES.votingEndReadyToImplement(votes),
         close: false,
-        // closeReason not passed when close: false
         lock: false,
-        // lockReason not passed when lock: false
       });
     });
 
     it("should reject and close when thumbsDown > thumbsUp", async () => {
       const votes: VoteCounts = { thumbsUp: 1, thumbsDown: 5, confused: 0 };
-      vi.mocked(mockIssues.getVoteCountsFromComment).mockResolvedValue(votes);
+      vi.mocked(mockIssues.getValidatedVoteCounts).mockResolvedValue(validatedFrom(votes));
 
       const outcome = await governance.endVoting(testRef);
 
@@ -274,7 +279,7 @@ describe("GovernanceService", () => {
 
     it("should be inconclusive when votes are tied", async () => {
       const votes: VoteCounts = { thumbsUp: 3, thumbsDown: 3, confused: 2 };
-      vi.mocked(mockIssues.getVoteCountsFromComment).mockResolvedValue(votes);
+      vi.mocked(mockIssues.getValidatedVoteCounts).mockResolvedValue(validatedFrom(votes));
 
       const outcome = await governance.endVoting(testRef);
 
@@ -284,15 +289,13 @@ describe("GovernanceService", () => {
         addLabel: LABELS.INCONCLUSIVE,
         comment: MESSAGES.votingEndInconclusive(votes),
         close: false,
-        // closeReason not passed when close: false
         lock: false,
-        // lockReason not passed when lock: false
       });
     });
 
     it("should be inconclusive when no votes", async () => {
       const votes: VoteCounts = { thumbsUp: 0, thumbsDown: 0, confused: 0 };
-      vi.mocked(mockIssues.getVoteCountsFromComment).mockResolvedValue(votes);
+      vi.mocked(mockIssues.getValidatedVoteCounts).mockResolvedValue(validatedFrom(votes));
 
       const outcome = await governance.endVoting(testRef);
 
@@ -301,7 +304,7 @@ describe("GovernanceService", () => {
 
     it("should return to discussion when confused > thumbsUp + thumbsDown (needs-more-discussion)", async () => {
       const votes: VoteCounts = { thumbsUp: 2, thumbsDown: 1, confused: 5 };
-      vi.mocked(mockIssues.getVoteCountsFromComment).mockResolvedValue(votes);
+      vi.mocked(mockIssues.getValidatedVoteCounts).mockResolvedValue(validatedFrom(votes));
 
       const outcome = await governance.endVoting(testRef);
 
@@ -319,7 +322,7 @@ describe("GovernanceService", () => {
     it("should NOT trigger needs-more-discussion when confused equals thumbsUp + thumbsDown", async () => {
       // confused (3) = thumbsUp (2) + thumbsDown (1) - should NOT trigger needs-more-discussion
       const votes: VoteCounts = { thumbsUp: 2, thumbsDown: 1, confused: 3 };
-      vi.mocked(mockIssues.getVoteCountsFromComment).mockResolvedValue(votes);
+      vi.mocked(mockIssues.getValidatedVoteCounts).mockResolvedValue(validatedFrom(votes));
 
       const outcome = await governance.endVoting(testRef);
 
@@ -338,7 +341,7 @@ describe("GovernanceService", () => {
       expect(mockIssues.hasHumanHelpComment).toHaveBeenCalledWith(testRef, ERROR_CODES.VOTING_COMMENT_NOT_FOUND);
       expect(mockIssues.comment).toHaveBeenCalled();
       expect(mockIssues.addLabels).toHaveBeenCalledWith(testRef, [LABELS.BLOCKED_HUMAN_HELP]);
-      expect(mockIssues.getVoteCountsFromComment).not.toHaveBeenCalled();
+      expect(mockIssues.getValidatedVoteCounts).not.toHaveBeenCalled();
     });
 
     it("should skip posting duplicate human help comment", async () => {
@@ -365,29 +368,207 @@ describe("GovernanceService", () => {
     });
   });
 
+  describe("endVoting with options", () => {
+    it("should prepend early decision note with 'quorum reached' when no required voters", async () => {
+      const votes: VoteCounts = { thumbsUp: 3, thumbsDown: 1, confused: 0 };
+      vi.mocked(mockIssues.getValidatedVoteCounts).mockResolvedValue({
+        votes, voters: ["a", "b", "c", "d"], participants: ["a", "b", "c", "d"],
+      });
+
+      await governance.endVoting(testRef, { earlyDecision: true });
+
+      const callArgs = vi.mocked(mockIssues.transition).mock.calls[0][1];
+      expect(callArgs.comment).toContain("Early decision");
+      expect(callArgs.comment).toContain("quorum reached");
+    });
+
+    it("should prepend early decision with 'all required voters' for mode: all", async () => {
+      const votes: VoteCounts = { thumbsUp: 3, thumbsDown: 1, confused: 0 };
+      vi.mocked(mockIssues.getValidatedVoteCounts).mockResolvedValue({
+        votes, voters: ["a", "b", "c", "d"], participants: ["a", "b", "c", "d"],
+      });
+
+      await governance.endVoting(testRef, {
+        earlyDecision: true,
+        votingConfig: { minVoters: 1, requiredVoters: { mode: "all", voters: ["a", "b"] } },
+      });
+
+      const callArgs = vi.mocked(mockIssues.transition).mock.calls[0][1];
+      expect(callArgs.comment).toContain("all required voters have participated");
+    });
+
+    it("should prepend early decision with 'a required voter' for mode: any", async () => {
+      const votes: VoteCounts = { thumbsUp: 3, thumbsDown: 1, confused: 0 };
+      vi.mocked(mockIssues.getValidatedVoteCounts).mockResolvedValue({
+        votes, voters: ["a", "b", "c", "d"], participants: ["a", "b", "c", "d"],
+      });
+
+      await governance.endVoting(testRef, {
+        earlyDecision: true,
+        votingConfig: { minVoters: 1, requiredVoters: { mode: "any", voters: ["a", "b"] } },
+      });
+
+      const callArgs = vi.mocked(mockIssues.transition).mock.calls[0][1];
+      expect(callArgs.comment).toContain("a required voter has participated");
+    });
+
+    it("should NOT prepend early decision note when earlyDecision is false", async () => {
+      const votes: VoteCounts = { thumbsUp: 3, thumbsDown: 1, confused: 0 };
+      vi.mocked(mockIssues.getValidatedVoteCounts).mockResolvedValue({
+        votes, voters: ["a", "b", "c", "d"], participants: ["a", "b", "c", "d"],
+      });
+
+      await governance.endVoting(testRef);
+
+      const callArgs = vi.mocked(mockIssues.transition).mock.calls[0][1];
+      expect(callArgs.comment).not.toContain("Early decision");
+    });
+
+    it("should NOT prepend early decision note when outcome is inconclusive (tied vote)", async () => {
+      const votes: VoteCounts = { thumbsUp: 3, thumbsDown: 3, confused: 0 };
+      vi.mocked(mockIssues.getValidatedVoteCounts).mockResolvedValue({
+        votes, voters: ["a", "b", "c", "d", "e", "f"], participants: ["a", "b", "c", "d", "e", "f"],
+      });
+
+      const outcome = await governance.endVoting(testRef, { earlyDecision: true });
+
+      expect(outcome).toBe("inconclusive");
+      const callArgs = vi.mocked(mockIssues.transition).mock.calls[0][1];
+      expect(callArgs.comment).not.toContain("Early decision");
+    });
+
+    it("should force inconclusive when valid voters < minVoters", async () => {
+      const outcome = await governance.endVoting(testRef, {
+        votingConfig: { minVoters: 3, requiredVoters: { mode: "all", voters: [] } },
+        validatedVotes: {
+          votes: { thumbsUp: 1, thumbsDown: 0, confused: 0 },
+          voters: ["alice"],
+          participants: ["alice"],
+        },
+      });
+
+      expect(outcome).toBe("inconclusive");
+      const callArgs = vi.mocked(mockIssues.transition).mock.calls[0][1];
+      expect(callArgs.comment).toContain("Requirements Not Met");
+      expect(callArgs.comment).toContain("Quorum: 1/3");
+    });
+
+    it("should not let one user satisfy minVoters with multiple reactions", async () => {
+      // One user added 👍, 👎, and 😕 — multi-reaction discard means 0 valid voters, 0 counted votes
+      const outcome = await governance.endVoting(testRef, {
+        votingConfig: { minVoters: 3, requiredVoters: { mode: "all", voters: [] } },
+        validatedVotes: {
+          votes: { thumbsUp: 0, thumbsDown: 0, confused: 0 }, // discarded from tally
+          voters: [],                                           // discarded from quorum
+          participants: ["alice"],                               // still a participant
+        },
+      });
+
+      expect(outcome).toBe("inconclusive");
+    });
+
+    it("should force inconclusive when required voter is missing", async () => {
+      const outcome = await governance.endVoting(testRef, {
+        votingConfig: { minVoters: 1, requiredVoters: { mode: "all", voters: ["agent-a", "agent-b"] } },
+        validatedVotes: {
+          votes: { thumbsUp: 3, thumbsDown: 0, confused: 0 },
+          voters: ["agent-a", "agent-c", "agent-d"],
+          participants: ["agent-a", "agent-c", "agent-d"], // agent-b missing
+        },
+      });
+
+      expect(outcome).toBe("inconclusive");
+      const callArgs = vi.mocked(mockIssues.transition).mock.calls[0][1];
+      expect(callArgs.comment).toContain("Requirements Not Met");
+      expect(callArgs.comment).toContain("Missing required voters");
+      expect(callArgs.comment).toContain("@agent-b");
+    });
+
+    it("should allow normal outcome when all requirements met", async () => {
+      const outcome = await governance.endVoting(testRef, {
+        votingConfig: { minVoters: 2, requiredVoters: { mode: "all", voters: ["agent-a", "agent-b"] } },
+        validatedVotes: {
+          votes: { thumbsUp: 3, thumbsDown: 0, confused: 0 },
+          voters: ["agent-a", "agent-b", "agent-c"],
+          participants: ["agent-a", "agent-b", "agent-c"],
+        },
+      });
+
+      expect(outcome).toBe("phase:ready-to-implement");
+    });
+
+    it("should count thumbsDown reactions as participation for requiredVoters", async () => {
+      // agent-b voted 👎, which counts as participation
+      const outcome = await governance.endVoting(testRef, {
+        votingConfig: { minVoters: 2, requiredVoters: { mode: "all", voters: ["agent-a", "agent-b"] } },
+        validatedVotes: {
+          votes: { thumbsUp: 1, thumbsDown: 2, confused: 0 },
+          voters: ["agent-a", "agent-b", "agent-c"],
+          participants: ["agent-a", "agent-b", "agent-c"],
+        },
+      });
+
+      // Normal outcome — agent-b participated via thumbsDown
+      expect(outcome).toBe("rejected");
+    });
+
+    it("should still count multi-reaction user as participant for requiredVoters", async () => {
+      // agent-a cast both 👍 and 👎 — invalid vote but still participated
+      const outcome = await governance.endVoting(testRef, {
+        votingConfig: { minVoters: 1, requiredVoters: { mode: "all", voters: ["agent-a"] } },
+        validatedVotes: {
+          votes: { thumbsUp: 1, thumbsDown: 0, confused: 0 },
+          voters: ["agent-b"],      // agent-a excluded from voters (multi-reaction)
+          participants: ["agent-a", "agent-b"], // agent-a still a participant
+        },
+      });
+
+      // agent-a participated, so requiredVoters passes. 1 valid voter >= minVoters 1.
+      expect(outcome).toBe("phase:ready-to-implement");
+    });
+
+    it("should use pre-fetched validatedVotes and skip API call", async () => {
+      await governance.endVoting(testRef, {
+        validatedVotes: {
+          votes: { thumbsUp: 1, thumbsDown: 0, confused: 0 },
+          voters: ["alice"],
+          participants: ["alice"],
+        },
+      });
+
+      expect(mockIssues.getValidatedVoteCounts).not.toHaveBeenCalled();
+    });
+  });
+
   describe("resolveInconclusive", () => {
+    /** Helper: create a ValidatedVoteResult with no enforcement concerns */
+    function resolveValidated(votes: VoteCounts): ValidatedVoteResult {
+      const total = votes.thumbsUp + votes.thumbsDown + votes.confused;
+      const names = Array.from({ length: total }, (_, i) => `voter-${i}`);
+      return { votes, voters: names, participants: names };
+    }
+
     it("should transition to ready-to-implement when thumbsUp > thumbsDown after extended voting", async () => {
       const votes: VoteCounts = { thumbsUp: 5, thumbsDown: 2, confused: 1 };
-      vi.mocked(mockIssues.getVoteCountsFromComment).mockResolvedValue(votes);
+      vi.mocked(mockIssues.getValidatedVoteCounts).mockResolvedValue(resolveValidated(votes));
 
       const outcome = await governance.resolveInconclusive(testRef);
 
       expect(outcome).toBe("phase:ready-to-implement");
       expect(mockIssues.findVotingCommentId).toHaveBeenCalledWith(testRef);
-      expect(mockIssues.getVoteCountsFromComment).toHaveBeenCalledWith(testRef, 12345);
+      expect(mockIssues.getValidatedVoteCounts).toHaveBeenCalledWith(testRef, 12345);
       expect(mockIssues.transition).toHaveBeenCalledWith(testRef, {
         removeLabel: LABELS.INCONCLUSIVE,
         addLabel: LABELS.READY_TO_IMPLEMENT,
         comment: MESSAGES.votingEndInconclusiveResolved(votes, "phase:ready-to-implement"),
         close: false,
         lock: false,
-        // lockReason not passed when lock: false
       });
     });
 
     it("should transition to rejected when thumbsDown > thumbsUp after extended voting", async () => {
       const votes: VoteCounts = { thumbsUp: 1, thumbsDown: 5, confused: 0 };
-      vi.mocked(mockIssues.getVoteCountsFromComment).mockResolvedValue(votes);
+      vi.mocked(mockIssues.getValidatedVoteCounts).mockResolvedValue(resolveValidated(votes));
 
       const outcome = await governance.resolveInconclusive(testRef);
 
@@ -405,7 +586,7 @@ describe("GovernanceService", () => {
 
     it("should close and lock when still tied after extended voting (final)", async () => {
       const votes: VoteCounts = { thumbsUp: 3, thumbsDown: 3, confused: 2 };
-      vi.mocked(mockIssues.getVoteCountsFromComment).mockResolvedValue(votes);
+      vi.mocked(mockIssues.getValidatedVoteCounts).mockResolvedValue(resolveValidated(votes));
 
       const outcome = await governance.resolveInconclusive(testRef);
 
@@ -423,7 +604,7 @@ describe("GovernanceService", () => {
 
     it("should close and lock when no votes after extended voting (final)", async () => {
       const votes: VoteCounts = { thumbsUp: 0, thumbsDown: 0, confused: 0 };
-      vi.mocked(mockIssues.getVoteCountsFromComment).mockResolvedValue(votes);
+      vi.mocked(mockIssues.getValidatedVoteCounts).mockResolvedValue(resolveValidated(votes));
 
       const outcome = await governance.resolveInconclusive(testRef);
 
@@ -450,7 +631,7 @@ describe("GovernanceService", () => {
       expect(mockIssues.hasHumanHelpComment).toHaveBeenCalledWith(testRef, ERROR_CODES.VOTING_COMMENT_NOT_FOUND);
       expect(mockIssues.comment).toHaveBeenCalled();
       expect(mockIssues.addLabels).toHaveBeenCalledWith(testRef, [LABELS.BLOCKED_HUMAN_HELP]);
-      expect(mockIssues.getVoteCountsFromComment).not.toHaveBeenCalled();
+      expect(mockIssues.getValidatedVoteCounts).not.toHaveBeenCalled();
     });
 
     it("should skip posting duplicate human help comment in resolveInconclusive", async () => {
@@ -465,7 +646,7 @@ describe("GovernanceService", () => {
 
     it("should return to discussion when confused > thumbsUp + thumbsDown after extended voting", async () => {
       const votes: VoteCounts = { thumbsUp: 1, thumbsDown: 2, confused: 6 };
-      vi.mocked(mockIssues.getVoteCountsFromComment).mockResolvedValue(votes);
+      vi.mocked(mockIssues.getValidatedVoteCounts).mockResolvedValue(resolveValidated(votes));
 
       const outcome = await governance.resolveInconclusive(testRef);
 
@@ -479,6 +660,159 @@ describe("GovernanceService", () => {
         unlock: true,
       });
     });
+
+    it("should force inconclusive when valid voters < minVoters after extended voting", async () => {
+      const outcome = await governance.resolveInconclusive(testRef, {
+        votingConfig: { minVoters: 3, requiredVoters: { mode: "all", voters: [] } },
+        validatedVotes: {
+          votes: { thumbsUp: 1, thumbsDown: 0, confused: 0 },
+          voters: ["alice"],
+          participants: ["alice"],
+        },
+      });
+
+      expect(outcome).toBe("inconclusive");
+      const callArgs = vi.mocked(mockIssues.transition).mock.calls[0][1];
+      expect(callArgs.comment).toContain("Requirements Not Met");
+      expect(callArgs.comment).toContain("Quorum: 1/3");
+      expect(callArgs.comment).toContain("Closing this issue");
+    });
+
+    it("should force inconclusive when required voter missing after extended voting", async () => {
+      const outcome = await governance.resolveInconclusive(testRef, {
+        votingConfig: { minVoters: 1, requiredVoters: { mode: "all", voters: ["agent-a", "agent-b"] } },
+        validatedVotes: {
+          votes: { thumbsUp: 3, thumbsDown: 0, confused: 0 },
+          voters: ["agent-a", "agent-c", "agent-d"],
+          participants: ["agent-a", "agent-c", "agent-d"],
+        },
+      });
+
+      expect(outcome).toBe("inconclusive");
+      const callArgs = vi.mocked(mockIssues.transition).mock.calls[0][1];
+      expect(callArgs.comment).toContain("Requirements Not Met");
+      expect(callArgs.comment).toContain("Missing required voters");
+      expect(callArgs.comment).toContain("@agent-b");
+      expect(callArgs.comment).toContain("Closing this issue");
+    });
+
+    it("should allow normal outcome when requirements met after extended voting", async () => {
+      const outcome = await governance.resolveInconclusive(testRef, {
+        votingConfig: { minVoters: 2, requiredVoters: { mode: "all", voters: ["agent-a"] } },
+        validatedVotes: {
+          votes: { thumbsUp: 3, thumbsDown: 1, confused: 0 },
+          voters: ["agent-a", "agent-b", "agent-c", "agent-d"],
+          participants: ["agent-a", "agent-b", "agent-c", "agent-d"],
+        },
+      });
+
+      expect(outcome).toBe("phase:ready-to-implement");
+    });
+
+    it("should use pre-fetched validatedVotes and skip API call", async () => {
+      await governance.resolveInconclusive(testRef, {
+        validatedVotes: {
+          votes: { thumbsUp: 1, thumbsDown: 0, confused: 0 },
+          voters: ["alice"],
+          participants: ["alice"],
+        },
+      });
+
+      expect(mockIssues.getValidatedVoteCounts).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("enforceVotingRequirements with mode: any", () => {
+    it("should pass when at least one required voter participated (mode: any)", async () => {
+      const outcome = await governance.endVoting(testRef, {
+        votingConfig: { minVoters: 1, requiredVoters: { mode: "any", voters: ["agent-a", "agent-b"] } },
+        validatedVotes: {
+          votes: { thumbsUp: 3, thumbsDown: 0, confused: 0 },
+          voters: ["agent-a", "agent-c", "agent-d"],
+          participants: ["agent-a", "agent-c", "agent-d"],
+        },
+      });
+
+      expect(outcome).toBe("phase:ready-to-implement");
+    });
+
+    it("should force inconclusive when no required voter participated (mode: any)", async () => {
+      const outcome = await governance.endVoting(testRef, {
+        votingConfig: { minVoters: 1, requiredVoters: { mode: "any", voters: ["agent-a", "agent-b"] } },
+        validatedVotes: {
+          votes: { thumbsUp: 3, thumbsDown: 0, confused: 0 },
+          voters: ["agent-c", "agent-d", "agent-e"],
+          participants: ["agent-c", "agent-d", "agent-e"],
+        },
+      });
+
+      expect(outcome).toBe("inconclusive");
+      const callArgs = vi.mocked(mockIssues.transition).mock.calls[0][1];
+      expect(callArgs.comment).toContain("None of the required voters participated");
+      expect(callArgs.comment).toContain("@agent-a");
+      expect(callArgs.comment).toContain("@agent-b");
+    });
+
+    it("should pass with empty voters array (mode: any)", async () => {
+      const outcome = await governance.endVoting(testRef, {
+        votingConfig: { minVoters: 1, requiredVoters: { mode: "any", voters: [] } },
+        validatedVotes: {
+          votes: { thumbsUp: 1, thumbsDown: 0, confused: 0 },
+          voters: ["alice"],
+          participants: ["alice"],
+        },
+      });
+
+      expect(outcome).toBe("phase:ready-to-implement");
+    });
+  });
+});
+
+describe("isUnanimous", () => {
+  it("should return true when all votes are thumbsUp", () => {
+    expect(isUnanimous({ thumbsUp: 5, thumbsDown: 0, confused: 0 })).toBe(true);
+  });
+
+  it("should return true when all votes are thumbsDown", () => {
+    expect(isUnanimous({ thumbsUp: 0, thumbsDown: 3, confused: 0 })).toBe(true);
+  });
+
+  it("should return true when all votes are confused", () => {
+    expect(isUnanimous({ thumbsUp: 0, thumbsDown: 0, confused: 2 })).toBe(true);
+  });
+
+  it("should return false when votes are mixed", () => {
+    expect(isUnanimous({ thumbsUp: 3, thumbsDown: 1, confused: 0 })).toBe(false);
+  });
+
+  it("should return false when no votes", () => {
+    expect(isUnanimous({ thumbsUp: 0, thumbsDown: 0, confused: 0 })).toBe(false);
+  });
+});
+
+describe("isDecisive", () => {
+  it("should return true when thumbsUp > thumbsDown", () => {
+    expect(isDecisive({ thumbsUp: 3, thumbsDown: 1, confused: 0 })).toBe(true);
+  });
+
+  it("should return true when thumbsDown > thumbsUp", () => {
+    expect(isDecisive({ thumbsUp: 1, thumbsDown: 3, confused: 0 })).toBe(true);
+  });
+
+  it("should return true when confused majority (needs-more-discussion)", () => {
+    expect(isDecisive({ thumbsUp: 1, thumbsDown: 1, confused: 3 })).toBe(true);
+  });
+
+  it("should return false when thumbsUp === thumbsDown (tie)", () => {
+    expect(isDecisive({ thumbsUp: 3, thumbsDown: 3, confused: 0 })).toBe(false);
+  });
+
+  it("should return false when all zeros (tie at zero)", () => {
+    expect(isDecisive({ thumbsUp: 0, thumbsDown: 0, confused: 0 })).toBe(false);
+  });
+
+  it("should return false when tied with non-majority confused", () => {
+    expect(isDecisive({ thumbsUp: 3, thumbsDown: 3, confused: 2 })).toBe(false);
   });
 });
 
@@ -497,7 +831,7 @@ describe("GovernanceService voting cycle tracking", () => {
       unlock: vi.fn().mockResolvedValue(undefined),
       getVoteCounts: vi.fn().mockResolvedValue({ thumbsUp: 0, thumbsDown: 0, confused: 0 }),
       findVotingCommentId: vi.fn().mockResolvedValue(12345),
-      getVoteCountsFromComment: vi.fn().mockResolvedValue({ thumbsUp: 0, thumbsDown: 0, confused: 0 }),
+      getValidatedVoteCounts: vi.fn().mockResolvedValue({ votes: { thumbsUp: 0, thumbsDown: 0, confused: 0 }, voters: [], participants: [] }),
       countVotingComments: vi.fn().mockResolvedValue(0),
       hasHumanHelpComment: vi.fn().mockResolvedValue(false),
       getLabelAddedTime: vi.fn().mockResolvedValue(new Date()),
@@ -554,7 +888,7 @@ describe("createGovernanceService", () => {
     lock: vi.fn(),
     getVoteCounts: vi.fn(),
     findVotingCommentId: vi.fn(),
-    getVoteCountsFromComment: vi.fn(),
+    getValidatedVoteCounts: vi.fn(),
     countVotingComments: vi.fn(),
     hasHumanHelpComment: vi.fn(),
     getLabelAddedTime: vi.fn(),

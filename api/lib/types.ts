@@ -48,6 +48,23 @@ export interface VoteCounts {
 }
 
 /**
+ * Validated vote result with multi-reaction discard.
+ *
+ * Users who cast multiple different voting reactions (e.g., both 👍 and 👎)
+ * have ALL their votes discarded — they are ambiguous and counted as invalid.
+ * They still appear in `participants` (for requiredVoters participation checks)
+ * but not in `voters` (for quorum) or `votes` (for tallying).
+ */
+export interface ValidatedVoteResult {
+  /** Vote counts excluding users who cast multiple different voting reaction types */
+  votes: VoteCounts;
+  /** Unique users who cast exactly one voting reaction type (valid for quorum/minVoters) */
+  voters: string[];
+  /** All unique users who cast any voting reaction (valid for requiredVoters participation) */
+  participants: string[];
+}
+
+/**
  * Result of a voting decision.
  * "skipped" indicates the voting comment was not found and human help was requested.
  */

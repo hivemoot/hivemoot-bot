@@ -20,9 +20,11 @@ import type { IssueOperations } from "./github-client.js";
 import { createModelFromEnv } from "./llm/provider.js";
 import { DiscussionSummarizer, formatVotingMessage } from "./llm/summarizer.js";
 import { logger as defaultLogger, type Logger } from "./logger.js";
+import type { RequiredVotersConfig, RequiredVotersMode, VotingExit, ExitRequires } from "./repo-config.js";
 import type {
   IssueRef,
   VoteCounts,
+  ValidatedVoteResult,
   VotingOutcome,
   LockReason,
 } from "./types.js";
@@ -33,6 +35,37 @@ import type {
 export interface GovernanceServiceConfig {
   logger?: Logger;
 }
+
+/**
+ * Options for ending a voting phase.
+ * Allows the caller to provide voting enforcement rules and early decision context.
+ */
+export interface EndVotingOptions {
+  /** When true, prepend early decision messaging to the outcome comment */
+  earlyDecision?: boolean;
+  /** Voting config for requiredVoters/minVoters/requires enforcement */
+  votingConfig?: {
+    minVoters: number;
+    requiredVoters: RequiredVotersConfig;
+    requires?: ExitRequires;
+  };
+  /**
+   * Pre-fetched validated vote data (avoids redundant API call when caller already has it).
+   * Treated as the snapshot for this evaluation and may be slightly stale if reactions change.
+   */
+  validatedVotes?: ValidatedVoteResult;
+}
+
+type VotingRequirementsEnforcement =
+  | {
+      status: "inconclusive";
+      reason: "quorum" | "required";
+      minVoters: number;
+      validVoters: number;
+      missingRequired: string[];
+      requiredVotersMode: RequiredVotersMode;
+    }
+  | null;
 
 /**
  * Configuration for a voting outcome transition.
@@ -208,8 +241,12 @@ export class GovernanceService {
    * If the voting comment is not found, posts a human help request
    * and returns "skipped" to allow the script to continue processing
    * other issues.
+   *
+   * @param options.earlyDecision - When true, prepend early decision note to outcome message
+   * @param options.votingConfig - When provided, enforce requiredVoters/minVoters (missing → inconclusive)
+   * @param options.validatedVotes - Pre-fetched validated votes (avoids redundant API call)
    */
-  async endVoting(ref: IssueRef): Promise<VotingOutcome> {
+  async endVoting(ref: IssueRef, options?: EndVotingOptions): Promise<VotingOutcome> {
     const commentId = await this.issues.findVotingCommentId(ref);
 
     if (!commentId) {
@@ -217,8 +254,37 @@ export class GovernanceService {
       return "skipped";
     }
 
-    const votes = await this.issues.getVoteCountsFromComment(ref, commentId);
-    const outcome = this.determineOutcome(votes);
+    // Use pre-fetched data or fetch with multi-reaction discard
+    const validated = options?.validatedVotes
+      ?? await this.issues.getValidatedVoteCounts(ref, commentId);
+
+    // Enforce requiredVoters/minVoters if config provided
+    const enforcement = this.enforceVotingRequirements(ref, validated, options);
+    let outcome: Exclude<VotingOutcome, "skipped">;
+
+    if (enforcement) {
+      outcome = "inconclusive";
+    } else if (options?.votingConfig?.requires === "unanimous" && !isUnanimous(validated.votes)) {
+      // Unanimous required but votes are not unanimous → inconclusive
+      outcome = "inconclusive";
+    } else {
+      outcome = this.determineOutcome(validated.votes);
+    }
+
+    const earlyPrefix = options?.earlyDecision && !enforcement && outcome !== "inconclusive"
+      ? `**Early decision** — ${earlyDecisionReason(options.votingConfig)}.\n\n`
+      : "";
+
+    const inconclusiveMessage = enforcement
+      ? MESSAGES.votingEndRequirementsNotMet({
+          votes: validated.votes,
+          minVoters: enforcement.minVoters,
+          validVoters: enforcement.validVoters,
+          missingRequired: enforcement.missingRequired,
+          requiredVotersMode: enforcement.requiredVotersMode,
+          final: false,
+        })
+      : MESSAGES.votingEndInconclusive(validated.votes);
 
     // Type excludes "skipped" since determineOutcome() never returns it
     const outcomeConfig: Record<
@@ -227,26 +293,26 @@ export class GovernanceService {
     > = {
       "phase:ready-to-implement": {
         label: LABELS.READY_TO_IMPLEMENT,
-        message: MESSAGES.votingEndReadyToImplement(votes),
+        message: earlyPrefix + MESSAGES.votingEndReadyToImplement(validated.votes),
         close: false,
         // Keep unlocked so the bot can post/update additional (such as leaderboard) comments on the issue.
         lock: false,
       },
       rejected: {
         label: LABELS.REJECTED,
-        message: MESSAGES.votingEndRejected(votes),
+        message: earlyPrefix + MESSAGES.votingEndRejected(validated.votes),
         close: true,
         lock: true,
       },
       inconclusive: {
         label: LABELS.INCONCLUSIVE,
-        message: MESSAGES.votingEndInconclusive(votes),
+        message: earlyPrefix + inconclusiveMessage,
         close: false,
         lock: false,
       },
       "needs-more-discussion": {
         label: LABELS.DISCUSSION,
-        message: MESSAGES.votingEndNeedsMoreDiscussion(votes),
+        message: earlyPrefix + MESSAGES.votingEndNeedsMoreDiscussion(validated.votes),
         close: false,
         lock: false,
         unlock: true,
@@ -271,8 +337,11 @@ export class GovernanceService {
    *
    * If the voting comment is not found, posts a human help request
    * and returns "skipped" to allow the script to continue processing.
+   *
+   * @param options.votingConfig - When provided, enforce requiredVoters/minVoters (missing → inconclusive)
+   * @param options.validatedVotes - Pre-fetched validated votes (avoids redundant API call)
    */
-  async resolveInconclusive(ref: IssueRef): Promise<VotingOutcome> {
+  async resolveInconclusive(ref: IssueRef, options?: EndVotingOptions): Promise<VotingOutcome> {
     const commentId = await this.issues.findVotingCommentId(ref);
 
     if (!commentId) {
@@ -280,8 +349,32 @@ export class GovernanceService {
       return "skipped";
     }
 
-    const votes = await this.issues.getVoteCountsFromComment(ref, commentId);
-    const outcome = this.determineOutcome(votes);
+    const validated = options?.validatedVotes
+      ?? await this.issues.getValidatedVoteCounts(ref, commentId);
+
+    // Enforce requiredVoters/minVoters/requires — same rules as endVoting
+    const enforcement = this.enforceVotingRequirements(ref, validated, options);
+    let outcome: Exclude<VotingOutcome, "skipped">;
+
+    if (enforcement) {
+      outcome = "inconclusive";
+    } else if (options?.votingConfig?.requires === "unanimous" && !isUnanimous(validated.votes)) {
+      // Unanimous required but votes are not unanimous → inconclusive
+      outcome = "inconclusive";
+    } else {
+      outcome = this.determineOutcome(validated.votes);
+    }
+
+    const inconclusiveMessage = enforcement
+      ? MESSAGES.votingEndRequirementsNotMet({
+          votes: validated.votes,
+          minVoters: enforcement.minVoters,
+          validVoters: enforcement.validVoters,
+          missingRequired: enforcement.missingRequired,
+          requiredVotersMode: enforcement.requiredVotersMode,
+          final: true,
+        })
+      : MESSAGES.votingEndInconclusiveFinal(validated.votes);
 
     // Configuration for each possible outcome after extended voting
     // Type excludes "skipped" since determineOutcome() never returns it
@@ -292,7 +385,7 @@ export class GovernanceService {
       "phase:ready-to-implement": {
         label: LABELS.READY_TO_IMPLEMENT,
         message: MESSAGES.votingEndInconclusiveResolved(
-          votes,
+          validated.votes,
           "phase:ready-to-implement",
         ),
         close: false,
@@ -301,19 +394,19 @@ export class GovernanceService {
       },
       rejected: {
         label: LABELS.REJECTED,
-        message: MESSAGES.votingEndInconclusiveResolved(votes, "rejected"),
+        message: MESSAGES.votingEndInconclusiveResolved(validated.votes, "rejected"),
         close: true,
         lock: true,
       },
       inconclusive: {
         label: LABELS.INCONCLUSIVE,
-        message: MESSAGES.votingEndInconclusiveFinal(votes),
+        message: inconclusiveMessage,
         close: true,
         lock: true,
       },
       "needs-more-discussion": {
         label: LABELS.DISCUSSION,
-        message: MESSAGES.votingEndNeedsMoreDiscussion(votes),
+        message: MESSAGES.votingEndNeedsMoreDiscussion(validated.votes),
         close: false,
         lock: false,
         unlock: true,
@@ -390,6 +483,81 @@ export class GovernanceService {
   }
 
   /**
+   * Check if voting requirements (requiredVoters, minVoters) are met.
+   * Returns "inconclusive" if any requirement fails, null if all pass.
+   *
+   * This is a synchronous check using pre-fetched data — no API calls.
+   */
+  private enforceVotingRequirements(
+    ref: IssueRef,
+    validated: ValidatedVoteResult,
+    options?: EndVotingOptions,
+  ): VotingRequirementsEnforcement {
+    if (!options?.votingConfig) {
+      return null;
+    }
+
+    const { minVoters, requiredVoters } = options.votingConfig;
+    const { mode, voters } = requiredVoters;
+    const base = {
+      minVoters,
+      validVoters: validated.voters.length,
+      missingRequired: [] as string[],
+      requiredVotersMode: mode,
+    };
+
+    // Check quorum using valid voters only (users with exactly one voting reaction).
+    // Users who cast multiple different reactions are excluded from quorum.
+    if (validated.voters.length < minVoters) {
+      this.logger.warn(
+        `Issue #${ref.issueNumber}: insufficient valid voters (${validated.voters.length}/${minVoters}). Forcing inconclusive.`,
+      );
+      return {
+        status: "inconclusive",
+        reason: "quorum",
+        ...base,
+      };
+    }
+
+    // Check required voters using participants (all users who reacted).
+    // A required voter who cast conflicting reactions still participated —
+    // they just don't count toward the tally or quorum.
+    if (voters.length > 0) {
+      const participantSet = new Set(validated.participants);
+
+      if (mode === "all") {
+        const missing = voters.filter(v => !participantSet.has(v));
+        if (missing.length > 0) {
+          this.logger.warn(
+            `Issue #${ref.issueNumber}: required voter(s) missing: ${missing.join(", ")}. Forcing inconclusive.`,
+          );
+          return {
+            status: "inconclusive",
+            reason: "required",
+            ...base,
+            missingRequired: missing,
+          };
+        }
+      } else {
+        // mode: "any" — at least one required voter must have participated
+        if (!voters.some(v => participantSet.has(v))) {
+          this.logger.warn(
+            `Issue #${ref.issueNumber}: none of the required voters participated: ${voters.join(", ")}. Forcing inconclusive.`,
+          );
+          return {
+            status: "inconclusive",
+            reason: "required",
+            ...base,
+            missingRequired: voters,
+          };
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
    * Determine voting outcome based on reaction counts.
    *
    * Priority order:
@@ -416,4 +584,71 @@ export class GovernanceService {
     }
     return "inconclusive";
   }
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ───────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Generate the early decision reason text based on the voting config.
+ */
+function earlyDecisionReason(config?: EndVotingOptions["votingConfig"]): string {
+  if (!config?.requiredVoters || config.requiredVoters.voters.length === 0) {
+    return "quorum reached";
+  }
+  return config.requiredVoters.mode === "all"
+    ? "all required voters have participated"
+    : "a required voter has participated";
+}
+
+/**
+ * Check if votes are unanimous — exactly one reaction type has votes.
+ */
+export function isUnanimous(votes: VoteCounts): boolean {
+  const counts = [votes.thumbsUp, votes.thumbsDown, votes.confused];
+  return counts.filter(c => c > 0).length === 1;
+}
+
+/**
+ * Check if votes produce a decisive outcome (not a tie).
+ *
+ * Returns true when the vote distribution would resolve to any outcome
+ * other than "inconclusive" — i.e., confused majority, thumbsUp wins,
+ * or thumbsDown wins. Returns false only for a thumbsUp/thumbsDown tie.
+ */
+export function isDecisive(votes: VoteCounts): boolean {
+  if (votes.confused > votes.thumbsUp + votes.thumbsDown) return true;
+  return votes.thumbsUp !== votes.thumbsDown;
+}
+
+/**
+ * Check whether a voting exit is eligible based on validated votes.
+ *
+ * Applies quorum (minVoters), required voters participation, and
+ * requires condition (majority/unanimous).
+ */
+export function isExitEligible(
+  exit: VotingExit,
+  validated: ValidatedVoteResult,
+): boolean {
+  if (validated.voters.length < exit.minVoters) {
+    return false;
+  }
+
+  const { mode, voters } = exit.requiredVoters;
+  if (voters.length > 0) {
+    const participants = new Set(validated.participants);
+    if (mode === "all" && !voters.every((v) => participants.has(v))) {
+      return false;
+    }
+    if (mode === "any" && !voters.some((v) => participants.has(v))) {
+      return false;
+    }
+  }
+
+  if (exit.requires === "unanimous") {
+    return isUnanimous(validated.votes);
+  }
+  return isDecisive(validated.votes);
 }

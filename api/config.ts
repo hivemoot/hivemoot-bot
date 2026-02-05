@@ -32,6 +32,13 @@ export const CONFIG_BOUNDS = {
     max: 10,
     default: 3,
   },
+  voting: {
+    minVoters: { min: 0, max: 50, default: 3 },
+  },
+  requiredVoters: {
+    maxEntries: 20,
+    maxUsernameLength: 39,
+  },
   // LLM configuration bounds
   llmMaxTokens: {
     min: 500,
@@ -91,6 +98,28 @@ export const SIGNATURE = "\n\n---\nbuzz buzz 🐝 Hivemoot Queen";
 const formatVotes = (votes: { thumbsUp: number; thumbsDown: number; confused: number }) =>
   `**Results:** 👍 ${votes.thumbsUp} | 👎 ${votes.thumbsDown} | 😕 ${votes.confused}`;
 
+const formatVotingRequirements = (opts: {
+  minVoters: number;
+  validVoters: number;
+  missingRequired: string[];
+  requiredVotersMode?: "all" | "any";
+}) => {
+  const lines = [
+    opts.minVoters > 0
+      ? `- Quorum: ${opts.validVoters}/${opts.minVoters} valid voters`
+      : "- Quorum: not required",
+  ];
+  if (opts.missingRequired.length > 0) {
+    const mentions = opts.missingRequired.map((u) => `@${u}`).join(", ");
+    if (opts.requiredVotersMode === "any") {
+      lines.push(`- None of the required voters participated (need at least 1): ${mentions}`);
+    } else {
+      lines.push(`- Missing required voters: ${mentions}`);
+    }
+  }
+  return lines.join("\n");
+};
+
 export const MESSAGES = {
   // Posted when a new issue is opened
   ISSUE_WELCOME: `# 🐝 Discussion Phase
@@ -148,6 +177,30 @@ Back to the drawing board. Returning to discussion phase.${SIGNATURE}`,
 ${formatVotes(votes)}
 
 Hivemoot is split. Extended voting begins — continue voting above.${SIGNATURE}`,
+
+  // Posted when voting requirements (quorum/required voters) are not met
+  votingEndRequirementsNotMet: (params: {
+    votes: { thumbsUp: number; thumbsDown: number; confused: number };
+    minVoters: number;
+    validVoters: number;
+    missingRequired: string[];
+    requiredVotersMode?: "all" | "any";
+    final: boolean;
+  }) => `# 🐝 Inconclusive (Requirements Not Met) ⚖️
+
+${formatVotes(params.votes)}
+
+Voting requirements were not met:
+${formatVotingRequirements({
+  minVoters: params.minVoters,
+  validVoters: params.validVoters,
+  missingRequired: params.missingRequired,
+  requiredVotersMode: params.requiredVotersMode,
+})}
+
+${params.final
+  ? "Extended voting ended without meeting requirements. Closing this issue."
+  : "Extended voting begins — continue voting above."}${SIGNATURE}`,
 
   // Posted when extended voting resolves with a clear winner
   votingEndInconclusiveResolved: (

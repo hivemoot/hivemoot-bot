@@ -10,6 +10,7 @@ export type {
   Repository,
   IssueRef,
   VoteCounts,
+  ValidatedVoteResult,
   VotingOutcome,
   TimelineEvent,
   LockReason,
@@ -40,8 +41,14 @@ export { LeaderboardService, createLeaderboardService } from "./leaderboard.js";
 export type { LeaderboardClient, LeaderboardService as LeaderboardServiceType } from "./leaderboard.js";
 
 // Governance business logic
-export { GovernanceService, createGovernanceService } from "./governance.js";
-export type { GovernanceServiceConfig } from "./governance.js";
+export {
+  GovernanceService,
+  createGovernanceService,
+  isDecisive,
+  isExitEligible,
+  isUnanimous,
+} from "./governance.js";
+export type { GovernanceServiceConfig, EndVotingOptions } from "./governance.js";
 
 // Logging
 export { logger, createLogger } from "./logger.js";
@@ -49,4 +56,12 @@ export type { Logger } from "./logger.js";
 
 // Repository configuration
 export { loadRepositoryConfig, getDefaultConfig } from "./repo-config.js";
-export type { EffectiveConfig, RepoConfigFile, RepoConfigClient } from "./repo-config.js";
+export type {
+  EffectiveConfig,
+  RepoConfigFile,
+  RepoConfigClient,
+  RequiredVotersConfig,
+  RequiredVotersMode,
+  VotingExit,
+  ExitRequires,
+} from "./repo-config.js";

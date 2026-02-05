@@ -274,13 +274,24 @@ describe("processRepository", () => {
         removeLabel: vi.fn().mockResolvedValue(undefined),
       }),
       loadRepositoryConfig: vi.fn().mockResolvedValue({
+        version: 1,
         governance: {
-          discussionDurationMs: 24 * 60 * 60 * 1000, // 24 hours in ms
-          votingDurationMs: 24 * 60 * 60 * 1000,
-        },
-        pr: {
-          staleDays: 3,
-          maxPRsPerIssue: 3,
+          proposals: {
+            discussion: { durationMs: 24 * 60 * 60 * 1000 },
+            voting: {
+              durationMs: 24 * 60 * 60 * 1000,
+              exits: [{
+                afterMs: 24 * 60 * 60 * 1000,
+                requires: "majority",
+                minVoters: 3,
+                requiredVoters: { mode: "all", voters: [] },
+              }],
+            },
+          },
+          pr: {
+            staleDays: 3,
+            maxPRsPerIssue: 3,
+          },
         },
       }),
       logger: {
@@ -305,13 +316,24 @@ describe("processRepository", () => {
 
   // Default config to use in tests
   const defaultMockConfig = {
+    version: 1,
     governance: {
-      discussionDurationMs: 24 * 60 * 60 * 1000,
-      votingDurationMs: 24 * 60 * 60 * 1000,
-    },
-    pr: {
-      staleDays: 3,
-      maxPRsPerIssue: 3,
+      proposals: {
+        discussion: { durationMs: 24 * 60 * 60 * 1000 },
+        voting: {
+          durationMs: 24 * 60 * 60 * 1000,
+          exits: [{
+            afterMs: 24 * 60 * 60 * 1000,
+            requires: "majority" as const,
+            minVoters: 3,
+            requiredVoters: { mode: "all" as const, voters: [] as string[] },
+          }],
+        },
+      },
+      pr: {
+        staleDays: 3,
+        maxPRsPerIssue: 3,
+      },
     },
   };
 

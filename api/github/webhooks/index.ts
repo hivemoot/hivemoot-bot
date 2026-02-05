@@ -11,6 +11,7 @@ import {
   createLeaderboardService,
   createGovernanceService,
   loadRepositoryConfig,
+  getOpenPRsForIssue,
 } from "../../lib/index.js";
 import {
   getLinkedIssues,
@@ -484,7 +485,7 @@ function app(probotApp: Probot): void {
         prNumber: number,
         linkedIssues,
         trigger: "opened",
-        maxPRsPerIssue: repoConfig.pr.maxPRsPerIssue,
+        maxPRsPerIssue: repoConfig.governance.pr.maxPRsPerIssue,
       });
     } catch (error) {
       context.log.error({ err: error, pr: number, repo: fullName }, "Failed to process PR");
@@ -519,7 +520,7 @@ function app(probotApp: Probot): void {
         prNumber: number,
         linkedIssues,
         trigger: "updated",
-        maxPRsPerIssue: repoConfig.pr.maxPRsPerIssue,
+        maxPRsPerIssue: repoConfig.governance.pr.maxPRsPerIssue,
       });
     } catch (error) {
       context.log.error({ err: error, pr: number, repo: fullName }, "Failed to process PR update");
@@ -562,7 +563,7 @@ function app(probotApp: Probot): void {
         prNumber,
         linkedIssues,
         trigger: "updated",
-        maxPRsPerIssue: repoConfig.pr.maxPRsPerIssue,
+        maxPRsPerIssue: repoConfig.governance.pr.maxPRsPerIssue,
       });
     } catch (error) {
       context.log.error({ err: error, pr: prNumber, repo: fullName }, "Failed to process PR comment");

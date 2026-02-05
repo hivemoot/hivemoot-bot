@@ -62,6 +62,15 @@ Votes are counted from the bot's voting comment reactions (not issue reactions).
 - Votes cast during discussion don't count
 - Transparent, auditable results
 
+Additional rules apply to keep voting fair and deterministic:
+- Only 👍/👎/😕 reactions on the bot’s voting comment are counted; all other reactions are ignored.
+- If a user reacts with more than one voting reaction type, **all** of their votes are discarded from the tally and they do not count toward quorum.
+- Each voting exit specifies its own `minVoters` (quorum) and `requiredVoters` (participation requirement). If quorum or required-voter participation is not met, the outcome is forced to **inconclusive**.
+- Multiple exits can be configured with different time gates and conditions. Early exits (all except the last) are evaluated first-match-wins. The last exit is the deadline.
+- Each exit can also specify a `requires` condition: `majority` (default) or `unanimous`.
+
+These settings are configured per repo in `.github/hivemoot.yml` under `governance.proposals.voting.exits`.
+
 ## Pull Requests Workflow
 
 PRs go through a complete lifecycle from opening to merge/close, with special handling for PRs that implement phase:ready-to-implement issues.

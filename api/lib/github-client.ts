@@ -17,12 +17,13 @@ import {
   type VotingCommentInfo,
 } from "./bot-comments.js";
 import type { DiscussionComment, IssueContext } from "./llm/types.js";
-import type { IssueRef, VoteCounts, TimelineEvent, LockReason, IssueComment } from "./types.js";
+import type { IssueRef, VoteCounts, ValidatedVoteResult, TimelineEvent, LockReason, IssueComment } from "./types.js";
 import {
   validateClient,
   hasPaginateIterator,
   ISSUE_CLIENT_CHECKS,
 } from "./client-validation.js";
+import { logger } from "./logger.js";
 
 // Re-export IssueComment for backwards compatibility
 export type { IssueComment } from "./types.js";
@@ -32,6 +33,7 @@ export type { IssueComment } from "./types.js";
  */
 export interface Reaction {
   content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+  user?: { login: string } | null;
 }
 
 /**
@@ -177,6 +179,10 @@ export function createIssueOperations(
   return new IssueOperations(octokit, config.appId);
 }
 
+function toReactionCount(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
 /**
  * Issue operations - reusable across webhooks and scripts
  */
@@ -290,9 +296,9 @@ export class IssueOperations {
       | { "+1"?: number; "-1"?: number; confused?: number }
       | undefined;
     return {
-      thumbsUp: Number(reactions?.["+1"]) || 0,
-      thumbsDown: Number(reactions?.["-1"]) || 0,
-      confused: Number(reactions?.confused) || 0,
+      thumbsUp: toReactionCount(reactions?.["+1"]),
+      thumbsDown: toReactionCount(reactions?.["-1"]),
+      confused: toReactionCount(reactions?.confused),
     };
   }
 
@@ -392,10 +398,18 @@ export class IssueOperations {
   }
 
   /**
-   * Get vote counts from a specific comment's reactions.
-   * Uses pagination to handle comments with >100 reactions.
+   * Get validated vote counts from a comment, with multi-reaction discard.
+   *
+   * Users who cast multiple different voting reactions (e.g., both 👍 and 👎)
+   * have all their votes discarded from the tally and are excluded from the
+   * voter list (quorum). They still appear in participants (for requiredVoters).
+   *
+   * Returns a single result containing votes, valid voters, and all participants
+   * in one API call.
    */
-  async getVoteCountsFromComment(ref: IssueRef, commentId: number): Promise<VoteCounts> {
+  async getValidatedVoteCounts(ref: IssueRef, commentId: number): Promise<ValidatedVoteResult> {
+    const VOTING_REACTIONS = new Set(["+1", "-1", "confused"]);
+
     const iterator = this.client.paginate.iterator<Reaction>(
       this.client.rest.reactions.listForIssueComment,
       {
@@ -406,19 +420,60 @@ export class IssueOperations {
       }
     );
 
-    let thumbsUp = 0;
-    let thumbsDown = 0;
-    let confused = 0;
+    // Group voting reactions by user
+    const userReactions = new Map<string, Set<string>>();
+    let nullUserReactions = 0;
 
     for await (const { data: reactions } of iterator) {
       for (const reaction of reactions) {
-        if (reaction.content === "+1") thumbsUp++;
-        else if (reaction.content === "-1") thumbsDown++;
-        else if (reaction.content === "confused") confused++;
+        if (!VOTING_REACTIONS.has(reaction.content)) {
+          continue;
+        }
+
+        if (!reaction.user?.login) {
+          nullUserReactions++;
+          continue;
+        }
+
+        const user = reaction.user.login.toLowerCase();
+        if (!userReactions.has(user)) {
+          userReactions.set(user, new Set());
+        }
+        userReactions.get(user)!.add(reaction.content);
       }
     }
 
-    return { thumbsUp, thumbsDown, confused };
+    let thumbsUp = 0;
+    let thumbsDown = 0;
+    let confused = 0;
+    const voters: string[] = [];
+    const participants: string[] = [];
+
+    for (const [user, reactions] of userReactions) {
+      participants.push(user);
+
+      // Only count users with exactly one voting reaction type
+      if (reactions.size === 1) {
+        const reaction = [...reactions][0];
+        if (reaction === "+1") thumbsUp++;
+        else if (reaction === "-1") thumbsDown++;
+        else if (reaction === "confused") confused++;
+        voters.push(user);
+      }
+      // Users with multiple reaction types are discarded from tally and quorum
+    }
+
+    if (nullUserReactions > 0) {
+      logger.info(
+        `Issue #${ref.issueNumber} comment ${commentId}: skipped ${nullUserReactions} voting reaction(s) without users (likely deleted accounts).`,
+      );
+    }
+
+    return {
+      votes: { thumbsUp, thumbsDown, confused },
+      voters,
+      participants,
+    };
   }
 
   /**

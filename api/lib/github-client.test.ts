@@ -738,52 +738,158 @@ describe("IssueOperations", () => {
     });
   });
 
-  describe("getVoteCountsFromComment", () => {
-    it("should return reaction counts from comment using pagination", async () => {
+  describe("getValidatedVoteCounts", () => {
+    it("should return valid votes and voters for single-reaction users", async () => {
       mockClient.paginate.iterator = vi.fn().mockReturnValue({
         async *[Symbol.asyncIterator]() {
           yield {
             data: [
-              { content: "+1" },
-              { content: "+1" },
-              { content: "+1" },
-              { content: "-1" },
-              { content: "confused" },
-              { content: "confused" },
-              { content: "heart" },
+              { content: "+1", user: { login: "Alice" } },
+              { content: "-1", user: { login: "Bob" } },
+              { content: "confused", user: { login: "Charlie" } },
             ],
           };
         },
       });
 
-      const votes = await issueOps.getVoteCountsFromComment(testRef, 200);
+      const result = await issueOps.getValidatedVoteCounts(testRef, 200);
 
-      expect(votes).toEqual({ thumbsUp: 3, thumbsDown: 1, confused: 2 });
+      expect(result.votes).toEqual({ thumbsUp: 1, thumbsDown: 1, confused: 1 });
+      expect(result.voters).toEqual(expect.arrayContaining(["alice", "bob", "charlie"]));
+      expect(result.voters).toHaveLength(3);
+      expect(result.participants).toEqual(expect.arrayContaining(["alice", "bob", "charlie"]));
+      expect(result.participants).toHaveLength(3);
     });
 
-    it("should return zeros when no reactions", async () => {
+    it("should count duplicate identical reactions as a single vote", async () => {
+      mockClient.paginate.iterator = vi.fn().mockReturnValue({
+        async *[Symbol.asyncIterator]() {
+          yield {
+            data: [
+              { content: "+1", user: { login: "Alice" } },
+              { content: "+1", user: { login: "Alice" } }, // duplicate identical reaction
+              { content: "+1", user: { login: "Bob" } },
+            ],
+          };
+        },
+      });
+
+      const result = await issueOps.getValidatedVoteCounts(testRef, 200);
+
+      expect(result.votes).toEqual({ thumbsUp: 2, thumbsDown: 0, confused: 0 });
+      expect(result.voters).toEqual(expect.arrayContaining(["alice", "bob"]));
+      expect(result.voters).toHaveLength(2);
+      expect(result.participants).toEqual(expect.arrayContaining(["alice", "bob"]));
+      expect(result.participants).toHaveLength(2);
+    });
+
+    it("should discard votes from users with multiple reaction types", async () => {
+      mockClient.paginate.iterator = vi.fn().mockReturnValue({
+        async *[Symbol.asyncIterator]() {
+          yield {
+            data: [
+              { content: "+1", user: { login: "Alice" } },
+              { content: "-1", user: { login: "Alice" } }, // Alice has two reaction types — discard
+              { content: "+1", user: { login: "Bob" } },   // Bob has only one — counts
+            ],
+          };
+        },
+      });
+
+      const result = await issueOps.getValidatedVoteCounts(testRef, 200);
+
+      expect(result.votes).toEqual({ thumbsUp: 1, thumbsDown: 0, confused: 0 }); // only Bob
+      expect(result.voters).toEqual(["bob"]);
+      expect(result.participants).toEqual(expect.arrayContaining(["alice", "bob"]));
+      expect(result.participants).toHaveLength(2);
+    });
+
+    it("should discard user with all three reaction types", async () => {
+      mockClient.paginate.iterator = vi.fn().mockReturnValue({
+        async *[Symbol.asyncIterator]() {
+          yield {
+            data: [
+              { content: "+1", user: { login: "Spammer" } },
+              { content: "-1", user: { login: "Spammer" } },
+              { content: "confused", user: { login: "Spammer" } },
+            ],
+          };
+        },
+      });
+
+      const result = await issueOps.getValidatedVoteCounts(testRef, 200);
+
+      expect(result.votes).toEqual({ thumbsUp: 0, thumbsDown: 0, confused: 0 });
+      expect(result.voters).toEqual([]);
+      expect(result.participants).toEqual(["spammer"]);
+    });
+
+    it("should ignore non-voting reactions", async () => {
+      mockClient.paginate.iterator = vi.fn().mockReturnValue({
+        async *[Symbol.asyncIterator]() {
+          yield {
+            data: [
+              { content: "+1", user: { login: "Alice" } },
+              { content: "heart", user: { login: "Alice" } },  // non-voting, ignored
+              { content: "rocket", user: { login: "Bob" } },   // non-voting, ignored
+            ],
+          };
+        },
+      });
+
+      const result = await issueOps.getValidatedVoteCounts(testRef, 200);
+
+      expect(result.votes).toEqual({ thumbsUp: 1, thumbsDown: 0, confused: 0 });
+      expect(result.voters).toEqual(["alice"]);
+      expect(result.participants).toEqual(["alice"]); // Bob has no voting reactions
+    });
+
+    it("should skip reactions without user", async () => {
+      mockClient.paginate.iterator = vi.fn().mockReturnValue({
+        async *[Symbol.asyncIterator]() {
+          yield {
+            data: [
+              { content: "+1", user: null },
+              { content: "+1", user: { login: "Alice" } },
+            ],
+          };
+        },
+      });
+
+      const result = await issueOps.getValidatedVoteCounts(testRef, 200);
+
+      expect(result.votes).toEqual({ thumbsUp: 1, thumbsDown: 0, confused: 0 });
+      expect(result.voters).toEqual(["alice"]);
+    });
+
+    it("should handle pagination across multiple pages", async () => {
+      mockClient.paginate.iterator = vi.fn().mockReturnValue({
+        async *[Symbol.asyncIterator]() {
+          yield { data: [{ content: "+1", user: { login: "Alice" } }] };
+          yield { data: [{ content: "-1", user: { login: "Alice" } }] }; // multi-reaction across pages
+        },
+      });
+
+      const result = await issueOps.getValidatedVoteCounts(testRef, 200);
+
+      // Alice reacted with both +1 and -1 across pages — should be discarded
+      expect(result.votes).toEqual({ thumbsUp: 0, thumbsDown: 0, confused: 0 });
+      expect(result.voters).toEqual([]);
+      expect(result.participants).toEqual(["alice"]);
+    });
+
+    it("should return empty results when no reactions", async () => {
       mockClient.paginate.iterator = vi.fn().mockReturnValue({
         async *[Symbol.asyncIterator]() {
           yield { data: [] };
         },
       });
 
-      const votes = await issueOps.getVoteCountsFromComment(testRef, 200);
+      const result = await issueOps.getValidatedVoteCounts(testRef, 200);
 
-      expect(votes).toEqual({ thumbsUp: 0, thumbsDown: 0, confused: 0 });
-    });
-
-    it("should handle pagination across multiple pages", async () => {
-      mockClient.paginate.iterator = vi.fn().mockReturnValue({
-        async *[Symbol.asyncIterator]() {
-          yield { data: [{ content: "+1" }, { content: "+1" }] };
-          yield { data: [{ content: "-1" }, { content: "confused" }] };
-        },
-      });
-
-      const votes = await issueOps.getVoteCountsFromComment(testRef, 200);
-
-      expect(votes).toEqual({ thumbsUp: 2, thumbsDown: 1, confused: 1 });
+      expect(result.votes).toEqual({ thumbsUp: 0, thumbsDown: 0, confused: 0 });
+      expect(result.voters).toEqual([]);
+      expect(result.participants).toEqual([]);
     });
   });
 

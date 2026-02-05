@@ -619,20 +619,24 @@ export class IssueOperations {
   }
 
   /**
-   * Transition an issue: remove old label, add new label, post comment.
+   * Transition an issue: add new label, post comment, remove old label.
    *
-   * Operations are executed sequentially to prevent race conditions:
-   * 1. Remove old label (if specified)
-   * 2. Add new label
-   * 3. Post comment
+   * Operations are ordered to prevent "stuck" issues on partial failure:
+   * 1. Unlock (if needed — prerequisite for comment on locked issues)
+   * 2. Add new label FIRST (ensures issue always has at least one phase label)
+   * 3. Post comment (must happen before lock)
    * 4. Close issue (if specified)
-   * 5. Lock or unlock issue (if specified)
+   * 5. Remove old label LAST (safe because new label is already present)
+   * 6. Lock issue (must be last)
    *
-   * This ensures the comment is visible before locking, and labels
-   * are updated before closing.
+   * The add-before-remove order means that if any step after addLabels fails,
+   * the issue has both old and new labels. The cron job finds it via the old
+   * label and retries the transition. This prevents the failure mode where
+   * removeLabel succeeds but addLabels fails, leaving the issue with no phase
+   * label and invisible to the cron job.
    *
    * @param ref - Issue reference (owner, repo, issueNumber)
-   * @param options.removeLabel - Label to remove before transition
+   * @param options.removeLabel - Label to remove after transition
    * @param options.addLabel - Label to add (required)
    * @param options.comment - Comment to post (required)
    * @param options.close - Whether to close the issue
@@ -659,20 +663,23 @@ export class IssueOperations {
       await this.unlock(ref);
     }
 
-    // Step 2: Remove old label if specified
-    if (options.removeLabel) {
-      await this.removeLabel(ref, options.removeLabel);
-    }
-
-    // Step 3: Add new label
+    // Step 2: Add new label FIRST — issue always has at least one phase label.
+    // If this fails, the old label is still present and the cron job can retry.
     await this.addLabels(ref, [options.addLabel]);
 
-    // Step 4: Post comment (must complete before lock)
+    // Step 3: Post comment (must complete before lock)
     await this.comment(ref, options.comment);
 
-    // Step 5: Close issue if specified
+    // Step 4: Close issue if specified
     if (options.close) {
       await this.close(ref, options.closeReason ?? "not_planned");
+    }
+
+    // Step 5: Remove old label LAST — safe because new label already present.
+    // Skip when same as addLabel (e.g., inconclusive→inconclusive final close)
+    // to avoid removing the label we just added.
+    if (options.removeLabel && options.removeLabel !== options.addLabel) {
+      await this.removeLabel(ref, options.removeLabel);
     }
 
     // Step 6: Lock issue if specified (must be last)

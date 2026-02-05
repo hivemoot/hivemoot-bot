@@ -1008,8 +1008,9 @@ describe("IssueOperations", () => {
         lock: true,
       });
 
-      // Verify operations happen in the correct order
-      expect(callOrder).toEqual(["removeLabel", "addLabels", "createComment", "close", "lock"]);
+      // Verify add-before-remove order: new label is added first so that
+      // if a later step fails, the issue still has the old label for cron retry.
+      expect(callOrder).toEqual(["addLabels", "createComment", "close", "removeLabel", "lock"]);
     });
 
     it("should complete comment before lock so users can see the message", async () => {
@@ -1035,6 +1036,65 @@ describe("IssueOperations", () => {
 
       expect(lockCalledBeforeComment).toBe(false);
       expect(commentCompleted).toBe(true);
+    });
+
+    it("should preserve old label when addLabels fails (issue remains findable by cron)", async () => {
+      vi.mocked(mockClient.rest.issues.addLabels).mockRejectedValue(
+        new Error("API Error"),
+      );
+
+      await expect(
+        issueOps.transition(testRef, {
+          removeLabel: "phase:discussion",
+          addLabel: "phase:voting",
+          comment: "Moving to voting",
+        }),
+      ).rejects.toThrow("API Error");
+
+      // removeLabel must NOT be called — old label stays so cron can retry
+      expect(mockClient.rest.issues.removeLabel).not.toHaveBeenCalled();
+    });
+
+    it("should skip removeLabel when same as addLabel (e.g., inconclusive final close)", async () => {
+      await issueOps.transition(testRef, {
+        removeLabel: "inconclusive",
+        addLabel: "inconclusive",
+        comment: "Extended voting also inconclusive",
+        close: true,
+        lock: true,
+      });
+
+      expect(mockClient.rest.issues.addLabels).toHaveBeenCalled();
+      expect(mockClient.rest.issues.removeLabel).not.toHaveBeenCalled();
+      expect(mockClient.rest.issues.update).toHaveBeenCalledWith(
+        expect.objectContaining({ state: "closed" }),
+      );
+    });
+
+    it("should unlock before addLabels in add-before-remove order", async () => {
+      const callOrder: string[] = [];
+
+      vi.mocked(mockClient.rest.issues.unlock).mockImplementation(async () => {
+        callOrder.push("unlock");
+      });
+      vi.mocked(mockClient.rest.issues.addLabels).mockImplementation(async () => {
+        callOrder.push("addLabels");
+      });
+      vi.mocked(mockClient.rest.issues.createComment).mockImplementation(async () => {
+        callOrder.push("createComment");
+      });
+      vi.mocked(mockClient.rest.issues.removeLabel).mockImplementation(async () => {
+        callOrder.push("removeLabel");
+      });
+
+      await issueOps.transition(testRef, {
+        removeLabel: "phase:voting",
+        addLabel: "phase:discussion",
+        comment: "Needs more discussion",
+        unlock: true,
+      });
+
+      expect(callOrder).toEqual(["unlock", "addLabels", "createComment", "removeLabel"]);
     });
   });
 

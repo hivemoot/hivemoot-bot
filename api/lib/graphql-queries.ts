@@ -8,6 +8,7 @@
  */
 
 import type { LinkedIssue, PullRequest } from "./types.js";
+import { logger } from "./logger.js";
 
 /**
  * GraphQL client interface - minimal subset needed for our queries.
@@ -160,17 +161,80 @@ function isValidOpenPRSource(
 }
 
 /**
- * Get all open PRs that reference an issue.
- * Filters to only return OPEN PRs (not closed/merged).
- * Uses cursor-based pagination with safety limit to prevent unbounded fetching.
+ * Get all open PRs that properly close an issue (via "Fixes #N" / "Closes #N").
  *
- * Deduplicates by PR number since a PR can create multiple cross-reference
- * events (via body, commits, edits, etc.).
+ * Uses a two-step approach:
+ * 1. Find candidate PRs via CROSS_REFERENCED_EVENT (efficient - only PRs that mention the issue)
+ * 2. Verify each candidate actually uses closing syntax via closingIssuesReferences
  *
- * Handles deleted GitHub accounts by using "ghost" as the author login
- * (matching GitHub's web UI convention).
+ * This ensures consistency with processImplementationIntake which uses closingIssuesReferences.
+ * PRs that merely mention an issue (e.g., "see #123") are excluded.
+ *
+ * Deduplicates by PR number since a PR can create multiple cross-reference events.
+ * Handles deleted GitHub accounts by using "ghost" as the author login.
  */
 export async function getOpenPRsForIssue(
+  client: GraphQLClient,
+  owner: string,
+  repo: string,
+  issueNumber: number
+): Promise<PullRequest[]> {
+  // Step 1: Get candidate PRs via cross-references
+  const candidates = await getCrossReferencedOpenPRs(client, owner, repo, issueNumber);
+
+  if (candidates.length === 0) {
+    return [];
+  }
+
+  // Step 2: Verify each candidate actually closes this issue.
+  // Uses bounded parallelism to reduce latency (important in webhook context).
+  // Per-PR errors are caught so one transient failure doesn't lose all results.
+  const BATCH_SIZE = 5;
+  const verified: PullRequest[] = [];
+  let failedCount = 0;
+
+  for (let i = 0; i < candidates.length; i += BATCH_SIZE) {
+    const batch = candidates.slice(i, i + BATCH_SIZE);
+    const results = await Promise.allSettled(
+      batch.map(async (pr) => {
+        const linkedIssues = await getLinkedIssues(client, owner, repo, pr.number);
+        return linkedIssues.some((issue) => issue.number === issueNumber) ? pr : null;
+      })
+    );
+
+    for (const result of results) {
+      if (result.status === "fulfilled" && result.value !== null) {
+        verified.push(result.value);
+      } else if (result.status === "rejected") {
+        failedCount++;
+        const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
+        logger.warn(
+          `Failed to verify closing syntax for candidate PR in ${owner}/${repo} ` +
+          `(issue #${issueNumber}): ${reason}`
+        );
+      }
+    }
+  }
+
+  // If every verification failed, this is likely a systemic issue (rate limit,
+  // auth failure, outage) — not a per-PR transient error. Throw so callers
+  // (especially webhook handlers that don't retry) don't silently proceed
+  // with an empty result that looks like "no PRs close this issue."
+  if (failedCount > 0 && verified.length === 0) {
+    throw new Error(
+      `All ${failedCount} PR closing-syntax verification(s) failed for ` +
+      `${owner}/${repo}#${issueNumber}. Cannot determine linked PRs.`
+    );
+  }
+
+  return verified;
+}
+
+/**
+ * Internal helper: Get open PRs that cross-reference an issue.
+ * This is the first step of getOpenPRsForIssue - finds candidates that mention the issue.
+ */
+async function getCrossReferencedOpenPRs(
   client: GraphQLClient,
   owner: string,
   repo: string,

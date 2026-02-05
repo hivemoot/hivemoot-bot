@@ -131,7 +131,10 @@ React to signal support or opposition. Voting opens in ~24 hours.${SIGNATURE}`,
   // Posted when a new PR is opened
   PR_WELCOME: `# 🐝 Review Phase
 
-Ready for review. Looking for approval, concerns, or change requests.${SIGNATURE}`,
+Ready for review. Looking for approval, concerns, or change requests.
+
+**Tip:** To link this PR to an approved issue, use closing keywords in the description:
+\`Closes #<issue-number>\` or \`Fixes #<issue-number>\`${SIGNATURE}`,
 
   // Posted when discussion phase ends
   VOTING_START: `# 🐝 Voting Phase

@@ -19,13 +19,18 @@ import {
 } from "../api/config.js";
 import {
   createPROperations,
+  createIssueOperations,
   getOpenPRsForIssue,
+  getLinkedIssues,
+  loadRepositoryConfig,
   logger,
 } from "../api/lib/index.js";
 import { NOTIFICATION_TYPES } from "../api/lib/bot-comments.js";
+import { processImplementationIntake } from "../api/lib/implementation-intake.js";
 import { runForAllRepositories, runIfMain } from "./shared/run-installations.js";
 import type { Repository, PRRef } from "../api/lib/index.js";
 import type { PROperations } from "../api/lib/pr-operations.js";
+import type { IssueOperations } from "../api/lib/github-client.js";
 
 /**
  * Legacy signature for pre-metadata voting-passed notifications.
@@ -76,14 +81,17 @@ export async function hasVotingPassedNotification(
 
 /**
  * Process one ready-to-implement issue: find linked PRs, skip notified/implementation ones, notify the rest.
+ * Also attempts implementation label reconciliation for unlabeled PRs via processImplementationIntake.
  * Exported for testing.
  */
 export async function reconcileIssue(
   octokit: InstanceType<typeof Octokit>,
   prs: PROperations,
+  issues: IssueOperations,
   owner: string,
   repo: string,
-  issueNumber: number
+  issueNumber: number,
+  maxPRsPerIssue: number
 ): Promise<{ notified: number; skipped: number }> {
   const linkedPRs = await getOpenPRsForIssue(octokit, owner, repo, issueNumber);
   if (linkedPRs.length === 0) {
@@ -118,6 +126,34 @@ export async function reconcileIssue(
     );
     logger.info(`Reconciled: notified PR #${linkedPR.number} (@${linkedPR.author.login}) that issue #${issueNumber} is ready`);
     notified++;
+
+    // Attempt implementation label reconciliation for this unlabeled PR.
+    // processImplementationIntake is idempotent:
+    //   - Early-returns if label already present
+    //   - Comments use metadata dedup (no duplicates)
+    // Wrapped in try/catch so a transient intake failure doesn't prevent the
+    // voting-passed notification (already posted above) from being counted.
+    // Without this, a retry would skip the PR (dedup) yet never apply the label.
+    try {
+      const linkedIssues = await getLinkedIssues(octokit, owner, repo, linkedPR.number);
+      await processImplementationIntake({
+        octokit,
+        issues,
+        prs,
+        log: logger,
+        owner,
+        repo,
+        prNumber: linkedPR.number,
+        linkedIssues,
+        trigger: "updated",
+        maxPRsPerIssue,
+      });
+    } catch (error) {
+      logger.error(
+        `Failed to reconcile implementation label for PR #${linkedPR.number} (issue #${issueNumber})`,
+        error as Error
+      );
+    }
   }
 
   return { notified, skipped };
@@ -139,6 +175,9 @@ export async function processRepository(
 
   try {
     const prs = createPROperations(octokit, { appId });
+    const issues = createIssueOperations(octokit, { appId });
+    const repoConfig = await loadRepositoryConfig(octokit, owner, repoName);
+    const maxPRsPerIssue = repoConfig.governance.pr.maxPRsPerIssue;
 
     // Paginate through all open issues with phase:ready-to-implement label
     const failedIssues: number[] = [];
@@ -155,13 +194,13 @@ export async function processRepository(
 
     for await (const { data: page } of readyIterator) {
       // Filter out PRs (the issues API also returns PRs with matching labels)
-      const issues = (page as Array<{ number: number; pull_request?: unknown }>).filter(
+      const filteredIssues = (page as Array<{ number: number; pull_request?: unknown }>).filter(
         (item) => !item.pull_request
       );
 
-      for (const issue of issues) {
+      for (const issue of filteredIssues) {
         try {
-          const result = await reconcileIssue(octokit, prs, owner, repoName, issue.number);
+          const result = await reconcileIssue(octokit, prs, issues, owner, repoName, issue.number, maxPRsPerIssue);
           if (result.notified > 0) {
             logger.info(`Issue #${issue.number}: notified ${result.notified} PR(s), skipped ${result.skipped}`);
           }

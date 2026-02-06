@@ -14,8 +14,10 @@
 
 /**
  * All possible bot comment types.
+ * Single source of truth: the array drives both runtime validation and the type.
  */
-export type CommentType = "voting" | "leaderboard" | "welcome" | "status" | "error" | "notification";
+const COMMENT_TYPES = ["voting", "leaderboard", "welcome", "status", "error", "notification"] as const;
+export type CommentType = (typeof COMMENT_TYPES)[number];
 
 /**
  * Base metadata fields shared by all comment types.
@@ -114,6 +116,8 @@ export type ErrorCode = typeof ERROR_CODES[keyof typeof ERROR_CODES];
  */
 export const NOTIFICATION_TYPES = {
   VOTING_PASSED: "voting-passed",
+  IMPLEMENTATION_WELCOME: "implementation-welcome",
+  ISSUE_NEW_PR: "issue-new-pr",
 } as const;
 
 /**
@@ -290,6 +294,20 @@ export function parseMetadata(body: string | undefined | null): CommentMetadata 
       !("type" in parsed)
     ) {
       return null;
+    }
+
+    const obj = parsed as Record<string, unknown>;
+
+    // Validate type is a known CommentType (defense-in-depth)
+    if (typeof obj.type !== "string" || !COMMENT_TYPES.includes(obj.type as CommentType)) {
+      return null;
+    }
+
+    // Validate notification-specific fields
+    if (obj.type === "notification") {
+      if (typeof obj.notificationType !== "string" || typeof obj.issueNumber !== "number") {
+        return null;
+      }
     }
 
     return parsed as CommentMetadata;

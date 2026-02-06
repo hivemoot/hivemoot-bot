@@ -13,6 +13,7 @@ import {
   parseMetadata,
   isVotingComment,
   isHumanHelpComment,
+  isNotificationComment,
   selectCurrentVotingComment,
   type VotingCommentInfo,
 } from "./bot-comments.js";
@@ -389,6 +390,45 @@ export class IssueOperations {
     for await (const { data: comments } of iterator) {
       for (const comment of comments) {
         if (isHumanHelpComment(comment.body, this.appId, comment.performed_via_github_app?.id, errorCode)) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Check if a notification comment of a given type already exists on an issue.
+   * Mirrors PROperations.hasNotificationComment for issue-side duplicate detection.
+   * Optionally filter by issueNumber (used as a reference key in metadata).
+   */
+  async hasNotificationComment(
+    ref: IssueRef,
+    notificationType: string,
+    issueNumber?: number
+  ): Promise<boolean> {
+    const iterator = this.client.paginate.iterator<IssueComment>(
+      this.client.rest.issues.listComments,
+      {
+        owner: ref.owner,
+        repo: ref.repo,
+        issue_number: ref.issueNumber,
+        per_page: 100,
+      }
+    );
+
+    for await (const { data: comments } of iterator) {
+      for (const comment of comments) {
+        if (
+          isNotificationComment(
+            comment.body,
+            this.appId,
+            comment.performed_via_github_app?.id,
+            notificationType,
+            issueNumber
+          )
+        ) {
           return true;
         }
       }

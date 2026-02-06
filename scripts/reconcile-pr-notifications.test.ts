@@ -5,8 +5,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
  *
  * Tests the reconciliation functions:
  * - hasVotingPassedNotification: duplicate detection (metadata + fallback)
- * - reconcileIssue: notification logic, skipping, error handling
- * - processRepository: filtering, issue iteration
+ * - reconcileIssue: notification logic, skipping, error handling, intake reconciliation
+ * - processRepository: filtering, issue iteration, config loading
  */
 
 // Mock the external dependencies before importing
@@ -29,6 +29,12 @@ const mockFindPRsWithLabel = vi.fn().mockResolvedValue([]);
 const mockHasNotificationCommentInComments = vi.fn().mockReturnValue(false);
 const mockListCommentsWithBody = vi.fn().mockResolvedValue([]);
 
+const mockIssueOperations = {
+  hasNotificationComment: vi.fn().mockResolvedValue(false),
+  comment: vi.fn().mockResolvedValue(undefined),
+  getLabelAddedTime: vi.fn().mockResolvedValue(new Date("2024-01-01T00:00:00Z")),
+};
+
 vi.mock("../api/lib/index.js", () => ({
   createPROperations: vi.fn(() => ({
     comment: mockComment,
@@ -36,7 +42,12 @@ vi.mock("../api/lib/index.js", () => ({
     hasNotificationCommentInComments: mockHasNotificationCommentInComments,
     listCommentsWithBody: mockListCommentsWithBody,
   })),
+  createIssueOperations: vi.fn(() => mockIssueOperations),
   getOpenPRsForIssue: vi.fn().mockResolvedValue([]),
+  getLinkedIssues: vi.fn().mockResolvedValue([]),
+  loadRepositoryConfig: vi.fn().mockResolvedValue({
+    governance: { pr: { maxPRsPerIssue: 3 } },
+  }),
   logger: {
     info: vi.fn(),
     warn: vi.fn(),
@@ -53,25 +64,42 @@ vi.mock("../api/lib/env-validation.js", () => ({
   }),
 }));
 
+// Mock processImplementationIntake from implementation-intake module
+const mockProcessImplementationIntake = vi.fn().mockResolvedValue(undefined);
+vi.mock("../api/lib/implementation-intake.js", () => ({
+  processImplementationIntake: (...args: unknown[]) => mockProcessImplementationIntake(...args),
+}));
+
 // Import after all mocks are in place
 import {
   hasVotingPassedNotification,
   reconcileIssue,
   processRepository,
 } from "./reconcile-pr-notifications.js";
-import { getOpenPRsForIssue, createPROperations, logger } from "../api/lib/index.js";
+import {
+  getOpenPRsForIssue,
+  createPROperations,
+  getLinkedIssues,
+  loadRepositoryConfig,
+  logger,
+} from "../api/lib/index.js";
 import { PR_MESSAGES, LABELS } from "../api/config.js";
 import { NOTIFICATION_TYPES } from "../api/lib/bot-comments.js";
 import type { PROperations } from "../api/lib/pr-operations.js";
+import type { IssueOperations } from "../api/lib/github-client.js";
 import type { PRRef } from "../api/lib/index.js";
 
 const mockGetOpenPRsForIssue = vi.mocked(getOpenPRsForIssue);
+const mockGetLinkedIssues = vi.mocked(getLinkedIssues);
+const mockLoadRepositoryConfig = vi.mocked(loadRepositoryConfig);
 
 describe("reconcile-pr-notifications", () => {
   const appId = 12345;
   const owner = "test-org";
   const repo = "test-repo";
   const fakeOctokit = {} as any;
+  const fakeIssues = mockIssueOperations as unknown as IssueOperations;
+  const defaultMaxPRs = 3;
 
   beforeEach(() => {
     // Freeze time so metadata timestamps in issueVotingPassed are deterministic
@@ -81,6 +109,8 @@ describe("reconcile-pr-notifications", () => {
     mockFindPRsWithLabel.mockResolvedValue([]);
     mockHasNotificationCommentInComments.mockReturnValue(false);
     mockListCommentsWithBody.mockResolvedValue([]);
+    mockGetLinkedIssues.mockResolvedValue([]);
+    mockProcessImplementationIntake.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -171,7 +201,8 @@ describe("reconcile-pr-notifications", () => {
       mockHasNotificationCommentInComments.mockReturnValue(false);
       mockListCommentsWithBody.mockResolvedValue([]);
 
-      const result = await reconcileIssue(fakeOctokit, createPROperations(fakeOctokit, { appId }) as unknown as PROperations, owner, repo, 42);
+      const prs = createPROperations(fakeOctokit, { appId }) as unknown as PROperations;
+      const result = await reconcileIssue(fakeOctokit, prs, fakeIssues, owner, repo, 42, defaultMaxPRs);
 
       expect(result).toEqual({ notified: 2, skipped: 0 });
       expect(mockComment).toHaveBeenCalledTimes(2);
@@ -194,7 +225,8 @@ describe("reconcile-pr-notifications", () => {
         { number: 10, createdAt: new Date(), updatedAt: new Date(), labels: [{ name: LABELS.IMPLEMENTATION }] },
       ]);
 
-      const result = await reconcileIssue(fakeOctokit, createPROperations(fakeOctokit, { appId }) as unknown as PROperations, owner, repo, 42);
+      const prs = createPROperations(fakeOctokit, { appId }) as unknown as PROperations;
+      const result = await reconcileIssue(fakeOctokit, prs, fakeIssues, owner, repo, 42, defaultMaxPRs);
 
       expect(result).toEqual({ notified: 1, skipped: 1 });
       expect(mockComment).toHaveBeenCalledTimes(1);
@@ -210,7 +242,8 @@ describe("reconcile-pr-notifications", () => {
       ]);
       mockHasNotificationCommentInComments.mockReturnValue(true);
 
-      const result = await reconcileIssue(fakeOctokit, createPROperations(fakeOctokit, { appId }) as unknown as PROperations, owner, repo, 42);
+      const prs = createPROperations(fakeOctokit, { appId }) as unknown as PROperations;
+      const result = await reconcileIssue(fakeOctokit, prs, fakeIssues, owner, repo, 42, defaultMaxPRs);
 
       expect(result).toEqual({ notified: 0, skipped: 1 });
       expect(mockComment).not.toHaveBeenCalled();
@@ -219,10 +252,84 @@ describe("reconcile-pr-notifications", () => {
     it("should handle no linked PRs", async () => {
       mockGetOpenPRsForIssue.mockResolvedValue([]);
 
-      const result = await reconcileIssue(fakeOctokit, createPROperations(fakeOctokit, { appId }) as unknown as PROperations, owner, repo, 42);
+      const prs = createPROperations(fakeOctokit, { appId }) as unknown as PROperations;
+      const result = await reconcileIssue(fakeOctokit, prs, fakeIssues, owner, repo, 42, defaultMaxPRs);
 
       expect(result).toEqual({ notified: 0, skipped: 0 });
       expect(mockComment).not.toHaveBeenCalled();
+    });
+
+    it("should call processImplementationIntake for notified PRs", async () => {
+      const linkedIssues = [{ number: 42, title: "Issue", state: "OPEN" as const, labels: { nodes: [{ name: LABELS.READY_TO_IMPLEMENT }] } }];
+      mockGetOpenPRsForIssue.mockResolvedValue([
+        { number: 10, title: "PR", state: "OPEN", author: { login: "agent-alice" } },
+      ]);
+      mockGetLinkedIssues.mockResolvedValue(linkedIssues);
+      mockHasNotificationCommentInComments.mockReturnValue(false);
+      mockListCommentsWithBody.mockResolvedValue([]);
+
+      const prs = createPROperations(fakeOctokit, { appId }) as unknown as PROperations;
+      await reconcileIssue(fakeOctokit, prs, fakeIssues, owner, repo, 42, defaultMaxPRs);
+
+      expect(mockProcessImplementationIntake).toHaveBeenCalledWith({
+        octokit: fakeOctokit,
+        issues: fakeIssues,
+        prs,
+        log: logger,
+        owner,
+        repo,
+        prNumber: 10,
+        linkedIssues,
+        trigger: "updated",
+        maxPRsPerIssue: defaultMaxPRs,
+      });
+    });
+
+    it("should not call processImplementationIntake for already-labeled PRs", async () => {
+      mockGetOpenPRsForIssue.mockResolvedValue([
+        { number: 10, title: "Already tracked", state: "OPEN", author: { login: "agent-alice" } },
+      ]);
+      mockFindPRsWithLabel.mockResolvedValue([
+        { number: 10, createdAt: new Date(), updatedAt: new Date(), labels: [{ name: LABELS.IMPLEMENTATION }] },
+      ]);
+
+      const prs = createPROperations(fakeOctokit, { appId }) as unknown as PROperations;
+      await reconcileIssue(fakeOctokit, prs, fakeIssues, owner, repo, 42, defaultMaxPRs);
+
+      expect(mockProcessImplementationIntake).not.toHaveBeenCalled();
+    });
+
+    it("should still count notification when processImplementationIntake throws", async () => {
+      mockGetOpenPRsForIssue.mockResolvedValue([
+        { number: 10, title: "PR", state: "OPEN", author: { login: "agent-alice" } },
+      ]);
+      mockHasNotificationCommentInComments.mockReturnValue(false);
+      mockListCommentsWithBody.mockResolvedValue([]);
+      mockGetLinkedIssues.mockResolvedValue([]);
+      mockProcessImplementationIntake.mockRejectedValueOnce(new Error("Transient API error"));
+
+      const prs = createPROperations(fakeOctokit, { appId }) as unknown as PROperations;
+      const result = await reconcileIssue(fakeOctokit, prs, fakeIssues, owner, repo, 42, defaultMaxPRs);
+
+      // Notification was posted (before the intake call), so notified should be 1
+      expect(result).toEqual({ notified: 1, skipped: 0 });
+      // Error should be logged, not thrown
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining("PR #10"),
+        expect.any(Error)
+      );
+    });
+
+    it("should not call processImplementationIntake for already-notified PRs", async () => {
+      mockGetOpenPRsForIssue.mockResolvedValue([
+        { number: 10, title: "PR", state: "OPEN", author: { login: "agent-alice" } },
+      ]);
+      mockHasNotificationCommentInComments.mockReturnValue(true);
+
+      const prs = createPROperations(fakeOctokit, { appId }) as unknown as PROperations;
+      await reconcileIssue(fakeOctokit, prs, fakeIssues, owner, repo, 42, defaultMaxPRs);
+
+      expect(mockProcessImplementationIntake).not.toHaveBeenCalled();
     });
   });
 
@@ -321,6 +428,47 @@ describe("reconcile-pr-notifications", () => {
         expect.any(Error)
       );
       expect(mockGetOpenPRsForIssue).toHaveBeenCalledTimes(2);
+    });
+
+    it("should throw when loadRepositoryConfig fails (no issues reconciled)", async () => {
+      mockLoadRepositoryConfig.mockRejectedValueOnce(new Error("Config file parse error"));
+
+      const { octokit: mockOctokit } = createMockOctokit([
+        { number: 42, labels: [{ name: LABELS.READY_TO_IMPLEMENT }] },
+      ]);
+
+      const repoObj = { owner: { login: owner }, name: repo, full_name: `${owner}/${repo}` };
+
+      await expect(processRepository(mockOctokit, repoObj, appId)).rejects.toThrow(
+        "Config file parse error"
+      );
+
+      // No issues should be reconciled because config loading happens first
+      expect(mockGetOpenPRsForIssue).not.toHaveBeenCalled();
+    });
+
+    it("should load repository config and pass maxPRsPerIssue", async () => {
+      mockLoadRepositoryConfig.mockResolvedValue({
+        governance: { pr: { maxPRsPerIssue: 5 } },
+      } as any);
+
+      const { octokit: mockOctokit } = createMockOctokit([
+        { number: 42, labels: [{ name: LABELS.READY_TO_IMPLEMENT }] },
+      ]);
+
+      mockGetOpenPRsForIssue.mockResolvedValue([
+        { number: 10, title: "PR", state: "OPEN", author: { login: "agent" } },
+      ]);
+      mockGetLinkedIssues.mockResolvedValue([]);
+
+      const repoObj = { owner: { login: owner }, name: repo, full_name: `${owner}/${repo}` };
+      await processRepository(mockOctokit, repoObj, appId);
+
+      expect(mockLoadRepositoryConfig).toHaveBeenCalledWith(mockOctokit, owner, repo);
+      // processImplementationIntake should receive maxPRsPerIssue from config
+      expect(mockProcessImplementationIntake).toHaveBeenCalledWith(
+        expect.objectContaining({ maxPRsPerIssue: 5 })
+      );
     });
   });
 });

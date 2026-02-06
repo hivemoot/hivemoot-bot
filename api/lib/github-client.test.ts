@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { IssueOperations, createIssueOperations } from "./github-client.js";
 import type { GitHubClient } from "./github-client.js";
 import type { IssueRef } from "./types.js";
-import { SIGNATURES, buildVotingComment, buildHumanHelpComment } from "./bot-comments.js";
+import { SIGNATURES, buildVotingComment, buildHumanHelpComment, buildNotificationComment, NOTIFICATION_TYPES } from "./bot-comments.js";
 
 /**
  * Helper to create a voting comment body with proper metadata.
@@ -733,6 +733,132 @@ describe("IssueOperations", () => {
       });
 
       const result = await issueOps.hasHumanHelpComment(testRef, "VOTING_COMMENT_NOT_FOUND");
+
+      expect(result).toBe(false);
+    });
+  });
+
+  describe("hasNotificationComment", () => {
+    it("should return true when matching notification comment exists", async () => {
+      const notificationBody = buildNotificationComment(
+        "Test notification content",
+        42,
+        NOTIFICATION_TYPES.IMPLEMENTATION_WELCOME
+      );
+
+      mockClient.paginate.iterator = vi.fn().mockReturnValue({
+        async *[Symbol.asyncIterator]() {
+          yield {
+            data: [
+              { id: 100, body: notificationBody, performed_via_github_app: { id: TEST_APP_ID } },
+            ],
+          };
+        },
+      });
+
+      const result = await issueOps.hasNotificationComment(
+        testRef,
+        NOTIFICATION_TYPES.IMPLEMENTATION_WELCOME,
+        42
+      );
+
+      expect(result).toBe(true);
+    });
+
+    it("should return false when no matching notification exists", async () => {
+      mockClient.paginate.iterator = vi.fn().mockReturnValue({
+        async *[Symbol.asyncIterator]() {
+          yield {
+            data: [
+              { id: 100, body: "Just a regular comment", performed_via_github_app: { id: TEST_APP_ID } },
+            ],
+          };
+        },
+      });
+
+      const result = await issueOps.hasNotificationComment(
+        testRef,
+        NOTIFICATION_TYPES.IMPLEMENTATION_WELCOME,
+        42
+      );
+
+      expect(result).toBe(false);
+    });
+
+    it("should return false when notification type differs", async () => {
+      const notificationBody = buildNotificationComment(
+        "Test notification content",
+        42,
+        NOTIFICATION_TYPES.VOTING_PASSED
+      );
+
+      mockClient.paginate.iterator = vi.fn().mockReturnValue({
+        async *[Symbol.asyncIterator]() {
+          yield {
+            data: [
+              { id: 100, body: notificationBody, performed_via_github_app: { id: TEST_APP_ID } },
+            ],
+          };
+        },
+      });
+
+      const result = await issueOps.hasNotificationComment(
+        testRef,
+        NOTIFICATION_TYPES.IMPLEMENTATION_WELCOME,
+        42
+      );
+
+      expect(result).toBe(false);
+    });
+
+    it("should return false when issueNumber differs", async () => {
+      const notificationBody = buildNotificationComment(
+        "Test notification content",
+        99,
+        NOTIFICATION_TYPES.ISSUE_NEW_PR
+      );
+
+      mockClient.paginate.iterator = vi.fn().mockReturnValue({
+        async *[Symbol.asyncIterator]() {
+          yield {
+            data: [
+              { id: 100, body: notificationBody, performed_via_github_app: { id: TEST_APP_ID } },
+            ],
+          };
+        },
+      });
+
+      const result = await issueOps.hasNotificationComment(
+        testRef,
+        NOTIFICATION_TYPES.ISSUE_NEW_PR,
+        42
+      );
+
+      expect(result).toBe(false);
+    });
+
+    it("should return false when comment is from a different app", async () => {
+      const notificationBody = buildNotificationComment(
+        "Test notification content",
+        42,
+        NOTIFICATION_TYPES.IMPLEMENTATION_WELCOME
+      );
+
+      mockClient.paginate.iterator = vi.fn().mockReturnValue({
+        async *[Symbol.asyncIterator]() {
+          yield {
+            data: [
+              { id: 100, body: notificationBody, performed_via_github_app: { id: 99999 } },
+            ],
+          };
+        },
+      });
+
+      const result = await issueOps.hasNotificationComment(
+        testRef,
+        NOTIFICATION_TYPES.IMPLEMENTATION_WELCOME,
+        42
+      );
 
       expect(result).toBe(false);
     });

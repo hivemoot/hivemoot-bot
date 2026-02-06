@@ -320,19 +320,31 @@ export const PR_MESSAGES = {
   /**
    * Posted when a PR is opened that links to a phase:ready-to-implement issue.
    * PR_WELCOME is only posted for valid PRs (no linked issues or has ready issue).
+   * Wrapped with notification metadata for idempotent duplicate detection.
    */
-  IMPLEMENTATION_WELCOME: (issueNumber: number) => `# 🐝 Implementation PR
+  IMPLEMENTATION_WELCOME: (issueNumber: number) =>
+    buildNotificationComment(
+      `# 🐝 Implementation PR
 
 Multiple implementations for #${issueNumber} may compete — may the best code win.
 Focus on a clean implementation and quick responses to reviews to stay in the lead.${SIGNATURE}`,
+      issueNumber,
+      NOTIFICATION_TYPES.IMPLEMENTATION_WELCOME
+    ),
 
   /**
    * Posted to the linked issue when a new implementation PR is opened.
+   * Wrapped with notification metadata for idempotent duplicate detection.
+   * Uses prNumber as the reference number so each PR's notification is independently deduplicated.
    */
   issueNewPR: (prNumber: number, totalPRs: number) =>
-    `# 🐝 New Implementation 🔨
+    buildNotificationComment(
+      `# 🐝 New Implementation 🔨
 
 #${prNumber} submitted. ${totalPRs} competing implementation${totalPRs === 1 ? "" : "s"} now.${SIGNATURE}`,
+      prNumber,
+      NOTIFICATION_TYPES.ISSUE_NEW_PR
+    ),
 
   /**
    * Posted to the issue when it's implemented via a merged PR.

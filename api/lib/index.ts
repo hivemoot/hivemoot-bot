@@ -54,6 +54,10 @@ export type { GovernanceServiceConfig, EndVotingOptions } from "./governance.js"
 export { logger, createLogger } from "./logger.js";
 export type { Logger } from "./logger.js";
 
+// Implementation intake
+export { processImplementationIntake, recalculateLeaderboardForPR } from "./implementation-intake.js";
+export type { IntakeTrigger, LeaderboardRecalcClient } from "./implementation-intake.js";
+
 // Repository configuration
 export { loadRepositoryConfig, getDefaultConfig } from "./repo-config.js";
 export type {

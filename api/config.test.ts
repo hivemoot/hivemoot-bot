@@ -199,6 +199,41 @@ describe("config", () => {
       expect(message).toContain(config.SIGNATURE);
     });
 
+    it("should embed notification metadata in IMPLEMENTATION_WELCOME", async () => {
+      const config = await import("./config.js");
+
+      const message = config.PR_MESSAGES.IMPLEMENTATION_WELCOME(42);
+
+      expect(message).toContain("hivemoot-metadata:");
+
+      const metadata = parseMetadata(message);
+      expect(metadata?.type).toBe("notification");
+      expect((metadata as NotificationMetadata)?.notificationType).toBe(NOTIFICATION_TYPES.IMPLEMENTATION_WELCOME);
+      expect(metadata?.issueNumber).toBe(42);
+
+      expect(message).toContain("Implementation PR");
+      expect(message).toContain("#42");
+      expect(message).toContain(config.SIGNATURE);
+    });
+
+    it("should embed notification metadata in issueNewPR", async () => {
+      const config = await import("./config.js");
+
+      const message = config.PR_MESSAGES.issueNewPR(101, 3);
+
+      expect(message).toContain("hivemoot-metadata:");
+
+      const metadata = parseMetadata(message);
+      expect(metadata?.type).toBe("notification");
+      expect((metadata as NotificationMetadata)?.notificationType).toBe(NOTIFICATION_TYPES.ISSUE_NEW_PR);
+      // issueNewPR uses prNumber as the reference number for dedup keying
+      expect(metadata?.issueNumber).toBe(101);
+
+      expect(message).toContain("#101");
+      expect(message).toContain("3 competing implementations");
+      expect(message).toContain(config.SIGNATURE);
+    });
+
     it("should embed notification metadata in issueVotingPassed", async () => {
       const config = await import("./config.js");
 

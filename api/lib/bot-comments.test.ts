@@ -328,6 +328,18 @@ Some content`;
   it("should ignore spoofed metadata with different prefix", () => {
     expect(parseMetadata('<!-- fake-metadata: {"version":1,"type":"voting"} -->')).toBeNull();
   });
+
+  it("should return null for unknown type", () => {
+    expect(parseMetadata('<!-- hivemoot-metadata: {"version":1,"type":"unknown-type","issueNumber":42} -->')).toBeNull();
+  });
+
+  it("should return null for notification with non-string notificationType", () => {
+    expect(parseMetadata('<!-- hivemoot-metadata: {"version":1,"type":"notification","notificationType":123,"issueNumber":42} -->')).toBeNull();
+  });
+
+  it("should return null for notification with non-number issueNumber", () => {
+    expect(parseMetadata('<!-- hivemoot-metadata: {"version":1,"type":"notification","notificationType":"voting-passed","issueNumber":"not-a-number"} -->')).toBeNull();
+  });
 });
 
 describe("isVotingComment", () => {

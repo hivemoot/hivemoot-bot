@@ -2,7 +2,7 @@ name: reconcile-pr-notifications
 
 on:
   schedule:
-    - cron: "30 * * * *"  # Hourly at :30 (staggered from close-discussions at :00)
+    - cron: "20,50 * * * *"  # Every 30 minutes (staggered +20)
   workflow_dispatch:
     # Manual trigger for testing
 

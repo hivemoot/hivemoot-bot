@@ -236,17 +236,23 @@ describe("reconcile-pr-notifications", () => {
       );
     });
 
-    it("should skip PRs that already have notification", async () => {
+    it("should skip notification but attempt intake for already-notified PRs", async () => {
+      const linkedIssues = [{ number: 42, title: "Issue", state: "OPEN" as const, labels: { nodes: [{ name: LABELS.READY_TO_IMPLEMENT }] } }];
       mockGetOpenPRsForIssue.mockResolvedValue([
         { number: 10, title: "PR", state: "OPEN", author: { login: "agent-alice" } },
       ]);
       mockHasNotificationCommentInComments.mockReturnValue(true);
+      mockGetLinkedIssues.mockResolvedValue(linkedIssues);
 
       const prs = createPROperations(fakeOctokit, { appId }) as unknown as PROperations;
       const result = await reconcileIssue(fakeOctokit, prs, fakeIssues, owner, repo, 42, defaultMaxPRs);
 
       expect(result).toEqual({ notified: 0, skipped: 1 });
       expect(mockComment).not.toHaveBeenCalled();
+      expect(mockGetLinkedIssues).toHaveBeenCalledWith(fakeOctokit, owner, repo, 10);
+      expect(mockProcessImplementationIntake).toHaveBeenCalledWith(
+        expect.objectContaining({ prNumber: 10, trigger: "updated" })
+      );
     });
 
     it("should handle no linked PRs", async () => {
@@ -320,16 +326,66 @@ describe("reconcile-pr-notifications", () => {
       );
     });
 
-    it("should not call processImplementationIntake for already-notified PRs", async () => {
+    it("should attempt intake for already-notified but unlabeled PRs", async () => {
+      const linkedIssues = [{ number: 42, title: "Issue", state: "OPEN" as const, labels: { nodes: [{ name: LABELS.READY_TO_IMPLEMENT }] } }];
       mockGetOpenPRsForIssue.mockResolvedValue([
         { number: 10, title: "PR", state: "OPEN", author: { login: "agent-alice" } },
       ]);
+      mockHasNotificationCommentInComments.mockReturnValue(true);
+      mockGetLinkedIssues.mockResolvedValue(linkedIssues);
+
+      const prs = createPROperations(fakeOctokit, { appId }) as unknown as PROperations;
+      await reconcileIssue(fakeOctokit, prs, fakeIssues, owner, repo, 42, defaultMaxPRs);
+
+      expect(mockProcessImplementationIntake).toHaveBeenCalledWith({
+        octokit: fakeOctokit,
+        issues: fakeIssues,
+        prs,
+        log: logger,
+        owner,
+        repo,
+        prNumber: 10,
+        linkedIssues,
+        trigger: "updated",
+        maxPRsPerIssue: defaultMaxPRs,
+      });
+    });
+
+    it("should handle intake failure for already-notified PR gracefully", async () => {
+      mockGetOpenPRsForIssue.mockResolvedValue([
+        { number: 10, title: "PR", state: "OPEN", author: { login: "agent-alice" } },
+      ]);
+      mockHasNotificationCommentInComments.mockReturnValue(true);
+      mockGetLinkedIssues.mockResolvedValue([]);
+      mockProcessImplementationIntake.mockRejectedValueOnce(new Error("Transient API error"));
+
+      const prs = createPROperations(fakeOctokit, { appId }) as unknown as PROperations;
+      const result = await reconcileIssue(fakeOctokit, prs, fakeIssues, owner, repo, 42, defaultMaxPRs);
+
+      // Notification was already posted (skipped), so skipped should be 1
+      expect(result).toEqual({ notified: 0, skipped: 1 });
+      expect(mockComment).not.toHaveBeenCalled();
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining("PR #10"),
+        expect.any(Error)
+      );
+    });
+
+    it("should not attempt intake for already-labeled PRs (even if notified)", async () => {
+      mockGetOpenPRsForIssue.mockResolvedValue([
+        { number: 10, title: "Already tracked", state: "OPEN", author: { login: "agent-alice" } },
+      ]);
+      mockFindPRsWithLabel.mockResolvedValue([
+        { number: 10, createdAt: new Date(), updatedAt: new Date(), labels: [{ name: LABELS.IMPLEMENTATION }] },
+      ]);
+      // Even though it has notification, it should short-circuit before checking
       mockHasNotificationCommentInComments.mockReturnValue(true);
 
       const prs = createPROperations(fakeOctokit, { appId }) as unknown as PROperations;
       await reconcileIssue(fakeOctokit, prs, fakeIssues, owner, repo, 42, defaultMaxPRs);
 
       expect(mockProcessImplementationIntake).not.toHaveBeenCalled();
+      expect(mockListCommentsWithBody).not.toHaveBeenCalled();
     });
   });
 

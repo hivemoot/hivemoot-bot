@@ -114,26 +114,24 @@ export async function reconcileIssue(
 
     const ref: PRRef = { owner, repo, prNumber: linkedPR.number };
 
+    // Concern 1: Notification (skip if already posted)
     const alreadyNotified = await hasVotingPassedNotification(prs, ref, issueNumber);
-    if (alreadyNotified) {
+    if (!alreadyNotified) {
+      await prs.comment(
+        ref,
+        PR_MESSAGES.issueVotingPassed(issueNumber, linkedPR.author.login)
+      );
+      logger.info(`Reconciled: notified PR #${linkedPR.number} (@${linkedPR.author.login}) that issue #${issueNumber} is ready`);
+      notified++;
+    } else {
       skipped++;
-      continue;
     }
 
-    await prs.comment(
-      ref,
-      PR_MESSAGES.issueVotingPassed(issueNumber, linkedPR.author.login)
-    );
-    logger.info(`Reconciled: notified PR #${linkedPR.number} (@${linkedPR.author.login}) that issue #${issueNumber} is ready`);
-    notified++;
-
-    // Attempt implementation label reconciliation for this unlabeled PR.
-    // processImplementationIntake is idempotent:
-    //   - Early-returns if label already present
-    //   - Comments use metadata dedup (no duplicates)
-    // Wrapped in try/catch so a transient intake failure doesn't prevent the
-    // voting-passed notification (already posted above) from being counted.
-    // Without this, a retry would skip the PR (dedup) yet never apply the label.
+    // Concern 2: Intake (always attempt for unlabeled PRs)
+    // processImplementationIntake is idempotent and has its own anti-gaming guard.
+    // This covers the gap where notifyPendingPRs() posted the notification
+    // but the PR was never labeled (no post-ready activity at the time, or
+    // transient error). The hourly reconciler retries until the author responds.
     try {
       const linkedIssues = await getLinkedIssues(octokit, owner, repo, linkedPR.number);
       await processImplementationIntake({

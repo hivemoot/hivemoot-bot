@@ -85,7 +85,7 @@ describe("Implementation Intake", () => {
     const prs = {
       get: vi.fn().mockResolvedValue({ createdAt: new Date("2026-02-01T00:00:00Z") }),
       getLabels: vi.fn().mockResolvedValue([]),
-      getActivationDate: vi.fn().mockResolvedValue(new Date("2026-02-02T00:00:00Z")),
+      getLatestAuthorActivityDate: vi.fn().mockResolvedValue(new Date("2026-02-02T00:00:00Z")),
       findPRsWithLabel: vi.fn().mockResolvedValue([]),
       addLabels: vi.fn().mockResolvedValue(undefined),
       comment: vi.fn().mockResolvedValue(undefined),
@@ -129,7 +129,7 @@ describe("Implementation Intake", () => {
     const prs = {
       get: vi.fn().mockResolvedValue({ createdAt: new Date("2026-02-01T00:00:00Z") }),
       getLabels: vi.fn().mockResolvedValue([]),
-      getActivationDate: vi.fn().mockResolvedValue(new Date("2026-02-02T00:00:00Z")),
+      getLatestAuthorActivityDate: vi.fn().mockResolvedValue(new Date("2026-02-02T00:00:00Z")),
       findPRsWithLabel: vi.fn().mockResolvedValue([]),
       addLabels: vi.fn().mockResolvedValue(undefined),
       comment: vi.fn().mockResolvedValue(undefined),
@@ -173,7 +173,7 @@ describe("Implementation Intake", () => {
     const prs = {
       get: vi.fn().mockResolvedValue({ createdAt: new Date("2026-02-01T00:00:00Z") }),
       getLabels: vi.fn().mockResolvedValue([]),
-      getActivationDate: vi.fn().mockResolvedValue(new Date("2026-02-02T00:00:00Z")),
+      getLatestAuthorActivityDate: vi.fn().mockResolvedValue(new Date("2026-02-02T00:00:00Z")),
       findPRsWithLabel: vi.fn().mockResolvedValue([]),
       addLabels: vi.fn().mockResolvedValue(undefined),
       comment: vi.fn().mockResolvedValue(undefined),
@@ -217,7 +217,7 @@ describe("Implementation Intake", () => {
       get: vi.fn().mockResolvedValue({ createdAt: new Date("2026-02-01T00:00:00Z") }),
       getLabels: vi.fn().mockResolvedValue([]),
       // Activation BEFORE ready → anti-gaming guard rejects
-      getActivationDate: vi.fn().mockResolvedValue(new Date("2026-02-04T00:00:00Z")),
+      getLatestAuthorActivityDate: vi.fn().mockResolvedValue(new Date("2026-02-04T00:00:00Z")),
       findPRsWithLabel: vi.fn().mockResolvedValue([]),
       addLabels: vi.fn().mockResolvedValue(undefined),
       comment: vi.fn().mockResolvedValue(undefined),
@@ -263,7 +263,7 @@ describe("Implementation Intake", () => {
       get: vi.fn().mockResolvedValue({ createdAt: new Date("2026-02-01T00:00:00Z") }),
       getLabels: vi.fn().mockResolvedValue([]),
       // Activation BEFORE ready — but editedAt is AFTER
-      getActivationDate: vi.fn().mockResolvedValue(new Date("2026-02-04T00:00:00Z")),
+      getLatestAuthorActivityDate: vi.fn().mockResolvedValue(new Date("2026-02-04T00:00:00Z")),
       findPRsWithLabel: vi.fn().mockResolvedValue([]),
       addLabels: vi.fn().mockResolvedValue(undefined),
       comment: vi.fn().mockResolvedValue(undefined),
@@ -310,7 +310,7 @@ describe("Implementation Intake", () => {
     const prs = {
       get: vi.fn().mockResolvedValue({ createdAt: new Date("2026-02-01T00:00:00Z") }),
       getLabels: vi.fn().mockResolvedValue([]),
-      getActivationDate: vi.fn().mockResolvedValue(new Date("2026-02-03T00:00:00Z")),
+      getLatestAuthorActivityDate: vi.fn().mockResolvedValue(new Date("2026-02-03T00:00:00Z")),
       findPRsWithLabel: vi.fn().mockResolvedValue([]),
       addLabels: vi.fn().mockResolvedValue(undefined),
       comment: vi.fn().mockResolvedValue(undefined),
@@ -356,7 +356,7 @@ describe("Implementation Intake", () => {
     const prs = {
       get: vi.fn().mockResolvedValue({ createdAt: new Date("2026-02-01T00:00:00Z") }),
       getLabels: vi.fn().mockResolvedValue([]),
-      getActivationDate: vi.fn().mockResolvedValue(new Date("2026-02-03T00:00:00Z")),
+      getLatestAuthorActivityDate: vi.fn().mockResolvedValue(new Date("2026-02-03T00:00:00Z")),
       findPRsWithLabel: vi.fn().mockResolvedValue([]),
       addLabels: vi.fn().mockResolvedValue(undefined),
       comment: vi.fn().mockResolvedValue(undefined),
@@ -411,7 +411,7 @@ describe("Implementation Intake", () => {
         author: "other",
       }),
       getLabels: vi.fn().mockResolvedValue([]),
-      getActivationDate: vi.fn().mockResolvedValue(new Date("2026-02-02T00:00:00Z")),
+      getLatestAuthorActivityDate: vi.fn().mockResolvedValue(new Date("2026-02-02T00:00:00Z")),
       findPRsWithLabel: vi.fn().mockResolvedValue([existingPR]),
       addLabels: vi.fn().mockResolvedValue(undefined),
       comment: vi.fn().mockResolvedValue(undefined),
@@ -458,7 +458,7 @@ describe("Implementation Intake", () => {
     const prs = {
       get: vi.fn().mockResolvedValue({ createdAt: new Date("2026-02-01T00:00:00Z") }),
       getLabels: vi.fn().mockResolvedValue([]),
-      getActivationDate: vi.fn().mockResolvedValue(new Date("2026-02-02T00:00:00Z")),
+      getLatestAuthorActivityDate: vi.fn().mockResolvedValue(new Date("2026-02-02T00:00:00Z")),
       findPRsWithLabel: vi.fn().mockResolvedValue([]),
       addLabels: vi.fn().mockResolvedValue(undefined),
       comment: vi.fn().mockResolvedValue(undefined),
@@ -510,7 +510,7 @@ describe("Implementation Intake", () => {
     const prs = {
       get: vi.fn().mockResolvedValue({ createdAt: new Date("2026-02-01T00:00:00Z") }),
       getLabels: vi.fn().mockResolvedValue([]),
-      getActivationDate: vi.fn().mockResolvedValue(new Date("2026-02-02T00:00:00Z")),
+      getLatestAuthorActivityDate: vi.fn().mockResolvedValue(new Date("2026-02-02T00:00:00Z")),
       findPRsWithLabel: vi.fn().mockResolvedValue([]),
       addLabels: vi.fn().mockResolvedValue(undefined),
       comment: vi.fn().mockResolvedValue(undefined),
@@ -562,7 +562,7 @@ describe("Implementation Intake", () => {
     const prs = {
       get: vi.fn().mockResolvedValue({ createdAt: new Date("2026-02-01T00:00:00Z") }),
       getLabels: vi.fn().mockResolvedValue([]),
-      getActivationDate: vi.fn().mockResolvedValue(new Date("2026-02-02T00:00:00Z")),
+      getLatestAuthorActivityDate: vi.fn().mockResolvedValue(new Date("2026-02-02T00:00:00Z")),
       findPRsWithLabel: vi.fn().mockResolvedValue([]),
       addLabels: vi.fn().mockResolvedValue(undefined),
       comment: vi.fn().mockResolvedValue(undefined),

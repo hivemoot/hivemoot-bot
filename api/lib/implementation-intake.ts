@@ -280,7 +280,7 @@ export async function processImplementationIntake(params: {
     return;
   }
 
-  const activationDate = await prs.getActivationDate(prRef, prDetails.createdAt);
+  const activationDate = await prs.getLatestAuthorActivityDate(prRef, prDetails.createdAt);
   // PR body edits count as activation — the webhook provides the edit timestamp
   const effectiveActivation = params.editedAt
     ? new Date(Math.max(activationDate.getTime(), params.editedAt.getTime()))

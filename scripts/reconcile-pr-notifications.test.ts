@@ -45,6 +45,7 @@ vi.mock("../api/lib/index.js", () => ({
   createIssueOperations: vi.fn(() => mockIssueOperations),
   getOpenPRsForIssue: vi.fn().mockResolvedValue([]),
   getLinkedIssues: vi.fn().mockResolvedValue([]),
+  getPRBodyLastEditedAt: vi.fn().mockResolvedValue(null),
   loadRepositoryConfig: vi.fn().mockResolvedValue({
     governance: { pr: { maxPRsPerIssue: 3 } },
   }),
@@ -80,6 +81,7 @@ import {
   getOpenPRsForIssue,
   createPROperations,
   getLinkedIssues,
+  getPRBodyLastEditedAt,
   loadRepositoryConfig,
   logger,
 } from "../api/lib/index.js";
@@ -91,6 +93,7 @@ import type { PRRef } from "../api/lib/index.js";
 
 const mockGetOpenPRsForIssue = vi.mocked(getOpenPRsForIssue);
 const mockGetLinkedIssues = vi.mocked(getLinkedIssues);
+const mockGetPRBodyLastEditedAt = vi.mocked(getPRBodyLastEditedAt);
 const mockLoadRepositoryConfig = vi.mocked(loadRepositoryConfig);
 
 describe("reconcile-pr-notifications", () => {
@@ -110,6 +113,7 @@ describe("reconcile-pr-notifications", () => {
     mockHasNotificationCommentInComments.mockReturnValue(false);
     mockListCommentsWithBody.mockResolvedValue([]);
     mockGetLinkedIssues.mockResolvedValue([]);
+    mockGetPRBodyLastEditedAt.mockResolvedValue(null);
     mockProcessImplementationIntake.mockResolvedValue(undefined);
   });
 
@@ -288,7 +292,62 @@ describe("reconcile-pr-notifications", () => {
         linkedIssues,
         trigger: "updated",
         maxPRsPerIssue: defaultMaxPRs,
+        editedAt: undefined,
       });
+    });
+
+    it("should pass non-null bodyLastEditedAt as editedAt to processImplementationIntake", async () => {
+      const linkedIssues = [{ number: 42, title: "Issue", state: "OPEN" as const, labels: { nodes: [{ name: LABELS.READY_TO_IMPLEMENT }] } }];
+      const editDate = new Date("2026-02-10T00:00:00Z");
+      mockGetOpenPRsForIssue.mockResolvedValue([
+        { number: 10, title: "PR", state: "OPEN", author: { login: "agent-alice" } },
+      ]);
+      mockGetLinkedIssues.mockResolvedValue(linkedIssues);
+      mockGetPRBodyLastEditedAt.mockResolvedValue(editDate);
+      mockHasNotificationCommentInComments.mockReturnValue(false);
+      mockListCommentsWithBody.mockResolvedValue([]);
+
+      const prs = createPROperations(fakeOctokit, { appId }) as unknown as PROperations;
+      await reconcileIssue(fakeOctokit, prs, fakeIssues, owner, repo, 42, defaultMaxPRs);
+
+      expect(mockProcessImplementationIntake).toHaveBeenCalledWith({
+        octokit: fakeOctokit,
+        issues: fakeIssues,
+        prs,
+        log: logger,
+        owner,
+        repo,
+        prNumber: 10,
+        linkedIssues,
+        trigger: "updated",
+        maxPRsPerIssue: defaultMaxPRs,
+        editedAt: editDate,
+      });
+    });
+
+    it("should proceed with intake when getPRBodyLastEditedAt fails", async () => {
+      const linkedIssues = [{ number: 42, title: "Issue", state: "OPEN" as const, labels: { nodes: [{ name: LABELS.READY_TO_IMPLEMENT }] } }];
+      mockGetOpenPRsForIssue.mockResolvedValue([
+        { number: 10, title: "PR", state: "OPEN", author: { login: "agent-alice" } },
+      ]);
+      mockGetLinkedIssues.mockResolvedValue(linkedIssues);
+      mockGetPRBodyLastEditedAt.mockRejectedValue(new Error("GraphQL 502"));
+      mockHasNotificationCommentInComments.mockReturnValue(false);
+      mockListCommentsWithBody.mockResolvedValue([]);
+
+      const prs = createPROperations(fakeOctokit, { appId }) as unknown as PROperations;
+      const result = await reconcileIssue(fakeOctokit, prs, fakeIssues, owner, repo, 42, defaultMaxPRs);
+
+      // Should still process intake with editedAt: undefined
+      expect(mockProcessImplementationIntake).toHaveBeenCalledWith(
+        expect.objectContaining({ editedAt: undefined })
+      );
+      // Should warn about the failure
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining("PR #10")
+      );
+      // Notification should still be counted
+      expect(result).toEqual({ notified: 1, skipped: 0 });
     });
 
     it("should not call processImplementationIntake for already-labeled PRs", async () => {
@@ -348,6 +407,7 @@ describe("reconcile-pr-notifications", () => {
         linkedIssues,
         trigger: "updated",
         maxPRsPerIssue: defaultMaxPRs,
+        editedAt: undefined,
       });
     });
 

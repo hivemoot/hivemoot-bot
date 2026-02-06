@@ -74,6 +74,58 @@ export async function getLinkedIssues(
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
+// Query: Get PR body last-edited timestamp
+// ───────────────────────────────────────────────────────────────────────────────
+
+const GET_PR_BODY_LAST_EDITED_QUERY = `
+  query getPRBodyLastEdited($owner: String!, $repo: String!, $pr: Int!) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $pr) {
+        lastEditedAt
+      }
+    }
+  }
+`;
+
+interface PRBodyLastEditedResponse {
+  repository: {
+    pullRequest: {
+      lastEditedAt: string | null;
+    } | null;
+  };
+}
+
+/**
+ * Get when a PR body was last edited, or null if never edited.
+ *
+ * Uses GitHub's GraphQL `lastEditedAt` field which tracks body edits
+ * specifically (unlike `updatedAt` which changes on any activity).
+ * Enables the reconciler to detect description edits without relying
+ * on the real-time pull_request.edited webhook.
+ */
+export async function getPRBodyLastEditedAt(
+  client: GraphQLClient,
+  owner: string,
+  repo: string,
+  prNumber: number
+): Promise<Date | null> {
+  const response = await client.graphql<PRBodyLastEditedResponse>(
+    GET_PR_BODY_LAST_EDITED_QUERY,
+    { owner, repo, pr: prNumber }
+  );
+
+  const lastEditedAt = response.repository.pullRequest?.lastEditedAt;
+  if (!lastEditedAt) return null;
+
+  const date = new Date(lastEditedAt);
+  if (isNaN(date.getTime())) {
+    logger.warn(`Invalid lastEditedAt timestamp from GitHub GraphQL: "${lastEditedAt}"`);
+    return null;
+  }
+  return date;
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
 // Query: Get open PRs that link to an issue (reverse lookup)
 // ───────────────────────────────────────────────────────────────────────────────
 

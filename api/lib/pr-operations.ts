@@ -347,17 +347,17 @@ export class PROperations {
   }
 
   /**
-   * Get the date of the last non-bot activity on a PR.
+   * Get the date of the latest activity on a PR (any source).
    *
    * Checks all activity types: issue comments, commits, reviews, and review comments.
+   * Used for staleness detection where any engagement keeps the PR alive.
    * Filters out comments made by our own GitHub App (identified by appId).
-   * Comments from other bots count as valid activity.
    *
    * @param ref - PR reference
    * @param prCreatedAt - Fallback date when no activity is found
    * @returns Date of most recent activity across all sources
    */
-  async getLastNonBotActivityDate(ref: PRRef, prCreatedAt: Date): Promise<Date> {
+  async getLatestActivityDate(ref: PRRef, prCreatedAt: Date): Promise<Date> {
     // Check all activity sources in parallel for performance
     const [commentDate, commitDate, reviewDate, reviewCommentDate] = await Promise.all([
       this.getLatestIssueCommentDate(ref, prCreatedAt),
@@ -376,12 +376,14 @@ export class PROperations {
   }
 
   /**
-   * Get the latest PR activation date based on comments or commits.
+   * Get the date of the latest author-side activity on a PR.
    *
-   * "Activation" excludes reviews and review comments; only issue comments
-   * and commit activity count. Bot-authored issue comments are excluded.
+   * Author activity = commits + issue comments. Reviews and review comments
+   * are excluded because they represent reviewer engagement, not author work.
+   * Used by the anti-gaming guard to verify the PR author pushed real work
+   * after the linked issue was approved for implementation.
    */
-  async getActivationDate(ref: PRRef, prCreatedAt: Date): Promise<Date> {
+  async getLatestAuthorActivityDate(ref: PRRef, prCreatedAt: Date): Promise<Date> {
     const [commentDate, commitDate] = await Promise.all([
       this.getLatestIssueCommentDate(ref, prCreatedAt),
       this.getLatestCommitDate(ref, prCreatedAt),

@@ -266,7 +266,7 @@ describe("processRepository", () => {
       ...original,
       createPROperations: vi.fn().mockReturnValue({
         findPRsWithLabel: vi.fn().mockResolvedValue([]),
-        getLastNonBotActivityDate: vi.fn().mockResolvedValue(new Date()),
+        getLatestActivityDate: vi.fn().mockResolvedValue(new Date()),
         hasLabel: vi.fn().mockReturnValue(false),
         comment: vi.fn().mockResolvedValue(undefined),
         close: vi.fn().mockResolvedValue(undefined),
@@ -341,7 +341,7 @@ describe("processRepository", () => {
     const { createPROperations, loadRepositoryConfig } = await import("../api/lib/index.js");
     const mockPRs = {
       findPRsWithLabel: vi.fn().mockResolvedValue([]),
-      getLastNonBotActivityDate: vi.fn(),
+      getLatestActivityDate: vi.fn(),
       hasLabel: vi.fn(),
       comment: vi.fn(),
       close: vi.fn(),
@@ -363,7 +363,7 @@ describe("processRepository", () => {
     expect(mockPRs.close).not.toHaveBeenCalled();
   });
 
-  it("should call getLastNonBotActivityDate for each PR", async () => {
+  it("should call getLatestActivityDate for each PR", async () => {
     const { createPROperations, loadRepositoryConfig } = await import("../api/lib/index.js");
     const prCreatedAt1 = new Date("2024-01-05T12:00:00Z");
     const prCreatedAt2 = new Date("2024-01-08T12:00:00Z");
@@ -372,7 +372,7 @@ describe("processRepository", () => {
         { number: 1, createdAt: prCreatedAt1, updatedAt: new Date("2024-01-19T12:00:00Z"), labels: [{ name: LABELS.IMPLEMENTATION }] },
         { number: 2, createdAt: prCreatedAt2, updatedAt: new Date("2024-01-19T12:00:00Z"), labels: [{ name: LABELS.IMPLEMENTATION }] },
       ]),
-      getLastNonBotActivityDate: vi.fn().mockResolvedValue(new Date("2024-01-19T12:00:00Z")),
+      getLatestActivityDate: vi.fn().mockResolvedValue(new Date("2024-01-19T12:00:00Z")),
       hasLabel: vi.fn().mockReturnValue(false),
       comment: vi.fn().mockResolvedValue(undefined),
       close: vi.fn().mockResolvedValue(undefined),
@@ -387,13 +387,13 @@ describe("processRepository", () => {
 
     await processRepository(mockOctokit, repo, testAppId);
 
-    // Should call getLastNonBotActivityDate for each PR with correct createdAt fallback
-    expect(mockPRs.getLastNonBotActivityDate).toHaveBeenCalledTimes(2);
-    expect(mockPRs.getLastNonBotActivityDate).toHaveBeenCalledWith(
+    // Should call getLatestActivityDate for each PR with correct createdAt fallback
+    expect(mockPRs.getLatestActivityDate).toHaveBeenCalledTimes(2);
+    expect(mockPRs.getLatestActivityDate).toHaveBeenCalledWith(
       { owner: "test-org", repo: "test-repo", prNumber: 1 },
       prCreatedAt1
     );
-    expect(mockPRs.getLastNonBotActivityDate).toHaveBeenCalledWith(
+    expect(mockPRs.getLatestActivityDate).toHaveBeenCalledWith(
       { owner: "test-org", repo: "test-repo", prNumber: 2 },
       prCreatedAt2
     );
@@ -413,7 +413,7 @@ describe("processRepository", () => {
         },
       ]),
       // Last non-bot activity was 10 days ago
-      getLastNonBotActivityDate: vi.fn().mockResolvedValue(new Date("2024-01-10T12:00:00Z")),
+      getLatestActivityDate: vi.fn().mockResolvedValue(new Date("2024-01-10T12:00:00Z")),
       hasLabel: vi.fn().mockImplementation((_pr, label) => label === LABELS.STALE),
       comment: vi.fn().mockResolvedValue(undefined),
       close: vi.fn().mockResolvedValue(undefined),
@@ -441,7 +441,7 @@ describe("processRepository", () => {
         { number: 2, createdAt: new Date("2024-01-06T12:00:00Z"), updatedAt: new Date("2024-01-19T12:00:00Z"), labels: [{ name: LABELS.IMPLEMENTATION }] },
         { number: 3, createdAt: new Date("2024-01-07T12:00:00Z"), updatedAt: new Date("2024-01-19T12:00:00Z"), labels: [{ name: LABELS.IMPLEMENTATION }] },
       ]),
-      getLastNonBotActivityDate: vi.fn()
+      getLatestActivityDate: vi.fn()
         .mockResolvedValueOnce(new Date("2024-01-19T12:00:00Z")) // PR #1 succeeds
         .mockRejectedValueOnce(new Error("API rate limit")) // PR #2 fails
         .mockResolvedValueOnce(new Date("2024-01-19T12:00:00Z")), // PR #3 succeeds
@@ -463,7 +463,7 @@ describe("processRepository", () => {
     );
 
     // All three PRs should have been attempted (not halted after PR #2)
-    expect(mockPRs.getLastNonBotActivityDate).toHaveBeenCalledTimes(3);
+    expect(mockPRs.getLatestActivityDate).toHaveBeenCalledTimes(3);
     // Error should be logged for PR #2
     expect(logger.error).toHaveBeenCalledWith(
       "Failed to process PR #2",

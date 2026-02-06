@@ -33,6 +33,7 @@ export type { PRClient, PROperationsConfig, PROperations as PROperationsType } f
 export {
   getLinkedIssues,
   getOpenPRsForIssue,
+  getPRBodyLastEditedAt,
 } from "./graphql-queries.js";
 export type { GraphQLClient } from "./graphql-queries.js";
 

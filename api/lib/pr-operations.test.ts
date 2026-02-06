@@ -561,7 +561,7 @@ describe("PROperations", () => {
     });
   });
 
-  describe("getLastNonBotActivityDate", () => {
+  describe("getLatestActivityDate", () => {
     const prCreatedAt = new Date("2024-01-10T08:00:00Z");
 
     it("should return latest non-bot comment date", async () => {
@@ -573,7 +573,7 @@ describe("PROperations", () => {
         ],
       });
 
-      const result = await prOps.getLastNonBotActivityDate(testRef, prCreatedAt);
+      const result = await prOps.getLatestActivityDate(testRef, prCreatedAt);
 
       expect(result).toEqual(new Date("2024-01-14T15:00:00Z"));
     });
@@ -587,7 +587,7 @@ describe("PROperations", () => {
         ],
       });
 
-      const result = await prOps.getLastNonBotActivityDate(testRef, prCreatedAt);
+      const result = await prOps.getLatestActivityDate(testRef, prCreatedAt);
 
       // Should return Jan 13, not Jan 15 (our bot's comment)
       expect(result).toEqual(new Date("2024-01-13T12:00:00Z"));
@@ -601,7 +601,7 @@ describe("PROperations", () => {
         ],
       });
 
-      const result = await prOps.getLastNonBotActivityDate(testRef, prCreatedAt);
+      const result = await prOps.getLatestActivityDate(testRef, prCreatedAt);
 
       expect(result).toEqual(prCreatedAt);
     });
@@ -609,7 +609,7 @@ describe("PROperations", () => {
     it("should return prCreatedAt when no comments exist", async () => {
       vi.mocked(mockClient.rest.issues.listComments).mockResolvedValue({ data: [] });
 
-      const result = await prOps.getLastNonBotActivityDate(testRef, prCreatedAt);
+      const result = await prOps.getLatestActivityDate(testRef, prCreatedAt);
 
       expect(result).toEqual(prCreatedAt);
     });
@@ -623,7 +623,7 @@ describe("PROperations", () => {
         ],
       });
 
-      const result = await prOps.getLastNonBotActivityDate(testRef, prCreatedAt);
+      const result = await prOps.getLatestActivityDate(testRef, prCreatedAt);
 
       // Other bot's comment should count
       expect(result).toEqual(new Date("2024-01-12T10:00:00Z"));
@@ -632,7 +632,7 @@ describe("PROperations", () => {
     it("should call listComments with correct parameters including page", async () => {
       vi.mocked(mockClient.rest.issues.listComments).mockResolvedValue({ data: [] });
 
-      await prOps.getLastNonBotActivityDate(testRef, prCreatedAt);
+      await prOps.getLatestActivityDate(testRef, prCreatedAt);
 
       expect(mockClient.rest.issues.listComments).toHaveBeenCalledWith({
         owner: "test-org",
@@ -655,7 +655,7 @@ describe("PROperations", () => {
         ],
       });
 
-      const result = await prOps.getLastNonBotActivityDate(testRef, prCreatedAt);
+      const result = await prOps.getLatestActivityDate(testRef, prCreatedAt);
 
       expect(result).toEqual(new Date("2024-01-15T10:00:00Z"));
     });
@@ -677,7 +677,7 @@ describe("PROperations", () => {
         ],
       });
 
-      const result = await prOps.getLastNonBotActivityDate(testRef, prCreatedAt);
+      const result = await prOps.getLatestActivityDate(testRef, prCreatedAt);
 
       expect(result).toEqual(new Date("2024-01-16T10:00:00Z"));
     });
@@ -704,7 +704,7 @@ describe("PROperations", () => {
         ],
       });
 
-      const result = await prOps.getLastNonBotActivityDate(testRef, prCreatedAt);
+      const result = await prOps.getLatestActivityDate(testRef, prCreatedAt);
 
       expect(result).toEqual(new Date("2024-01-17T10:00:00Z"));
     });
@@ -717,7 +717,7 @@ describe("PROperations", () => {
         ],
       });
 
-      const result = await prOps.getLastNonBotActivityDate(testRef, prCreatedAt);
+      const result = await prOps.getLatestActivityDate(testRef, prCreatedAt);
 
       expect(result).toEqual(prCreatedAt);
     });
@@ -728,7 +728,7 @@ describe("PROperations", () => {
       vi.mocked(mockClient.rest.pulls.listReviews).mockResolvedValue({ data: [] });
       vi.mocked(mockClient.rest.pulls.listReviewComments).mockResolvedValue({ data: [] });
 
-      await prOps.getLastNonBotActivityDate(testRef, prCreatedAt);
+      await prOps.getLatestActivityDate(testRef, prCreatedAt);
 
       // All four endpoints should be called
       expect(mockClient.rest.issues.listComments).toHaveBeenCalled();
@@ -759,14 +759,14 @@ describe("PROperations", () => {
         ],
       });
 
-      const result = await prOps.getLastNonBotActivityDate(testRef, prCreatedAt);
+      const result = await prOps.getLatestActivityDate(testRef, prCreatedAt);
 
       // Issue comment at Jan 18 is the most recent
       expect(result).toEqual(new Date("2024-01-18T08:00:00Z"));
     });
   });
 
-  describe("getActivationDate", () => {
+  describe("getLatestAuthorActivityDate", () => {
     const prCreatedAt = new Date("2024-01-10T08:00:00Z");
 
     it("should return the latest of comments or commits", async () => {
@@ -781,7 +781,7 @@ describe("PROperations", () => {
         ],
       });
 
-      const result = await prOps.getActivationDate(testRef, prCreatedAt);
+      const result = await prOps.getLatestAuthorActivityDate(testRef, prCreatedAt);
 
       expect(result).toEqual(new Date("2024-01-13T10:00:00Z"));
     });
@@ -790,7 +790,7 @@ describe("PROperations", () => {
       vi.mocked(mockClient.rest.issues.listComments).mockResolvedValue({ data: [] });
       vi.mocked(mockClient.rest.pulls.listCommits).mockResolvedValue({ data: [] });
 
-      const result = await prOps.getActivationDate(testRef, prCreatedAt);
+      const result = await prOps.getLatestAuthorActivityDate(testRef, prCreatedAt);
 
       expect(result).toEqual(prCreatedAt);
     });

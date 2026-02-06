@@ -123,8 +123,7 @@ export async function processRepository(
     for (const pr of implementationPRs) {
       try {
         const ref: PRRef = { owner, repo: repoName, prNumber: pr.number };
-        // Get last non-bot activity date to avoid feedback loop where bot comments reset staleness
-        const lastActivityDate = await prs.getLastNonBotActivityDate(ref, pr.createdAt);
+        const lastActivityDate = await prs.getLatestActivityDate(ref, pr.createdAt);
         await processPR(prs, ref, pr, repoConfig.governance.pr.staleDays, lastActivityDate);
       } catch (error) {
         failedPRs.push(pr.number);

@@ -22,6 +22,7 @@ import {
   createIssueOperations,
   getOpenPRsForIssue,
   getLinkedIssues,
+  getPRBodyLastEditedAt,
   loadRepositoryConfig,
   logger,
 } from "../api/lib/index.js";
@@ -134,6 +135,18 @@ export async function reconcileIssue(
     // transient error). The hourly reconciler retries until the author responds.
     try {
       const linkedIssues = await getLinkedIssues(octokit, owner, repo, linkedPR.number);
+
+      // Optional: fetch body-edit timestamp for the anti-gaming guard.
+      // Isolated so a transient GraphQL failure doesn't block intake.
+      let bodyLastEditedAt: Date | null = null;
+      try {
+        bodyLastEditedAt = await getPRBodyLastEditedAt(octokit, owner, repo, linkedPR.number);
+      } catch (editError) {
+        logger.warn(
+          `Failed to fetch PR body edit time for PR #${linkedPR.number}, proceeding without it`
+        );
+      }
+
       await processImplementationIntake({
         octokit,
         issues,
@@ -145,6 +158,7 @@ export async function reconcileIssue(
         linkedIssues,
         trigger: "updated",
         maxPRsPerIssue,
+        editedAt: bodyLastEditedAt ?? undefined,
       });
     } catch (error) {
       logger.error(

@@ -796,6 +796,43 @@ describe("PROperations", () => {
     });
   });
 
+  describe("getApproverLogins", () => {
+    it("should return set of approving usernames", async () => {
+      vi.mocked(mockClient.rest.pulls.listReviews).mockResolvedValue({
+        data: [
+          { state: "APPROVED", user: { login: "user1" }, submitted_at: "2024-01-01T10:00:00Z" },
+          { state: "APPROVED", user: { login: "user2" }, submitted_at: "2024-01-01T11:00:00Z" },
+        ],
+      });
+
+      const logins = await prOps.getApproverLogins(testRef);
+
+      expect(logins).toEqual(new Set(["user1", "user2"]));
+    });
+
+    it("should not include users whose latest review is CHANGES_REQUESTED", async () => {
+      vi.mocked(mockClient.rest.pulls.listReviews).mockResolvedValue({
+        data: [
+          { state: "APPROVED", user: { login: "user1" }, submitted_at: "2024-01-01T10:00:00Z" },
+          { state: "CHANGES_REQUESTED", user: { login: "user1" }, submitted_at: "2024-01-01T14:00:00Z" },
+          { state: "APPROVED", user: { login: "user2" }, submitted_at: "2024-01-01T11:00:00Z" },
+        ],
+      });
+
+      const logins = await prOps.getApproverLogins(testRef);
+
+      expect(logins).toEqual(new Set(["user2"]));
+    });
+
+    it("should return empty set for no reviews", async () => {
+      vi.mocked(mockClient.rest.pulls.listReviews).mockResolvedValue({ data: [] });
+
+      const logins = await prOps.getApproverLogins(testRef);
+
+      expect(logins).toEqual(new Set());
+    });
+  });
+
   describe("getApprovalCount", () => {
     it("should count unique approving users", async () => {
       vi.mocked(mockClient.rest.pulls.listReviews).mockResolvedValue({

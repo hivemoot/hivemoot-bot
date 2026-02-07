@@ -92,7 +92,9 @@ export async function reconcileIssue(
   owner: string,
   repo: string,
   issueNumber: number,
-  maxPRsPerIssue: number
+  maxPRsPerIssue: number,
+  trustedReviewers: string[] = [],
+  intake: import("../api/lib/repo-config.js").IntakeMethod[] = [{ method: "update" }]
 ): Promise<{ notified: number; skipped: number }> {
   const linkedPRs = await getOpenPRsForIssue(octokit, owner, repo, issueNumber);
   if (linkedPRs.length === 0) {
@@ -158,6 +160,8 @@ export async function reconcileIssue(
         linkedIssues,
         trigger: "updated",
         maxPRsPerIssue,
+        trustedReviewers,
+        intake,
         editedAt: bodyLastEditedAt ?? undefined,
       });
     } catch (error) {
@@ -189,7 +193,7 @@ export async function processRepository(
     const prs = createPROperations(octokit, { appId });
     const issues = createIssueOperations(octokit, { appId });
     const repoConfig = await loadRepositoryConfig(octokit, owner, repoName);
-    const maxPRsPerIssue = repoConfig.governance.pr.maxPRsPerIssue;
+    const { maxPRsPerIssue, trustedReviewers, intake } = repoConfig.governance.pr;
 
     // Paginate through all open issues with phase:ready-to-implement label
     const failedIssues: number[] = [];
@@ -212,7 +216,7 @@ export async function processRepository(
 
       for (const issue of filteredIssues) {
         try {
-          const result = await reconcileIssue(octokit, prs, issues, owner, repoName, issue.number, maxPRsPerIssue);
+          const result = await reconcileIssue(octokit, prs, issues, owner, repoName, issue.number, maxPRsPerIssue, trustedReviewers, intake);
           if (result.notified > 0) {
             logger.info(`Issue #${issue.number}: notified ${result.notified} PR(s), skipped ${result.skipped}`);
           }

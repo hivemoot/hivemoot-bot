@@ -71,4 +71,5 @@ export type {
   VotingExit,
   DiscussionExit,
   ExitRequires,
+  IntakeMethod,
 } from "./repo-config.js";

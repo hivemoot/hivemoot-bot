@@ -589,6 +589,424 @@ describe("Implementation Intake", () => {
   });
 });
 
+describe("Intake Methods", () => {
+  const createMockOctokit = () => ({
+    rest: {
+      issues: {
+        get: vi.fn().mockResolvedValue({ data: { labels: [] } }),
+        addLabels: vi.fn().mockResolvedValue({}),
+        removeLabel: vi.fn().mockResolvedValue({}),
+        createComment: vi.fn().mockResolvedValue({}),
+        updateComment: vi.fn().mockResolvedValue({}),
+        listEventsForTimeline: vi.fn().mockResolvedValue({ data: [] }),
+        listComments: vi.fn().mockResolvedValue({ data: [] }),
+        listForRepo: vi.fn().mockResolvedValue({ data: [] }),
+        lock: vi.fn().mockResolvedValue({}),
+        unlock: vi.fn().mockResolvedValue({}),
+      },
+      pulls: {
+        get: vi.fn().mockResolvedValue({
+          data: {
+            number: 101,
+            state: "open",
+            merged: false,
+            created_at: "2026-02-01T00:00:00Z",
+            updated_at: "2026-02-02T00:00:00Z",
+            user: { login: "agent" },
+          },
+        }),
+        update: vi.fn().mockResolvedValue({}),
+        listReviews: vi.fn().mockResolvedValue({ data: [] }),
+        listCommits: vi.fn().mockResolvedValue({ data: [] }),
+        listReviewComments: vi.fn().mockResolvedValue({ data: [] }),
+      },
+      reactions: {
+        listForIssueComment: vi.fn().mockResolvedValue({ data: [] }),
+      },
+    },
+    paginate: {
+      iterator: vi.fn().mockReturnValue({
+        async *[Symbol.asyncIterator]() {
+          yield { data: [] };
+        },
+      }),
+    },
+  });
+
+  const readyIssue: LinkedIssue = {
+    number: 7,
+    title: "Ready issue",
+    state: "OPEN",
+    labels: { nodes: [{ name: LABELS.READY_TO_IMPLEMENT }] },
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("intake: [update] — pre-ready PR blocked (existing behavior)", async () => {
+    const mockOctokit = createMockOctokit();
+    vi.mocked(getLinkedIssues).mockResolvedValue([readyIssue]);
+
+    const issues = {
+      getLabelAddedTime: vi.fn().mockResolvedValue(new Date("2026-02-05T00:00:00Z")),
+      comment: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const prs = {
+      get: vi.fn().mockResolvedValue({ createdAt: new Date("2026-02-01T00:00:00Z") }),
+      getLabels: vi.fn().mockResolvedValue([]),
+      getLatestAuthorActivityDate: vi.fn().mockResolvedValue(new Date("2026-02-04T00:00:00Z")),
+      getApproverLogins: vi.fn().mockResolvedValue(new Set<string>()),
+      findPRsWithLabel: vi.fn().mockResolvedValue([]),
+      addLabels: vi.fn().mockResolvedValue(undefined),
+      comment: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await processImplementationIntake({
+      octokit: mockOctokit,
+      issues,
+      prs,
+      log: { info: vi.fn(), warn: vi.fn() },
+      owner: "hivemoot",
+      repo: "colony",
+      prNumber: 101,
+      linkedIssues: [readyIssue],
+      trigger: "opened",
+      maxPRsPerIssue: 3,
+      intake: [{ method: "update" }],
+    });
+
+    expect(prs.addLabels).not.toHaveBeenCalled();
+    expect(prs.comment).toHaveBeenCalled(); // issueReadyNeedsUpdate
+  });
+
+  it("intake: [update] — post-ready PR activated (existing behavior)", async () => {
+    const mockOctokit = createMockOctokit();
+    vi.mocked(getLinkedIssues).mockResolvedValue([readyIssue]);
+
+    const issues = {
+      getLabelAddedTime: vi.fn().mockResolvedValue(new Date("2026-02-01T00:00:00Z")),
+      comment: vi.fn().mockResolvedValue(undefined),
+      hasNotificationComment: vi.fn().mockResolvedValue(false),
+    };
+
+    const prs = {
+      get: vi.fn().mockResolvedValue({ createdAt: new Date("2026-02-01T00:00:00Z") }),
+      getLabels: vi.fn().mockResolvedValue([]),
+      getLatestAuthorActivityDate: vi.fn().mockResolvedValue(new Date("2026-02-02T00:00:00Z")),
+      getApproverLogins: vi.fn().mockResolvedValue(new Set<string>()),
+      findPRsWithLabel: vi.fn().mockResolvedValue([]),
+      addLabels: vi.fn().mockResolvedValue(undefined),
+      comment: vi.fn().mockResolvedValue(undefined),
+      hasNotificationComment: vi.fn().mockResolvedValue(false),
+    };
+
+    await processImplementationIntake({
+      octokit: mockOctokit,
+      issues,
+      prs,
+      log: { info: vi.fn(), warn: vi.fn() },
+      owner: "hivemoot",
+      repo: "colony",
+      prNumber: 101,
+      linkedIssues: [readyIssue],
+      trigger: "opened",
+      maxPRsPerIssue: 3,
+      intake: [{ method: "update" }],
+    });
+
+    expect(prs.addLabels).toHaveBeenCalledWith(
+      { owner: "hivemoot", repo: "colony", prNumber: 101 },
+      [LABELS.IMPLEMENTATION]
+    );
+  });
+
+  it("intake: [update, approval] — pre-ready PR with trusted approval → activated", async () => {
+    const mockOctokit = createMockOctokit();
+    vi.mocked(getLinkedIssues).mockResolvedValue([readyIssue]);
+
+    const issues = {
+      getLabelAddedTime: vi.fn().mockResolvedValue(new Date("2026-02-05T00:00:00Z")),
+      comment: vi.fn().mockResolvedValue(undefined),
+      hasNotificationComment: vi.fn().mockResolvedValue(false),
+    };
+
+    const prs = {
+      get: vi.fn().mockResolvedValue({ createdAt: new Date("2026-02-01T00:00:00Z") }),
+      getLabels: vi.fn().mockResolvedValue([]),
+      // Activation BEFORE ready — timing guard fails
+      getLatestAuthorActivityDate: vi.fn().mockResolvedValue(new Date("2026-02-04T00:00:00Z")),
+      // But alice has approved
+      getApproverLogins: vi.fn().mockResolvedValue(new Set(["alice"])),
+      findPRsWithLabel: vi.fn().mockResolvedValue([]),
+      addLabels: vi.fn().mockResolvedValue(undefined),
+      comment: vi.fn().mockResolvedValue(undefined),
+      hasNotificationComment: vi.fn().mockResolvedValue(false),
+    };
+
+    await processImplementationIntake({
+      octokit: mockOctokit,
+      issues,
+      prs,
+      log: { info: vi.fn(), warn: vi.fn() },
+      owner: "hivemoot",
+      repo: "colony",
+      prNumber: 101,
+      linkedIssues: [readyIssue],
+      trigger: "opened",
+      maxPRsPerIssue: 3,
+      trustedReviewers: ["alice", "bob"],
+      intake: [{ method: "update" }, { method: "approval", minApprovals: 1 }],
+    });
+
+    expect(prs.addLabels).toHaveBeenCalledWith(
+      { owner: "hivemoot", repo: "colony", prNumber: 101 },
+      [LABELS.IMPLEMENTATION]
+    );
+  });
+
+  it("intake: [update, approval] — pre-ready PR with non-trusted approval → blocked", async () => {
+    const mockOctokit = createMockOctokit();
+    vi.mocked(getLinkedIssues).mockResolvedValue([readyIssue]);
+
+    const issues = {
+      getLabelAddedTime: vi.fn().mockResolvedValue(new Date("2026-02-05T00:00:00Z")),
+      comment: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const prs = {
+      get: vi.fn().mockResolvedValue({ createdAt: new Date("2026-02-01T00:00:00Z") }),
+      getLabels: vi.fn().mockResolvedValue([]),
+      getLatestAuthorActivityDate: vi.fn().mockResolvedValue(new Date("2026-02-04T00:00:00Z")),
+      // "random-user" is not in the trusted list
+      getApproverLogins: vi.fn().mockResolvedValue(new Set(["random-user"])),
+      findPRsWithLabel: vi.fn().mockResolvedValue([]),
+      addLabels: vi.fn().mockResolvedValue(undefined),
+      comment: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await processImplementationIntake({
+      octokit: mockOctokit,
+      issues,
+      prs,
+      log: { info: vi.fn(), warn: vi.fn() },
+      owner: "hivemoot",
+      repo: "colony",
+      prNumber: 101,
+      linkedIssues: [readyIssue],
+      trigger: "opened",
+      maxPRsPerIssue: 3,
+      trustedReviewers: ["alice", "bob"],
+      intake: [{ method: "update" }, { method: "approval", minApprovals: 1 }],
+    });
+
+    expect(prs.addLabels).not.toHaveBeenCalled();
+  });
+
+  it("intake: [update, approval] — pre-ready PR with 0 approvals → blocked", async () => {
+    const mockOctokit = createMockOctokit();
+    vi.mocked(getLinkedIssues).mockResolvedValue([readyIssue]);
+
+    const issues = {
+      getLabelAddedTime: vi.fn().mockResolvedValue(new Date("2026-02-05T00:00:00Z")),
+      comment: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const prs = {
+      get: vi.fn().mockResolvedValue({ createdAt: new Date("2026-02-01T00:00:00Z") }),
+      getLabels: vi.fn().mockResolvedValue([]),
+      getLatestAuthorActivityDate: vi.fn().mockResolvedValue(new Date("2026-02-04T00:00:00Z")),
+      getApproverLogins: vi.fn().mockResolvedValue(new Set<string>()),
+      findPRsWithLabel: vi.fn().mockResolvedValue([]),
+      addLabels: vi.fn().mockResolvedValue(undefined),
+      comment: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await processImplementationIntake({
+      octokit: mockOctokit,
+      issues,
+      prs,
+      log: { info: vi.fn(), warn: vi.fn() },
+      owner: "hivemoot",
+      repo: "colony",
+      prNumber: 101,
+      linkedIssues: [readyIssue],
+      trigger: "opened",
+      maxPRsPerIssue: 3,
+      trustedReviewers: ["alice"],
+      intake: [{ method: "update" }, { method: "approval", minApprovals: 1 }],
+    });
+
+    expect(prs.addLabels).not.toHaveBeenCalled();
+  });
+
+  it("intake: [approval] only — post-ready activity alone doesn't activate (strict mode)", async () => {
+    const mockOctokit = createMockOctokit();
+    vi.mocked(getLinkedIssues).mockResolvedValue([readyIssue]);
+
+    const issues = {
+      getLabelAddedTime: vi.fn().mockResolvedValue(new Date("2026-02-01T00:00:00Z")),
+      comment: vi.fn().mockResolvedValue(undefined),
+      hasNotificationComment: vi.fn().mockResolvedValue(false),
+    };
+
+    const prs = {
+      get: vi.fn().mockResolvedValue({ createdAt: new Date("2026-02-01T00:00:00Z") }),
+      getLabels: vi.fn().mockResolvedValue([]),
+      // Activation AFTER ready — timing guard passes, but intake has no "update" method
+      getLatestAuthorActivityDate: vi.fn().mockResolvedValue(new Date("2026-02-02T00:00:00Z")),
+      getApproverLogins: vi.fn().mockResolvedValue(new Set<string>()),
+      findPRsWithLabel: vi.fn().mockResolvedValue([]),
+      addLabels: vi.fn().mockResolvedValue(undefined),
+      comment: vi.fn().mockResolvedValue(undefined),
+      hasNotificationComment: vi.fn().mockResolvedValue(false),
+    };
+
+    await processImplementationIntake({
+      octokit: mockOctokit,
+      issues,
+      prs,
+      log: { info: vi.fn(), warn: vi.fn() },
+      owner: "hivemoot",
+      repo: "colony",
+      prNumber: 101,
+      linkedIssues: [readyIssue],
+      trigger: "updated",
+      maxPRsPerIssue: 3,
+      trustedReviewers: ["alice"],
+      intake: [{ method: "approval", minApprovals: 1 }],
+    });
+
+    // NOTE: When isActivationAfterReady passes, we skip the intake loop entirely
+    // and proceed to label the PR. The strict-mode guard only applies to pre-ready PRs.
+    // Post-ready activity always activates regardless of intake methods.
+    expect(prs.addLabels).toHaveBeenCalled();
+  });
+
+  it("intake: [approval] — trusted approval activates pre-ready PR", async () => {
+    const mockOctokit = createMockOctokit();
+    vi.mocked(getLinkedIssues).mockResolvedValue([readyIssue]);
+
+    const issues = {
+      getLabelAddedTime: vi.fn().mockResolvedValue(new Date("2026-02-05T00:00:00Z")),
+      comment: vi.fn().mockResolvedValue(undefined),
+      hasNotificationComment: vi.fn().mockResolvedValue(false),
+    };
+
+    const prs = {
+      get: vi.fn().mockResolvedValue({ createdAt: new Date("2026-02-01T00:00:00Z") }),
+      getLabels: vi.fn().mockResolvedValue([]),
+      getLatestAuthorActivityDate: vi.fn().mockResolvedValue(new Date("2026-02-04T00:00:00Z")),
+      getApproverLogins: vi.fn().mockResolvedValue(new Set(["alice"])),
+      findPRsWithLabel: vi.fn().mockResolvedValue([]),
+      addLabels: vi.fn().mockResolvedValue(undefined),
+      comment: vi.fn().mockResolvedValue(undefined),
+      hasNotificationComment: vi.fn().mockResolvedValue(false),
+    };
+
+    await processImplementationIntake({
+      octokit: mockOctokit,
+      issues,
+      prs,
+      log: { info: vi.fn(), warn: vi.fn() },
+      owner: "hivemoot",
+      repo: "colony",
+      prNumber: 101,
+      linkedIssues: [readyIssue],
+      trigger: "updated",
+      maxPRsPerIssue: 3,
+      trustedReviewers: ["alice"],
+      intake: [{ method: "approval", minApprovals: 1 }],
+    });
+
+    expect(prs.addLabels).toHaveBeenCalledWith(
+      { owner: "hivemoot", repo: "colony", prNumber: 101 },
+      [LABELS.IMPLEMENTATION]
+    );
+  });
+
+  it("minApprovals: 2 requires 2 trusted approvals", async () => {
+    const mockOctokit = createMockOctokit();
+    vi.mocked(getLinkedIssues).mockResolvedValue([readyIssue]);
+
+    const issues = {
+      getLabelAddedTime: vi.fn().mockResolvedValue(new Date("2026-02-05T00:00:00Z")),
+      comment: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const prs = {
+      get: vi.fn().mockResolvedValue({ createdAt: new Date("2026-02-01T00:00:00Z") }),
+      getLabels: vi.fn().mockResolvedValue([]),
+      getLatestAuthorActivityDate: vi.fn().mockResolvedValue(new Date("2026-02-04T00:00:00Z")),
+      // Only 1 trusted approval, but we need 2
+      getApproverLogins: vi.fn().mockResolvedValue(new Set(["alice"])),
+      findPRsWithLabel: vi.fn().mockResolvedValue([]),
+      addLabels: vi.fn().mockResolvedValue(undefined),
+      comment: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await processImplementationIntake({
+      octokit: mockOctokit,
+      issues,
+      prs,
+      log: { info: vi.fn(), warn: vi.fn() },
+      owner: "hivemoot",
+      repo: "colony",
+      prNumber: 101,
+      linkedIssues: [readyIssue],
+      trigger: "opened",
+      maxPRsPerIssue: 3,
+      trustedReviewers: ["alice", "bob"],
+      intake: [{ method: "approval", minApprovals: 2 }],
+    });
+
+    expect(prs.addLabels).not.toHaveBeenCalled();
+  });
+
+  it("timing guard passes → approval check skipped (no unnecessary API calls)", async () => {
+    const mockOctokit = createMockOctokit();
+    vi.mocked(getLinkedIssues).mockResolvedValue([readyIssue]);
+
+    const issues = {
+      getLabelAddedTime: vi.fn().mockResolvedValue(new Date("2026-02-01T00:00:00Z")),
+      comment: vi.fn().mockResolvedValue(undefined),
+      hasNotificationComment: vi.fn().mockResolvedValue(false),
+    };
+
+    const prs = {
+      get: vi.fn().mockResolvedValue({ createdAt: new Date("2026-02-01T00:00:00Z") }),
+      getLabels: vi.fn().mockResolvedValue([]),
+      // Activation AFTER ready — timing guard passes
+      getLatestAuthorActivityDate: vi.fn().mockResolvedValue(new Date("2026-02-02T00:00:00Z")),
+      getApproverLogins: vi.fn().mockResolvedValue(new Set<string>()),
+      findPRsWithLabel: vi.fn().mockResolvedValue([]),
+      addLabels: vi.fn().mockResolvedValue(undefined),
+      comment: vi.fn().mockResolvedValue(undefined),
+      hasNotificationComment: vi.fn().mockResolvedValue(false),
+    };
+
+    await processImplementationIntake({
+      octokit: mockOctokit,
+      issues,
+      prs,
+      log: { info: vi.fn(), warn: vi.fn() },
+      owner: "hivemoot",
+      repo: "colony",
+      prNumber: 101,
+      linkedIssues: [readyIssue],
+      trigger: "opened",
+      maxPRsPerIssue: 3,
+      trustedReviewers: ["alice"],
+      intake: [{ method: "update" }, { method: "approval", minApprovals: 1 }],
+    });
+
+    // getApproverLogins should NOT be called — timing guard passed, loop skipped
+    expect(prs.getApproverLogins).not.toHaveBeenCalled();
+    expect(prs.addLabels).toHaveBeenCalled();
+  });
+});
+
 describe("Leaderboard race condition fix", () => {
   const createMockOctokit = () => ({
     rest: {

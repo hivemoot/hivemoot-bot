@@ -442,7 +442,7 @@ Review and approve the best one.${SIGNATURE}`,
 
 Good news @${prAuthor} — Issue #${issueNumber} passed voting and is ready for implementation!
 
-If you opened this PR before the proposal was finalized, please push a new commit or add a comment with your updates. If it already reflects the final scope, you're all set.${SIGNATURE}`,
+Push a new commit or add a comment to activate it for implementation tracking.${SIGNATURE}`,
       issueNumber,
       NOTIFICATION_TYPES.VOTING_PASSED
     ),

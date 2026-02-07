@@ -115,6 +115,8 @@ function app(probotApp: Probot): void {
         linkedIssues,
         trigger: "opened",
         maxPRsPerIssue: repoConfig.governance.pr.maxPRsPerIssue,
+        trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+        intake: repoConfig.governance.pr.intake,
       });
     } catch (error) {
       context.log.error({ err: error, pr: number, repo: fullName }, "Failed to process PR");
@@ -150,6 +152,8 @@ function app(probotApp: Probot): void {
         linkedIssues,
         trigger: "updated",
         maxPRsPerIssue: repoConfig.governance.pr.maxPRsPerIssue,
+        trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+        intake: repoConfig.governance.pr.intake,
       });
     } catch (error) {
       context.log.error({ err: error, pr: number, repo: fullName }, "Failed to process PR update");
@@ -190,6 +194,8 @@ function app(probotApp: Probot): void {
         linkedIssues,
         trigger: "edited",
         maxPRsPerIssue: repoConfig.governance.pr.maxPRsPerIssue,
+        trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+        intake: repoConfig.governance.pr.intake,
         editedAt: new Date(context.payload.pull_request.updated_at),
       });
     } catch (error) {
@@ -234,6 +240,8 @@ function app(probotApp: Probot): void {
         linkedIssues,
         trigger: "updated",
         maxPRsPerIssue: repoConfig.governance.pr.maxPRsPerIssue,
+        trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+        intake: repoConfig.governance.pr.intake,
       });
     } catch (error) {
       context.log.error({ err: error, pr: prNumber, repo: fullName }, "Failed to process PR comment");
@@ -297,7 +305,7 @@ function app(probotApp: Probot): void {
     }
   });
 
-  /** Handle PR review submitted - update leaderboard on approvals */
+  /** Handle PR review submitted - update leaderboard and run intake on approvals */
   probotApp.on("pull_request_review.submitted", async (context) => {
     const { number } = context.payload.pull_request;
     const { owner, repo, fullName } = getRepoContext(context.payload.repository);
@@ -309,9 +317,32 @@ function app(probotApp: Probot): void {
     context.log.info(`Processing approval for PR #${number} in ${fullName}`);
 
     try {
-      await recalculateLeaderboardForPR(context.octokit, context.log, owner, repo, number);
+      const appId = getAppId();
+      const issues = createIssueOperations(context.octokit, { appId });
+      const prs = createPROperations(context.octokit, { appId });
+
+      const [linkedIssues, repoConfig] = await Promise.all([
+        getLinkedIssues(context.octokit, owner, repo, number),
+        loadRepositoryConfig(context.octokit, owner, repo),
+        recalculateLeaderboardForPR(context.octokit, context.log, owner, repo, number),
+      ]);
+
+      await processImplementationIntake({
+        octokit: context.octokit,
+        issues,
+        prs,
+        log: context.log,
+        owner,
+        repo,
+        prNumber: number,
+        linkedIssues,
+        trigger: "updated",
+        maxPRsPerIssue: repoConfig.governance.pr.maxPRsPerIssue,
+        trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+        intake: repoConfig.governance.pr.intake,
+      });
     } catch (error) {
-      context.log.error({ err: error, pr: number, repo: fullName }, "Failed to update leaderboard");
+      context.log.error({ err: error, pr: number, repo: fullName }, "Failed to process PR review");
       throw error;
     }
   });

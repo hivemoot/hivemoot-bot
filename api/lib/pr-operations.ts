@@ -504,15 +504,13 @@ export class PROperations {
   }
 
   /**
-   * Get approval count for a PR using REST API.
-   * Counts users whose most recent decisive review is APPROVED.
+   * Get the set of users whose most recent decisive review is APPROVED.
    * Uses pagination to handle PRs with >100 reviews.
    *
    * Decisive reviews are: APPROVED, CHANGES_REQUESTED, DISMISSED.
    * COMMENTED reviews don't change approval status.
    */
-  async getApprovalCount(ref: PRRef): Promise<number> {
-    // Decisive review states that determine approval status
+  async getApproverLogins(ref: PRRef): Promise<Set<string>> {
     const DECISIVE_STATES = new Set(["APPROVED", "CHANGES_REQUESTED", "DISMISSED"]);
 
     // Track each user's latest decisive review
@@ -521,7 +519,6 @@ export class PROperations {
     let page = 1;
     const perPage = 100;
 
-    // Paginate through all reviews
     while (true) {
       const { data: reviews } = await this.client.rest.pulls.listReviews({
         owner: ref.owner,
@@ -531,7 +528,6 @@ export class PROperations {
         page,
       });
 
-      // Exit if no more reviews
       if (reviews.length === 0) {
         break;
       }
@@ -541,7 +537,7 @@ export class PROperations {
           continue;
         }
 
-        const login = review.user.login;
+        const login = review.user.login.toLowerCase();
         const submittedAt = new Date(review.submitted_at);
         const existing = latestDecisiveReview.get(login);
 
@@ -550,7 +546,6 @@ export class PROperations {
         }
       }
 
-      // If we got fewer than perPage reviews, we've reached the end
       if (reviews.length < perPage) {
         break;
       }
@@ -558,15 +553,23 @@ export class PROperations {
       page++;
     }
 
-    // Count users whose latest decisive review is APPROVED
-    let approvalCount = 0;
-    for (const { state } of latestDecisiveReview.values()) {
+    const approvers = new Set<string>();
+    for (const [login, { state }] of latestDecisiveReview.entries()) {
       if (state === "APPROVED") {
-        approvalCount++;
+        approvers.add(login);
       }
     }
 
-    return approvalCount;
+    return approvers;
+  }
+
+  /**
+   * Get approval count for a PR using REST API.
+   * Counts users whose most recent decisive review is APPROVED.
+   */
+  async getApprovalCount(ref: PRRef): Promise<number> {
+    const approvers = await this.getApproverLogins(ref);
+    return approvers.size;
   }
 
   /**

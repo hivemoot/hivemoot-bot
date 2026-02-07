@@ -292,6 +292,8 @@ describe("reconcile-pr-notifications", () => {
         linkedIssues,
         trigger: "updated",
         maxPRsPerIssue: defaultMaxPRs,
+        trustedReviewers: [],
+        intake: [{ method: "update" }],
         editedAt: undefined,
       });
     });
@@ -321,6 +323,8 @@ describe("reconcile-pr-notifications", () => {
         linkedIssues,
         trigger: "updated",
         maxPRsPerIssue: defaultMaxPRs,
+        trustedReviewers: [],
+        intake: [{ method: "update" }],
         editedAt: editDate,
       });
     });
@@ -407,6 +411,8 @@ describe("reconcile-pr-notifications", () => {
         linkedIssues,
         trigger: "updated",
         maxPRsPerIssue: defaultMaxPRs,
+        trustedReviewers: [],
+        intake: [{ method: "update" }],
         editedAt: undefined,
       });
     });

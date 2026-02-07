@@ -20,6 +20,7 @@ import {
   getLinkedIssues,
   type GraphQLClient,
 } from "./graphql-queries.js";
+import type { IntakeMethod } from "./repo-config.js";
 import type { LinkedIssue, PRWithApprovals, PullRequest } from "./types.js";
 import { filterByLabel, hasLabel } from "./types.js";
 import { getAppId } from "./env-validation.js";
@@ -249,6 +250,8 @@ export async function processImplementationIntake(params: {
   linkedIssues: LinkedIssue[];
   trigger: IntakeTrigger;
   maxPRsPerIssue: number;
+  trustedReviewers?: string[];
+  intake?: IntakeMethod[];
   /** Timestamp of a PR body edit, used as an activation signal by the edited webhook. */
   editedAt?: Date;
 }): Promise<void> {
@@ -264,6 +267,8 @@ export async function processImplementationIntake(params: {
     trigger,
     maxPRsPerIssue,
   } = params;
+  const trustedReviewers = params.trustedReviewers ?? [];
+  const intake: IntakeMethod[] = params.intake ?? [{ method: "update" }];
 
   if (linkedIssues.length === 0) {
     return;
@@ -318,10 +323,35 @@ export async function processImplementationIntake(params: {
     }
 
     if (!isActivationAfterReady(effectiveActivation, readyAt)) {
-      if (trigger === "opened") {
-        await prs.comment(prRef, PR_MESSAGES.issueReadyNeedsUpdate(linkedIssue.number));
+      // PR was opened before voting passed. Check if any intake method accepts it.
+      let activated = false;
+
+      for (const rule of intake) {
+        if (rule.method === "update") {
+          // The timing guard already failed — this method cannot activate.
+          continue;
+        }
+        if (rule.method === "approval") {
+          const approverLogins = await prs.getApproverLogins(prRef);
+          const trustedApprovals = trustedReviewers.filter(
+            r => approverLogins.has(r)
+          ).length;
+          if (trustedApprovals >= rule.minApprovals) {
+            log.info(
+              `PR #${prNumber} activated via trusted approval: ${trustedApprovals} of ${rule.minApprovals} required for issue #${linkedIssue.number}`
+            );
+            activated = true;
+            break;
+          }
+        }
       }
-      continue;
+
+      if (!activated) {
+        if (trigger === "opened") {
+          await prs.comment(prRef, PR_MESSAGES.issueReadyNeedsUpdate(linkedIssue.number));
+        }
+        continue;
+      }
     }
 
     const activePRs = activeImplementationPRsByIssue.get(linkedIssue.number) ?? [];

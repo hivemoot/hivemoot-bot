@@ -22,9 +22,11 @@ import {
   logger,
 } from "../api/lib/index.js";
 import { NOTIFICATION_TYPES } from "../api/lib/bot-comments.js";
+import { processImplementationIntake } from "../api/lib/implementation-intake.js";
+import { getLinkedIssues } from "../api/lib/graphql-queries.js";
 import { runForAllRepositories, runIfMain } from "./shared/run-installations.js";
 import { isExitEligible, isDiscussionExitEligible } from "../api/lib/governance.js";
-import type { Repository, Issue, IssueRef, EffectiveConfig, VotingOutcome, DiscussionExit } from "../api/lib/index.js";
+import type { Repository, Issue, IssueRef, EffectiveConfig, VotingOutcome, DiscussionExit, IntakeMethod } from "../api/lib/index.js";
 import type { IssueOperations } from "../api/lib/github-client.js";
 import type { GovernanceService } from "../api/lib/governance.js";
 
@@ -430,10 +432,16 @@ export async function notifyPendingPRs(
   appId: number,
   owner: string,
   repo: string,
-  issueNumber: number
+  issueNumber: number,
+  intakeConfig?: {
+    maxPRsPerIssue: number;
+    trustedReviewers: string[];
+    intake: IntakeMethod[];
+  }
 ): Promise<void> {
   try {
     const prs = createPROperations(octokit, { appId });
+    const issues = createIssueOperations(octokit, { appId });
     const linkedPRs = await getOpenPRsForIssue(octokit, owner, repo, issueNumber);
 
     if (linkedPRs.length === 0) {
@@ -466,6 +474,33 @@ export async function notifyPendingPRs(
         PR_MESSAGES.issueVotingPassed(issueNumber, linkedPR.author.login)
       );
       logger.info(`Notified PR #${linkedPR.number} (@${linkedPR.author.login}) that issue #${issueNumber} is ready`);
+
+      // Proactive intake: attempt to activate PRs immediately after notification.
+      // This covers the case where a trusted reviewer already approved a pre-voting PR.
+      if (intakeConfig) {
+        try {
+          const linkedIssues = await getLinkedIssues(octokit, owner, repo, linkedPR.number);
+          await processImplementationIntake({
+            octokit,
+            issues,
+            prs,
+            log: logger,
+            owner,
+            repo,
+            prNumber: linkedPR.number,
+            linkedIssues,
+            trigger: "updated",
+            maxPRsPerIssue: intakeConfig.maxPRsPerIssue,
+            trustedReviewers: intakeConfig.trustedReviewers,
+            intake: intakeConfig.intake,
+          });
+        } catch (intakeError) {
+          // Best-effort: reconciler catches failures on its next sweep
+          logger.warn(
+            `Failed to attempt intake for PR #${linkedPR.number} (issue #${issueNumber}): ${(intakeError as Error).message}`
+          );
+        }
+      }
     }
   } catch (error) {
     // Best-effort: don't fail governance transition if notification fails
@@ -581,6 +616,9 @@ async function processRepository(
     };
 
     const { voting } = repoConfig.governance.proposals;
+    const { trustedReviewers, intake, maxPRsPerIssue } = repoConfig.governance.pr;
+    const prIntakeConfig = { maxPRsPerIssue, trustedReviewers, intake };
+
     // Deadline exit (last) provides the default voting config for timer-based transitions
     const deadlineExit = voting.exits[voting.exits.length - 1];
     const votingEndOptions: import("../api/lib/governance.js").EndVotingOptions = {
@@ -601,7 +639,7 @@ async function processRepository(
       const outcome = await endFn(ref, votingEndOptions);
       trackOutcome(outcome, ref.issueNumber);
       if (outcome === "phase:ready-to-implement") {
-        await notifyPendingPRs(octokit, appId, owner, repoName, ref.issueNumber);
+        await notifyPendingPRs(octokit, appId, owner, repoName, ref.issueNumber, prIntakeConfig);
       }
     };
 
@@ -612,7 +650,7 @@ async function processRepository(
       getValidatedVoteCounts: (ref, commentId) => issues.getValidatedVoteCounts(ref, commentId),
       votingEndOptions,
       trackOutcome,
-      notifyPRs: (issueNumber) => notifyPendingPRs(octokit, appId, owner, repoName, issueNumber),
+      notifyPRs: (issueNumber) => notifyPendingPRs(octokit, appId, owner, repoName, issueNumber, prIntakeConfig),
     };
 
     const { discussion } = repoConfig.governance.proposals;

@@ -30,6 +30,19 @@ export interface RequiredVotersConfig {
 
 export type ExitRequires = "majority" | "unanimous";
 
+// ── Intake Method Types ─────────────────────────────────────────────────────
+
+interface IntakeMethodUpdate {
+  method: "update";
+}
+
+interface IntakeMethodApproval {
+  method: "approval";
+  minApprovals: number;
+}
+
+export type IntakeMethod = IntakeMethodUpdate | IntakeMethodApproval;
+
 export interface VotingExit {
   afterMs: number;
   requires: ExitRequires;
@@ -65,6 +78,8 @@ export interface RepoConfigFile {
     pr?: {
       staleDays?: number;
       maxPRsPerIssue?: number;
+      trustedReviewers?: unknown;
+      intake?: unknown;
     };
   };
 }
@@ -91,6 +106,8 @@ export interface EffectiveConfig {
     pr: {
       staleDays: number;
       maxPRsPerIssue: number;
+      trustedReviewers: string[];
+      intake: IntakeMethod[];
     };
   };
 }
@@ -600,6 +617,112 @@ function parseDiscussionExits(
   return exits;
 }
 
+const DEFAULT_INTAKE: IntakeMethod[] = [{ method: "update" }];
+const VALID_INTAKE_METHODS = new Set(["update", "approval"]);
+
+/**
+ * Parse and validate trustedReviewers from config.
+ * Reuses parseVotersList for username validation.
+ */
+function parseTrustedReviewers(
+  value: unknown,
+  repoFullName: string
+): string[] {
+  return parseVotersList(value, repoFullName, "trustedReviewers");
+}
+
+/**
+ * Parse and validate intake methods from config.
+ *
+ * Each entry must have a known `method` field. Method-specific options
+ * are validated per method. Invalid entries are filtered with warnings.
+ * If the result is empty, falls back to default [{ method: "update" }].
+ */
+function parseIntakeMethods(
+  value: unknown,
+  trustedReviewers: string[],
+  repoFullName: string
+): IntakeMethod[] {
+  if (value === undefined || value === null) {
+    return DEFAULT_INTAKE;
+  }
+
+  if (!Array.isArray(value)) {
+    logger.warn(
+      `[${repoFullName}] Invalid intake: expected array. Using default.`
+    );
+    return DEFAULT_INTAKE;
+  }
+
+  if (value.length === 0) {
+    logger.warn(
+      `[${repoFullName}] Empty intake array. Using default.`
+    );
+    return DEFAULT_INTAKE;
+  }
+
+  const methods: IntakeMethod[] = [];
+
+  for (const entry of value) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      logger.warn(`[${repoFullName}] Invalid intake entry: expected object. Skipping.`);
+      continue;
+    }
+
+    const obj = entry as Record<string, unknown>;
+    const method = obj.method;
+
+    if (typeof method !== "string" || !VALID_INTAKE_METHODS.has(method)) {
+      logger.warn(
+        `[${repoFullName}] Unknown intake method: "${String(method)}". Skipping.`
+      );
+      continue;
+    }
+
+    if (method === "update") {
+      methods.push({ method: "update" });
+      continue;
+    }
+
+    if (method === "approval") {
+      if (trustedReviewers.length === 0) {
+        logger.warn(
+          `[${repoFullName}] intake method "approval" configured but trustedReviewers is empty. ` +
+          `This method will never match. Skipping.`
+        );
+        continue;
+      }
+
+      // Parse minApprovals: required field, defaults to 1
+      let minApprovals: number;
+      if (obj.minApprovals === undefined || obj.minApprovals === null) {
+        minApprovals = 1;
+      } else if (typeof obj.minApprovals !== "number" || !Number.isFinite(obj.minApprovals)) {
+        logger.warn(
+          `[${repoFullName}] Invalid intake approval.minApprovals: expected number. Using 1.`
+        );
+        minApprovals = 1;
+      } else {
+        minApprovals = Math.round(obj.minApprovals);
+      }
+
+      // Clamp to [1, trustedReviewers.length]
+      minApprovals = clamp(minApprovals, 1, trustedReviewers.length);
+
+      methods.push({ method: "approval", minApprovals });
+    }
+  }
+
+  if (methods.length === 0) {
+    logger.warn(
+      `[${repoFullName}] All intake entries were invalid. Using default.`
+    );
+    return DEFAULT_INTAKE;
+  }
+
+  return methods;
+}
+
 /**
  * Parse and validate a RepoConfigFile object.
  * Returns EffectiveConfig with all values validated and clamped.
@@ -613,8 +736,10 @@ function parseRepoConfig(raw: unknown, repoFullName: string): EffectiveConfig {
   const discussionExitsRaw = config?.governance?.proposals?.discussion?.exits;
   const discussionExits = parseDiscussionExits(discussionExitsRaw, DISCUSSION_DURATION_MS, repoFullName);
 
-  // Resolve PR settings
+  // Resolve PR settings (trustedReviewers parsed first — needed for intake clamping)
   const prConfig = config?.governance?.pr;
+  const trustedReviewers = parseTrustedReviewers(prConfig?.trustedReviewers, repoFullName);
+  const intake = parseIntakeMethods(prConfig?.intake, trustedReviewers, repoFullName);
 
   // Voting exits (default applied if missing)
   const exitsRaw = config?.governance?.proposals?.voting?.exits;
@@ -646,6 +771,8 @@ function parseRepoConfig(raw: unknown, repoFullName: string): EffectiveConfig {
           "pr.maxPRsPerIssue",
           repoFullName
         ),
+        trustedReviewers,
+        intake,
       },
     },
   };
@@ -680,6 +807,8 @@ export function getDefaultConfig(): EffectiveConfig {
       pr: {
         staleDays: PR_STALE_THRESHOLD_DAYS,
         maxPRsPerIssue: MAX_PRS_PER_ISSUE,
+        trustedReviewers: [],
+        intake: [{ method: "update" }],
       },
     },
   };

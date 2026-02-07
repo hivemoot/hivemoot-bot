@@ -1279,5 +1279,265 @@ governance:
         expect(config).toEqual(getDefaultConfig());
       });
     });
+
+    describe("trustedReviewers parsing", () => {
+      it("should parse trustedReviewers as array of usernames", async () => {
+        const configYaml = `
+governance:
+  pr:
+    trustedReviewers:
+      - alice
+      - bob
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config.governance.pr.trustedReviewers).toEqual(["alice", "bob"]);
+      });
+
+      it("should filter invalid entries from trustedReviewers", async () => {
+        const configYaml = `
+governance:
+  pr:
+    trustedReviewers:
+      - alice
+      - 123
+      - ""
+      - bob
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        // "123" is a valid username, "" is filtered, numeric 123 filtered as non-string
+        expect(config.governance.pr.trustedReviewers).toContain("alice");
+        expect(config.governance.pr.trustedReviewers).toContain("bob");
+      });
+
+      it("should default trustedReviewers to empty array when missing", async () => {
+        const configYaml = `
+governance:
+  pr:
+    staleDays: 5
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config.governance.pr.trustedReviewers).toEqual([]);
+      });
+
+      it("should strip @ prefix and normalize to lowercase", async () => {
+        const configYaml = `
+governance:
+  pr:
+    trustedReviewers:
+      - "@Alice"
+      - BOB
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config.governance.pr.trustedReviewers).toEqual(["alice", "bob"]);
+      });
+    });
+
+    describe("intake parsing", () => {
+      it("should parse intake with single update method", async () => {
+        const configYaml = `
+governance:
+  pr:
+    intake:
+      - method: update
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config.governance.pr.intake).toEqual([{ method: "update" }]);
+      });
+
+      it("should parse intake with update + approval methods", async () => {
+        const configYaml = `
+governance:
+  pr:
+    trustedReviewers:
+      - alice
+      - bob
+    intake:
+      - method: update
+      - method: approval
+        minApprovals: 1
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config.governance.pr.intake).toEqual([
+          { method: "update" },
+          { method: "approval", minApprovals: 1 },
+        ]);
+      });
+
+      it("should clamp minApprovals to [1, trustedReviewers.length]", async () => {
+        const configYaml = `
+governance:
+  pr:
+    trustedReviewers:
+      - alice
+      - bob
+    intake:
+      - method: approval
+        minApprovals: 10
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config.governance.pr.intake).toEqual([
+          { method: "approval", minApprovals: 2 },
+        ]);
+      });
+
+      it("should clamp minApprovals minimum to 1", async () => {
+        const configYaml = `
+governance:
+  pr:
+    trustedReviewers:
+      - alice
+    intake:
+      - method: approval
+        minApprovals: 0
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config.governance.pr.intake).toEqual([
+          { method: "approval", minApprovals: 1 },
+        ]);
+      });
+
+      it("should default intake to [update] when missing", async () => {
+        const configYaml = `
+governance:
+  pr:
+    staleDays: 5
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config.governance.pr.intake).toEqual([{ method: "update" }]);
+      });
+
+      it("should filter out invalid entries with warning", async () => {
+        const configYaml = `
+governance:
+  pr:
+    intake:
+      - method: update
+      - "invalid"
+      - method: unknown_method
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config.governance.pr.intake).toEqual([{ method: "update" }]);
+      });
+
+      it("should fall back to default when all entries are invalid", async () => {
+        const configYaml = `
+governance:
+  pr:
+    intake:
+      - method: bogus
+      - method: nope
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config.governance.pr.intake).toEqual([{ method: "update" }]);
+      });
+
+      it("should skip approval method with empty trustedReviewers", async () => {
+        const configYaml = `
+governance:
+  pr:
+    intake:
+      - method: approval
+        minApprovals: 1
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        // approval method skipped (empty trustedReviewers), falls back to default
+        expect(config.governance.pr.intake).toEqual([{ method: "update" }]);
+      });
+
+      it("should default minApprovals to 1 when not specified", async () => {
+        const configYaml = `
+governance:
+  pr:
+    trustedReviewers:
+      - alice
+    intake:
+      - method: approval
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config.governance.pr.intake).toEqual([
+          { method: "approval", minApprovals: 1 },
+        ]);
+      });
+
+      it("should fall back to default on empty intake array", async () => {
+        const configYaml = `
+governance:
+  pr:
+    intake: []
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config.governance.pr.intake).toEqual([{ method: "update" }]);
+      });
+
+      it("should fall back to default on non-array intake", async () => {
+        const configYaml = `
+governance:
+  pr:
+    intake: "update"
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config.governance.pr.intake).toEqual([{ method: "update" }]);
+      });
+    });
   });
 });

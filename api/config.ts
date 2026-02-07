@@ -102,7 +102,8 @@ const formatVotingRequirements = (opts: {
   minVoters: number;
   validVoters: number;
   missingRequired: string[];
-  requiredVotersMode?: "all" | "any";
+  requiredVotersNeeded?: number;
+  requiredVotersParticipated?: number;
 }) => {
   const lines = [
     opts.minVoters > 0
@@ -111,8 +112,12 @@ const formatVotingRequirements = (opts: {
   ];
   if (opts.missingRequired.length > 0) {
     const mentions = opts.missingRequired.map((u) => `@${u}`).join(", ");
-    if (opts.requiredVotersMode === "any") {
-      lines.push(`- None of the required voters participated (need at least 1): ${mentions}`);
+    const needed = opts.requiredVotersNeeded ?? 0;
+    const participated = opts.requiredVotersParticipated ?? 0;
+    const stillNeeded = needed - participated;
+    if (stillNeeded > 0 && stillNeeded < opts.missingRequired.length) {
+      // N-of-M: not all missing voters are individually required
+      lines.push(`- Need ${stillNeeded} more required voter${stillNeeded === 1 ? "" : "s"} from: ${mentions}`);
     } else {
       lines.push(`- Missing required voters: ${mentions}`);
     }
@@ -187,7 +192,8 @@ Hivemoot is split. Extended voting begins — continue voting above.${SIGNATURE}
     minVoters: number;
     validVoters: number;
     missingRequired: string[];
-    requiredVotersMode?: "all" | "any";
+    requiredVotersNeeded?: number;
+    requiredVotersParticipated?: number;
     final: boolean;
   }) => `# 🐝 Inconclusive (Requirements Not Met) ⚖️
 
@@ -198,7 +204,8 @@ ${formatVotingRequirements({
   minVoters: params.minVoters,
   validVoters: params.validVoters,
   missingRequired: params.missingRequired,
-  requiredVotersMode: params.requiredVotersMode,
+  requiredVotersNeeded: params.requiredVotersNeeded,
+  requiredVotersParticipated: params.requiredVotersParticipated,
 })}
 
 ${params.final

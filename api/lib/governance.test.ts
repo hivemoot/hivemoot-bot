@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { GovernanceService, createGovernanceService, isUnanimous, isDecisive, isDiscussionExitEligible, type EndVotingOptions } from "./governance.js";
-import type { DiscussionExit } from "./repo-config.js";
+import { GovernanceService, createGovernanceService, isUnanimous, isDecisive, isExitEligible, isDiscussionExitEligible, type EndVotingOptions } from "./governance.js";
+import type { DiscussionExit, VotingExit } from "./repo-config.js";
 import type { IssueOperations } from "./github-client.js";
 import type { IssueRef, VoteCounts, ValidatedVoteResult } from "./types.js";
 import { LABELS, MESSAGES, SIGNATURE } from "../config.js";
@@ -389,7 +389,7 @@ describe("GovernanceService", () => {
       expect(callArgs.comment).toContain("quorum reached");
     });
 
-    it("should prepend early decision with 'all required voters' for mode: all", async () => {
+    it("should prepend early decision with 'all required voters' for minCount = voters.length", async () => {
       const votes: VoteCounts = { thumbsUp: 3, thumbsDown: 1, confused: 0 };
       vi.mocked(mockIssues.getValidatedVoteCounts).mockResolvedValue({
         votes, voters: ["a", "b", "c", "d"], participants: ["a", "b", "c", "d"],
@@ -397,14 +397,14 @@ describe("GovernanceService", () => {
 
       await governance.endVoting(testRef, {
         earlyDecision: true,
-        votingConfig: { minVoters: 1, requiredVoters: { mode: "all", voters: ["a", "b"] } },
+        votingConfig: { minVoters: 1, requiredVoters: { minCount: 2, voters: ["a", "b"] } },
       });
 
       const callArgs = vi.mocked(mockIssues.transition).mock.calls[0][1];
       expect(callArgs.comment).toContain("all required voters have participated");
     });
 
-    it("should prepend early decision with 'a required voter' for mode: any", async () => {
+    it("should prepend early decision with 'a required voter' for minCount: 1", async () => {
       const votes: VoteCounts = { thumbsUp: 3, thumbsDown: 1, confused: 0 };
       vi.mocked(mockIssues.getValidatedVoteCounts).mockResolvedValue({
         votes, voters: ["a", "b", "c", "d"], participants: ["a", "b", "c", "d"],
@@ -412,7 +412,7 @@ describe("GovernanceService", () => {
 
       await governance.endVoting(testRef, {
         earlyDecision: true,
-        votingConfig: { minVoters: 1, requiredVoters: { mode: "any", voters: ["a", "b"] } },
+        votingConfig: { minVoters: 1, requiredVoters: { minCount: 1, voters: ["a", "b"] } },
       });
 
       const callArgs = vi.mocked(mockIssues.transition).mock.calls[0][1];
@@ -446,7 +446,7 @@ describe("GovernanceService", () => {
 
     it("should force inconclusive when valid voters < minVoters", async () => {
       const outcome = await governance.endVoting(testRef, {
-        votingConfig: { minVoters: 3, requiredVoters: { mode: "all", voters: [] } },
+        votingConfig: { minVoters: 3, requiredVoters: { minCount: 0, voters: [] } },
         validatedVotes: {
           votes: { thumbsUp: 1, thumbsDown: 0, confused: 0 },
           voters: ["alice"],
@@ -463,7 +463,7 @@ describe("GovernanceService", () => {
     it("should not let one user satisfy minVoters with multiple reactions", async () => {
       // One user added 👍, 👎, and 😕 — multi-reaction discard means 0 valid voters, 0 counted votes
       const outcome = await governance.endVoting(testRef, {
-        votingConfig: { minVoters: 3, requiredVoters: { mode: "all", voters: [] } },
+        votingConfig: { minVoters: 3, requiredVoters: { minCount: 0, voters: [] } },
         validatedVotes: {
           votes: { thumbsUp: 0, thumbsDown: 0, confused: 0 }, // discarded from tally
           voters: [],                                           // discarded from quorum
@@ -476,7 +476,7 @@ describe("GovernanceService", () => {
 
     it("should force inconclusive when required voter is missing", async () => {
       const outcome = await governance.endVoting(testRef, {
-        votingConfig: { minVoters: 1, requiredVoters: { mode: "all", voters: ["agent-a", "agent-b"] } },
+        votingConfig: { minVoters: 1, requiredVoters: { minCount: 2, voters: ["agent-a", "agent-b"] } },
         validatedVotes: {
           votes: { thumbsUp: 3, thumbsDown: 0, confused: 0 },
           voters: ["agent-a", "agent-c", "agent-d"],
@@ -493,7 +493,7 @@ describe("GovernanceService", () => {
 
     it("should allow normal outcome when all requirements met", async () => {
       const outcome = await governance.endVoting(testRef, {
-        votingConfig: { minVoters: 2, requiredVoters: { mode: "all", voters: ["agent-a", "agent-b"] } },
+        votingConfig: { minVoters: 2, requiredVoters: { minCount: 2, voters: ["agent-a", "agent-b"] } },
         validatedVotes: {
           votes: { thumbsUp: 3, thumbsDown: 0, confused: 0 },
           voters: ["agent-a", "agent-b", "agent-c"],
@@ -507,7 +507,7 @@ describe("GovernanceService", () => {
     it("should count thumbsDown reactions as participation for requiredVoters", async () => {
       // agent-b voted 👎, which counts as participation
       const outcome = await governance.endVoting(testRef, {
-        votingConfig: { minVoters: 2, requiredVoters: { mode: "all", voters: ["agent-a", "agent-b"] } },
+        votingConfig: { minVoters: 2, requiredVoters: { minCount: 2, voters: ["agent-a", "agent-b"] } },
         validatedVotes: {
           votes: { thumbsUp: 1, thumbsDown: 2, confused: 0 },
           voters: ["agent-a", "agent-b", "agent-c"],
@@ -522,7 +522,7 @@ describe("GovernanceService", () => {
     it("should still count multi-reaction user as participant for requiredVoters", async () => {
       // agent-a cast both 👍 and 👎 — invalid vote but still participated
       const outcome = await governance.endVoting(testRef, {
-        votingConfig: { minVoters: 1, requiredVoters: { mode: "all", voters: ["agent-a"] } },
+        votingConfig: { minVoters: 1, requiredVoters: { minCount: 1, voters: ["agent-a"] } },
         validatedVotes: {
           votes: { thumbsUp: 1, thumbsDown: 0, confused: 0 },
           voters: ["agent-b"],      // agent-a excluded from voters (multi-reaction)
@@ -670,7 +670,7 @@ describe("GovernanceService", () => {
 
     it("should force inconclusive when valid voters < minVoters after extended voting", async () => {
       const outcome = await governance.resolveInconclusive(testRef, {
-        votingConfig: { minVoters: 3, requiredVoters: { mode: "all", voters: [] } },
+        votingConfig: { minVoters: 3, requiredVoters: { minCount: 0, voters: [] } },
         validatedVotes: {
           votes: { thumbsUp: 1, thumbsDown: 0, confused: 0 },
           voters: ["alice"],
@@ -687,7 +687,7 @@ describe("GovernanceService", () => {
 
     it("should force inconclusive when required voter missing after extended voting", async () => {
       const outcome = await governance.resolveInconclusive(testRef, {
-        votingConfig: { minVoters: 1, requiredVoters: { mode: "all", voters: ["agent-a", "agent-b"] } },
+        votingConfig: { minVoters: 1, requiredVoters: { minCount: 2, voters: ["agent-a", "agent-b"] } },
         validatedVotes: {
           votes: { thumbsUp: 3, thumbsDown: 0, confused: 0 },
           voters: ["agent-a", "agent-c", "agent-d"],
@@ -705,7 +705,7 @@ describe("GovernanceService", () => {
 
     it("should allow normal outcome when requirements met after extended voting", async () => {
       const outcome = await governance.resolveInconclusive(testRef, {
-        votingConfig: { minVoters: 2, requiredVoters: { mode: "all", voters: ["agent-a"] } },
+        votingConfig: { minVoters: 2, requiredVoters: { minCount: 1, voters: ["agent-a"] } },
         validatedVotes: {
           votes: { thumbsUp: 3, thumbsDown: 1, confused: 0 },
           voters: ["agent-a", "agent-b", "agent-c", "agent-d"],
@@ -729,10 +729,10 @@ describe("GovernanceService", () => {
     });
   });
 
-  describe("enforceVotingRequirements with mode: any", () => {
-    it("should pass when at least one required voter participated (mode: any)", async () => {
+  describe("enforceVotingRequirements with minCount: 1", () => {
+    it("should pass when at least one required voter participated (minCount: 1)", async () => {
       const outcome = await governance.endVoting(testRef, {
-        votingConfig: { minVoters: 1, requiredVoters: { mode: "any", voters: ["agent-a", "agent-b"] } },
+        votingConfig: { minVoters: 1, requiredVoters: { minCount: 1, voters: ["agent-a", "agent-b"] } },
         validatedVotes: {
           votes: { thumbsUp: 3, thumbsDown: 0, confused: 0 },
           voters: ["agent-a", "agent-c", "agent-d"],
@@ -743,9 +743,9 @@ describe("GovernanceService", () => {
       expect(outcome).toBe("phase:ready-to-implement");
     });
 
-    it("should force inconclusive when no required voter participated (mode: any)", async () => {
+    it("should force inconclusive when no required voter participated (minCount: 1)", async () => {
       const outcome = await governance.endVoting(testRef, {
-        votingConfig: { minVoters: 1, requiredVoters: { mode: "any", voters: ["agent-a", "agent-b"] } },
+        votingConfig: { minVoters: 1, requiredVoters: { minCount: 1, voters: ["agent-a", "agent-b"] } },
         validatedVotes: {
           votes: { thumbsUp: 3, thumbsDown: 0, confused: 0 },
           voters: ["agent-c", "agent-d", "agent-e"],
@@ -755,14 +755,15 @@ describe("GovernanceService", () => {
 
       expect(outcome).toBe("inconclusive");
       const callArgs = vi.mocked(mockIssues.transition).mock.calls[0][1];
-      expect(callArgs.comment).toContain("None of the required voters participated");
+      // N-of-M (1 of 2): uses "Need X more" phrasing, not "Missing required voters"
+      expect(callArgs.comment).toContain("Need 1 more required voter from:");
       expect(callArgs.comment).toContain("@agent-a");
       expect(callArgs.comment).toContain("@agent-b");
     });
 
-    it("should pass with empty voters array (mode: any)", async () => {
+    it("should pass with empty voters array (minCount: 0)", async () => {
       const outcome = await governance.endVoting(testRef, {
-        votingConfig: { minVoters: 1, requiredVoters: { mode: "any", voters: [] } },
+        votingConfig: { minVoters: 1, requiredVoters: { minCount: 0, voters: [] } },
         validatedVotes: {
           votes: { thumbsUp: 1, thumbsDown: 0, confused: 0 },
           voters: ["alice"],
@@ -771,6 +772,59 @@ describe("GovernanceService", () => {
       });
 
       expect(outcome).toBe("phase:ready-to-implement");
+    });
+  });
+
+  describe("N-of-M required voters messaging", () => {
+    it("should use 'Need X more' phrasing for true N-of-M (minCount < voters.length)", async () => {
+      const outcome = await governance.endVoting(testRef, {
+        votingConfig: { minVoters: 1, requiredVoters: { minCount: 2, voters: ["agent-a", "agent-b", "agent-c"] } },
+        validatedVotes: {
+          votes: { thumbsUp: 3, thumbsDown: 0, confused: 0 },
+          voters: ["agent-a", "x", "y"],
+          participants: ["agent-a", "x", "y"],
+        },
+      });
+
+      expect(outcome).toBe("inconclusive");
+      const callArgs = vi.mocked(mockIssues.transition).mock.calls[0][1];
+      // N-of-M: 1 participated, need 2, so "Need 1 more required voter from:"
+      expect(callArgs.comment).toContain("Need 1 more required voter from:");
+      expect(callArgs.comment).not.toContain("Missing required voters");
+    });
+
+    it("should use 'Missing required voters' when all are needed (minCount = voters.length)", async () => {
+      const outcome = await governance.endVoting(testRef, {
+        votingConfig: { minVoters: 1, requiredVoters: { minCount: 2, voters: ["agent-a", "agent-b"] } },
+        validatedVotes: {
+          votes: { thumbsUp: 3, thumbsDown: 0, confused: 0 },
+          voters: ["x", "y", "z"],
+          participants: ["x", "y", "z"],
+        },
+      });
+
+      expect(outcome).toBe("inconclusive");
+      const callArgs = vi.mocked(mockIssues.transition).mock.calls[0][1];
+      expect(callArgs.comment).toContain("Missing required voters");
+      expect(callArgs.comment).not.toContain("Need");
+    });
+  });
+
+  describe("early decision with minCount: 0 and non-empty voters", () => {
+    it("should say 'quorum reached' when minCount is 0 even with voters listed", async () => {
+      const votes: VoteCounts = { thumbsUp: 3, thumbsDown: 0, confused: 0 };
+      vi.mocked(mockIssues.getValidatedVoteCounts).mockResolvedValue({
+        votes, voters: ["a", "b", "c"], participants: ["a", "b", "c"],
+      });
+
+      await governance.endVoting(testRef, {
+        earlyDecision: true,
+        votingConfig: { minVoters: 1, requiredVoters: { minCount: 0, voters: ["agent-a"] } },
+      });
+
+      const callArgs = vi.mocked(mockIssues.transition).mock.calls[0][1];
+      expect(callArgs.comment).toContain("quorum reached");
+      expect(callArgs.comment).not.toContain("0 of");
     });
   });
 });
@@ -943,7 +997,7 @@ describe("isDiscussionExitEligible", () => {
   const baseExit: DiscussionExit = {
     afterMs: 30 * 60 * 1000,
     minReady: 0,
-    requiredReady: { mode: "all", users: [] },
+    requiredReady: { minCount: 0, users: [] },
   };
 
   it("should return true when no conditions (pure time gate)", () => {
@@ -963,47 +1017,60 @@ describe("isDiscussionExitEligible", () => {
     expect(isDiscussionExitEligible(exit, readyUsers)).toBe(false);
   });
 
-  it("should return true when all required users ready (mode: all)", () => {
+  it("should return true when all required users ready (minCount = users.length)", () => {
     const exit: DiscussionExit = {
       ...baseExit,
-      requiredReady: { mode: "all", users: ["alice", "bob"] },
+      requiredReady: { minCount: 2, users: ["alice", "bob"] },
     };
     const readyUsers = new Set(["alice", "bob", "charlie"]);
     expect(isDiscussionExitEligible(exit, readyUsers)).toBe(true);
   });
 
-  it("should return false when some required users missing (mode: all)", () => {
+  it("should return false when some required users missing (minCount = users.length)", () => {
     const exit: DiscussionExit = {
       ...baseExit,
-      requiredReady: { mode: "all", users: ["alice", "bob"] },
+      requiredReady: { minCount: 2, users: ["alice", "bob"] },
     };
     const readyUsers = new Set(["alice"]);
     expect(isDiscussionExitEligible(exit, readyUsers)).toBe(false);
   });
 
-  it("should return true when any required user ready (mode: any)", () => {
+  it("should return true when any required user ready (minCount: 1)", () => {
     const exit: DiscussionExit = {
       ...baseExit,
-      requiredReady: { mode: "any", users: ["alice", "bob"] },
+      requiredReady: { minCount: 1, users: ["alice", "bob"] },
     };
     const readyUsers = new Set(["bob"]);
     expect(isDiscussionExitEligible(exit, readyUsers)).toBe(true);
   });
 
-  it("should return false when no required user ready (mode: any)", () => {
+  it("should return false when no required user ready (minCount: 1)", () => {
     const exit: DiscussionExit = {
       ...baseExit,
-      requiredReady: { mode: "any", users: ["alice", "bob"] },
+      requiredReady: { minCount: 1, users: ["alice", "bob"] },
     };
     const readyUsers = new Set(["charlie"]);
     expect(isDiscussionExitEligible(exit, readyUsers)).toBe(false);
+  });
+
+  it("should support N of M with minCount: 3 of 4 users", () => {
+    const exit: DiscussionExit = {
+      ...baseExit,
+      requiredReady: { minCount: 3, users: ["alice", "bob", "charlie", "dave"] },
+    };
+    // Only 2 of 4 ready → not enough
+    expect(isDiscussionExitEligible(exit, new Set(["alice", "bob"]))).toBe(false);
+    // 3 of 4 ready → passes
+    expect(isDiscussionExitEligible(exit, new Set(["alice", "bob", "charlie"]))).toBe(true);
+    // 4 of 4 ready → passes
+    expect(isDiscussionExitEligible(exit, new Set(["alice", "bob", "charlie", "dave"]))).toBe(true);
   });
 
   it("should check both minReady and requiredReady together", () => {
     const exit: DiscussionExit = {
       ...baseExit,
       minReady: 3,
-      requiredReady: { mode: "all", users: ["alice"] },
+      requiredReady: { minCount: 1, users: ["alice"] },
     };
     // Alice is ready but total < 3
     expect(isDiscussionExitEligible(exit, new Set(["alice", "bob"]))).toBe(false);
@@ -1011,5 +1078,37 @@ describe("isDiscussionExitEligible", () => {
     expect(isDiscussionExitEligible(exit, new Set(["alice", "bob", "charlie"]))).toBe(true);
     // Total >= 3 but alice is NOT ready
     expect(isDiscussionExitEligible(exit, new Set(["bob", "charlie", "dave"]))).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// isExitEligible with minCount
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("isExitEligible", () => {
+  const baseExit: VotingExit = {
+    afterMs: 15 * 60 * 1000,
+    requires: "majority",
+    minVoters: 0,
+    requiredVoters: { minCount: 0, voters: [] },
+  };
+
+  it("should support N of M with minCount: 2 of 3 voters", () => {
+    const exit: VotingExit = {
+      ...baseExit,
+      requiredVoters: { minCount: 2, voters: ["agent-a", "agent-b", "agent-c"] },
+    };
+    // Only 1 of 3 participated → not enough
+    expect(isExitEligible(exit, {
+      votes: { thumbsUp: 3, thumbsDown: 0, confused: 0 },
+      voters: ["agent-a", "x", "y"],
+      participants: ["agent-a", "x", "y"],
+    })).toBe(false);
+    // 2 of 3 participated → passes
+    expect(isExitEligible(exit, {
+      votes: { thumbsUp: 3, thumbsDown: 0, confused: 0 },
+      voters: ["agent-a", "agent-b", "x"],
+      participants: ["agent-a", "agent-b", "x"],
+    })).toBe(true);
   });
 });

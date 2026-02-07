@@ -21,7 +21,7 @@ import type { IssueOperations } from "./github-client.js";
 import { createModelFromEnv } from "./llm/provider.js";
 import { DiscussionSummarizer, formatVotingMessage } from "./llm/summarizer.js";
 import { logger as defaultLogger, type Logger } from "./logger.js";
-import type { RequiredVotersConfig, RequiredVotersMode, VotingExit, ExitRequires, DiscussionExit } from "./repo-config.js";
+import type { RequiredVotersConfig, VotingExit, ExitRequires, DiscussionExit } from "./repo-config.js";
 import type {
   IssueRef,
   VoteCounts,
@@ -64,7 +64,8 @@ type VotingRequirementsEnforcement =
       minVoters: number;
       validVoters: number;
       missingRequired: string[];
-      requiredVotersMode: RequiredVotersMode;
+      requiredVotersNeeded: number;
+      requiredVotersParticipated: number;
     }
   | null;
 
@@ -285,7 +286,8 @@ export class GovernanceService {
           minVoters: enforcement.minVoters,
           validVoters: enforcement.validVoters,
           missingRequired: enforcement.missingRequired,
-          requiredVotersMode: enforcement.requiredVotersMode,
+          requiredVotersNeeded: enforcement.requiredVotersNeeded,
+          requiredVotersParticipated: enforcement.requiredVotersParticipated,
           final: false,
         })
       : MESSAGES.votingEndInconclusive(validated.votes);
@@ -375,7 +377,8 @@ export class GovernanceService {
           minVoters: enforcement.minVoters,
           validVoters: enforcement.validVoters,
           missingRequired: enforcement.missingRequired,
-          requiredVotersMode: enforcement.requiredVotersMode,
+          requiredVotersNeeded: enforcement.requiredVotersNeeded,
+          requiredVotersParticipated: enforcement.requiredVotersParticipated,
           final: true,
         })
       : MESSAGES.votingEndInconclusiveFinal(validated.votes);
@@ -502,12 +505,13 @@ export class GovernanceService {
     }
 
     const { minVoters, requiredVoters } = options.votingConfig;
-    const { mode, voters } = requiredVoters;
+    const { minCount, voters } = requiredVoters;
     const base = {
       minVoters,
       validVoters: validated.voters.length,
       missingRequired: [] as string[],
-      requiredVotersMode: mode,
+      requiredVotersNeeded: 0,
+      requiredVotersParticipated: 0,
     };
 
     // Check quorum using valid voters only (users with exactly one voting reaction).
@@ -526,35 +530,22 @@ export class GovernanceService {
     // Check required voters using participants (all users who reacted).
     // A required voter who cast conflicting reactions still participated —
     // they just don't count toward the tally or quorum.
-    if (voters.length > 0) {
+    if (voters.length > 0 && minCount > 0) {
       const participantSet = new Set(validated.participants);
-
-      if (mode === "all") {
+      const participated = voters.filter(v => participantSet.has(v));
+      if (participated.length < minCount) {
         const missing = voters.filter(v => !participantSet.has(v));
-        if (missing.length > 0) {
-          this.logger.warn(
-            `Issue #${ref.issueNumber}: required voter(s) missing: ${missing.join(", ")}. Forcing inconclusive.`,
-          );
-          return {
-            status: "inconclusive",
-            reason: "required",
-            ...base,
-            missingRequired: missing,
-          };
-        }
-      } else {
-        // mode: "any" — at least one required voter must have participated
-        if (!voters.some(v => participantSet.has(v))) {
-          this.logger.warn(
-            `Issue #${ref.issueNumber}: none of the required voters participated: ${voters.join(", ")}. Forcing inconclusive.`,
-          );
-          return {
-            status: "inconclusive",
-            reason: "required",
-            ...base,
-            missingRequired: voters,
-          };
-        }
+        this.logger.warn(
+          `Issue #${ref.issueNumber}: required voters ${participated.length}/${minCount}. Forcing inconclusive.`,
+        );
+        return {
+          status: "inconclusive",
+          reason: "required",
+          ...base,
+          missingRequired: missing,
+          requiredVotersNeeded: minCount,
+          requiredVotersParticipated: participated.length,
+        };
       }
     }
 
@@ -601,9 +592,17 @@ function earlyDecisionReason(config?: EndVotingOptions["votingConfig"]): string 
   if (!config?.requiredVoters || config.requiredVoters.voters.length === 0) {
     return "quorum reached";
   }
-  return config.requiredVoters.mode === "all"
-    ? "all required voters have participated"
-    : "a required voter has participated";
+  const { minCount, voters } = config.requiredVoters;
+  if (minCount <= 0) {
+    return "quorum reached";
+  }
+  if (minCount >= voters.length) {
+    return "all required voters have participated";
+  }
+  if (minCount === 1) {
+    return "a required voter has participated";
+  }
+  return `${minCount} of ${voters.length} required voters have participated`;
 }
 
 /**
@@ -640,13 +639,11 @@ export function isExitEligible(
     return false;
   }
 
-  const { mode, voters } = exit.requiredVoters;
-  if (voters.length > 0) {
+  const { minCount, voters } = exit.requiredVoters;
+  if (voters.length > 0 && minCount > 0) {
     const participants = new Set(validated.participants);
-    if (mode === "all" && !voters.every((v) => participants.has(v))) {
-      return false;
-    }
-    if (mode === "any" && !voters.some((v) => participants.has(v))) {
+    const count = voters.filter((v) => participants.has(v)).length;
+    if (count < minCount) {
       return false;
     }
   }
@@ -671,12 +668,10 @@ export function isDiscussionExitEligible(
     return false;
   }
 
-  const { mode, users } = exit.requiredReady;
-  if (users.length > 0) {
-    if (mode === "all" && !users.every(u => readyUsers.has(u))) {
-      return false;
-    }
-    if (mode === "any" && !users.some(u => readyUsers.has(u))) {
+  const { minCount, users } = exit.requiredReady;
+  if (users.length > 0 && minCount > 0) {
+    const readyCount = users.filter(u => readyUsers.has(u)).length;
+    if (readyCount < minCount) {
       return false;
     }
   }

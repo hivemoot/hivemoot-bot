@@ -17,7 +17,7 @@ import {
  * - Missing files (404)
  * - Invalid YAML
  * - Boundary clamping
- * - requiredVoters (mode/voters) and exits validation
+ * - requiredVoters (minCount/voters) and exits validation
  */
 
 const MS = 60 * 1000;
@@ -63,7 +63,7 @@ describe("repo-config", () => {
         {
           afterMs: DISCUSSION_DURATION_MS,
           minReady: 0,
-          requiredReady: { mode: "all", users: [] },
+          requiredReady: { minCount: 0, users: [] },
         },
       ]);
       expect(defaults.governance.proposals.voting.exits).toEqual([
@@ -71,7 +71,7 @@ describe("repo-config", () => {
           afterMs: defaultDurationMs,
           requires: "majority",
           minVoters: CONFIG_BOUNDS.voting.minVoters.default,
-          requiredVoters: { mode: "all", voters: [] },
+          requiredVoters: { minCount: 0, voters: [] },
         },
       ]);
       expect(defaults.governance.proposals.voting.durationMs).toBe(defaultDurationMs);
@@ -137,15 +137,17 @@ governance:
 
         expect(config.version).toBe(1);
         // Discussion exits parsed and sorted, durationMs from last exit
+        // mode: "all" → minCount = users.length (backward compat)
         expect(config.governance.proposals.discussion.exits).toEqual([
-          { afterMs: 30 * MS, minReady: 3, requiredReady: { mode: "all", users: ["seed-scout", "seed-worker"] } },
-          { afterMs: 120 * MS, minReady: 0, requiredReady: { mode: "all", users: [] } },
+          { afterMs: 30 * MS, minReady: 3, requiredReady: { minCount: 2, users: ["seed-scout", "seed-worker"] } },
+          { afterMs: 120 * MS, minReady: 0, requiredReady: { minCount: 0, users: [] } },
         ]);
         expect(config.governance.proposals.discussion.durationMs).toBe(120 * MS);
+        // mode: "all" → minCount = voters.length, mode: "any" → minCount = 1
         expect(config.governance.proposals.voting.exits).toEqual([
-          { afterMs: 15 * MS, requires: "unanimous", minVoters: 3, requiredVoters: { mode: "all", voters: ["seed-scout", "seed-worker"] } },
-          { afterMs: 60 * MS, requires: "majority", minVoters: 2, requiredVoters: { mode: "any", voters: ["seed-scout", "seed-worker"] } },
-          { afterMs: 360 * MS, requires: "majority", minVoters: 3, requiredVoters: { mode: "all", voters: ["seed-scout", "seed-worker"] } },
+          { afterMs: 15 * MS, requires: "unanimous", minVoters: 3, requiredVoters: { minCount: 2, voters: ["seed-scout", "seed-worker"] } },
+          { afterMs: 60 * MS, requires: "majority", minVoters: 2, requiredVoters: { minCount: 1, voters: ["seed-scout", "seed-worker"] } },
+          { afterMs: 360 * MS, requires: "majority", minVoters: 3, requiredVoters: { minCount: 2, voters: ["seed-scout", "seed-worker"] } },
         ]);
         // durationMs derived from last exit
         expect(config.governance.proposals.voting.durationMs).toBe(360 * MS);
@@ -153,7 +155,7 @@ governance:
         expect(config.governance.pr.maxPRsPerIssue).toBe(3);
       });
 
-      it("should default requiredVoters to mode:all, voters:[] when not specified", async () => {
+      it("should default requiredVoters to minCount:0, voters:[] when not specified", async () => {
         const configYaml = `
 governance:
   proposals:
@@ -172,10 +174,10 @@ governance:
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
         // Default exit should inherit the default requiredVoters
-        expect(config.governance.proposals.voting.exits[0].requiredVoters).toEqual({ mode: "all", voters: [] });
+        expect(config.governance.proposals.voting.exits[0].requiredVoters).toEqual({ minCount: 0, voters: [] });
       });
 
-      it("should parse requiredVoters with mode: any in exit", async () => {
+      it("should convert mode: any to minCount: 1 (backward compat)", async () => {
         const configYaml = `
 governance:
   proposals:
@@ -198,12 +200,12 @@ governance:
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
         expect(config.governance.proposals.voting.exits[0].requiredVoters).toEqual({
-          mode: "any",
+          minCount: 1,
           voters: ["alice"],
         });
       });
 
-      it("should default invalid requiredVoters mode to 'all'", async () => {
+      it("should default invalid mode to minCount = voters.length (backward compat)", async () => {
         const configYaml = `
 governance:
   proposals:
@@ -225,10 +227,11 @@ governance:
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
-        expect(config.governance.proposals.voting.exits[0].requiredVoters.mode).toBe("all");
+        // Invalid mode defaults to "all" → minCount = voters.length
+        expect(config.governance.proposals.voting.exits[0].requiredVoters.minCount).toBe(1);
       });
 
-      it("should default missing mode to 'all'", async () => {
+      it("should default to minCount = voters.length when neither minCount nor mode specified", async () => {
         const configYaml = `
 governance:
   proposals:
@@ -249,7 +252,7 @@ governance:
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
-        expect(config.governance.proposals.voting.exits[0].requiredVoters.mode).toBe("all");
+        expect(config.governance.proposals.voting.exits[0].requiredVoters.minCount).toBe(1);
         expect(config.governance.proposals.voting.exits[0].requiredVoters.voters).toEqual(["alice"]);
       });
 
@@ -275,7 +278,7 @@ governance:
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
         expect(config.governance.proposals.voting.exits[0].requiredVoters).toEqual({
-          mode: "all",
+          minCount: 2,
           voters: ["seed-scout", "seed-worker"],
         });
       });
@@ -491,7 +494,7 @@ governance:
           afterMs: 120 * MS,
           requires: "majority",
           minVoters: 2,
-          requiredVoters: { mode: "all", voters: [] },
+          requiredVoters: { minCount: 0, voters: [] },
         });
         expect(config.governance.proposals.voting.durationMs).toBe(120 * MS);
       });
@@ -618,12 +621,12 @@ governance:
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
         expect(config.governance.proposals.voting.exits[0].requiredVoters).toEqual({
-          mode: "any",
+          minCount: 1,
           voters: ["alice", "bob"],
         });
         expect(config.governance.proposals.voting.exits[0].minVoters).toBe(5);
         // Second exit: no requiredVoters specified, inherits default
-        expect(config.governance.proposals.voting.exits[1].requiredVoters).toEqual({ mode: "all", voters: [] });
+        expect(config.governance.proposals.voting.exits[1].requiredVoters).toEqual({ minCount: 0, voters: [] });
         expect(config.governance.proposals.voting.exits[1].minVoters).toBe(2);
       });
 
@@ -659,9 +662,9 @@ governance:
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
         expect(config.governance.proposals.voting.exits[0].minVoters).toBe(3);
-        expect(config.governance.proposals.voting.exits[0].requiredVoters.mode).toBe("all");
+        expect(config.governance.proposals.voting.exits[0].requiredVoters.minCount).toBe(2); // mode: all → voters.length
         expect(config.governance.proposals.voting.exits[1].minVoters).toBe(1);
-        expect(config.governance.proposals.voting.exits[1].requiredVoters.mode).toBe("any");
+        expect(config.governance.proposals.voting.exits[1].requiredVoters.minCount).toBe(1); // mode: any → 1
       });
 
       it("should clamp exit afterMinutes per exit", async () => {
@@ -742,9 +745,9 @@ governance:
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
         expect(config.governance.proposals.discussion.exits).toEqual([
-          { afterMs: 30 * MS, minReady: 3, requiredReady: { mode: "all", users: ["seed-scout", "seed-worker", "seed-analyst"] } },
-          { afterMs: 120 * MS, minReady: 2, requiredReady: { mode: "any", users: ["seed-scout", "seed-worker"] } },
-          { afterMs: 1440 * MS, minReady: 0, requiredReady: { mode: "all", users: [] } },
+          { afterMs: 30 * MS, minReady: 3, requiredReady: { minCount: 3, users: ["seed-scout", "seed-worker", "seed-analyst"] } },
+          { afterMs: 120 * MS, minReady: 2, requiredReady: { minCount: 1, users: ["seed-scout", "seed-worker"] } },
+          { afterMs: 1440 * MS, minReady: 0, requiredReady: { minCount: 0, users: [] } },
         ]);
         expect(config.governance.proposals.discussion.durationMs).toBe(1440 * MS);
       });
@@ -766,7 +769,7 @@ governance:
         expect(config.governance.proposals.discussion.exits).toHaveLength(1);
         expect(config.governance.proposals.discussion.exits[0].afterMs).toBe(DISCUSSION_DURATION_MS);
         expect(config.governance.proposals.discussion.exits[0].minReady).toBe(0);
-        expect(config.governance.proposals.discussion.exits[0].requiredReady).toEqual({ mode: "all", users: [] });
+        expect(config.governance.proposals.discussion.exits[0].requiredReady).toEqual({ minCount: 0, users: [] });
         expect(config.governance.proposals.discussion.durationMs).toBe(DISCUSSION_DURATION_MS);
       });
 
@@ -802,7 +805,7 @@ governance:
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
         expect(config.governance.proposals.discussion.exits[0].minReady).toBe(0);
-        expect(config.governance.proposals.discussion.exits[0].requiredReady).toEqual({ mode: "all", users: [] });
+        expect(config.governance.proposals.discussion.exits[0].requiredReady).toEqual({ minCount: 0, users: [] });
       });
 
       it("should handle array shorthand for requiredReady", async () => {
@@ -823,12 +826,12 @@ governance:
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
         expect(config.governance.proposals.discussion.exits[0].requiredReady).toEqual({
-          mode: "all",
+          minCount: 2,
           users: ["alice", "bob"],
         });
       });
 
-      it("should support mode: any for requiredReady", async () => {
+      it("should convert mode: any to minCount: 1 for requiredReady (backward compat)", async () => {
         const configYaml = `
 governance:
   proposals:
@@ -848,9 +851,79 @@ governance:
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
         expect(config.governance.proposals.discussion.exits[0].requiredReady).toEqual({
-          mode: "any",
+          minCount: 1,
           users: ["alice", "bob"],
         });
+      });
+
+      it("should parse explicit minCount for requiredReady", async () => {
+        const configYaml = `
+governance:
+  proposals:
+    discussion:
+      exits:
+        - afterMinutes: 60
+          requiredReady:
+            minCount: 3
+            users:
+              - alice
+              - bob
+              - charlie
+              - dave
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
+        expect(config.governance.proposals.discussion.exits[0].requiredReady).toEqual({
+          minCount: 3,
+          users: ["alice", "bob", "charlie", "dave"],
+        });
+      });
+
+      it("should clamp minCount to voters.length when too large", async () => {
+        const configYaml = `
+governance:
+  proposals:
+    discussion:
+      exits:
+        - afterMinutes: 60
+          requiredReady:
+            minCount: 10
+            users:
+              - alice
+              - bob
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
+        expect(config.governance.proposals.discussion.exits[0].requiredReady.minCount).toBe(2);
+      });
+
+      it("should clamp minCount to 0 when negative", async () => {
+        const configYaml = `
+governance:
+  proposals:
+    discussion:
+      exits:
+        - afterMinutes: 60
+          requiredReady:
+            minCount: -1
+            users:
+              - alice
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
+        expect(config.governance.proposals.discussion.exits[0].requiredReady.minCount).toBe(0);
       });
 
       it("should sort discussion exits ascending by afterMs", async () => {
@@ -1048,7 +1121,7 @@ governance:
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
-        expect(config.governance.proposals.voting.exits[0].requiredVoters).toEqual({ mode: "all", voters: [] });
+        expect(config.governance.proposals.voting.exits[0].requiredVoters).toEqual({ minCount: 0, voters: [] });
       });
     });
 

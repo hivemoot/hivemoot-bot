@@ -23,10 +23,8 @@ import { logger } from "./logger.js";
 // Types
 // ───────────────────────────────────────────────────────────────────────────────
 
-export type RequiredVotersMode = "all" | "any";
-
 export interface RequiredVotersConfig {
-  mode: RequiredVotersMode;
+  minCount: number;
   voters: string[];
 }
 
@@ -40,7 +38,7 @@ export interface VotingExit {
 }
 
 export interface RequiredReadyConfig {
-  mode: RequiredVotersMode;
+  minCount: number;
   users: string[];
 }
 
@@ -273,36 +271,57 @@ function parseRequiredVotersConfig(
   repoFullName: string
 ): RequiredVotersConfig {
   if (value === undefined || value === null) {
-    return { mode: "all", voters: [] };
+    return { minCount: 0, voters: [] };
   }
 
-  // Array shorthand → mode: "all"
+  // Array shorthand → all required (minCount = list length)
   if (Array.isArray(value)) {
-    return { mode: "all", voters: parseVotersList(value, repoFullName) };
+    const voters = parseVotersList(value, repoFullName);
+    return { minCount: voters.length, voters };
   }
 
   if (typeof value !== "object") {
     logger.warn(
       `[${repoFullName}] Invalid requiredVoters: expected object or array. Using default.`
     );
-    return { mode: "all", voters: [] };
+    return { minCount: 0, voters: [] };
   }
 
-  const obj = value as { mode?: unknown; voters?: unknown };
+  const obj = value as { mode?: unknown; minCount?: unknown; voters?: unknown };
+  const voters = parseVotersList(obj.voters, repoFullName);
 
-  // Validate mode
-  let mode: RequiredVotersMode = "all";
-  if (obj.mode !== undefined && obj.mode !== null) {
-    if (obj.mode === "all" || obj.mode === "any") {
-      mode = obj.mode;
+  // Resolve minCount: prefer explicit minCount, fall back to mode for backward compat
+  let minCount: number;
+  if (obj.minCount !== undefined && obj.minCount !== null) {
+    if (typeof obj.minCount === "number" && Number.isFinite(obj.minCount)) {
+      minCount = Math.round(obj.minCount);
     } else {
       logger.warn(
-        `[${repoFullName}] Invalid requiredVoters.mode: "${String(obj.mode)}". Using default ("all").`
+        `[${repoFullName}] Invalid requiredVoters.minCount: expected number. Using list length.`
       );
+      minCount = voters.length;
     }
+  } else if (obj.mode !== undefined && obj.mode !== null) {
+    // Backward compat: convert mode to minCount
+    if (obj.mode === "any") {
+      minCount = 1;
+    } else if (obj.mode === "all") {
+      minCount = voters.length;
+    } else {
+      logger.warn(
+        `[${repoFullName}] Invalid requiredVoters.mode: "${String(obj.mode)}". Defaulting to all.`
+      );
+      minCount = voters.length;
+    }
+  } else {
+    // Neither minCount nor mode specified: default to all
+    minCount = voters.length;
   }
 
-  return { mode, voters: parseVotersList(obj.voters, repoFullName) };
+  // Clamp to valid range
+  minCount = clamp(minCount, 0, voters.length);
+
+  return { minCount, voters };
 }
 
 const VALID_REQUIRES: ExitRequires[] = ["majority", "unanimous"];
@@ -324,7 +343,7 @@ function parseExits(
   repoFullName: string,
 ): VotingExit[] {
   const defaultMinVoters = CONFIG_BOUNDS.voting.minVoters.default;
-  const defaultRequiredVoters: RequiredVotersConfig = { mode: "all", voters: [] };
+  const defaultRequiredVoters: RequiredVotersConfig = { minCount: 0, voters: [] };
 
   const defaultExit: VotingExit = {
     afterMs: VOTING_DURATION_MS,
@@ -432,36 +451,57 @@ function parseRequiredReadyConfig(
   repoFullName: string
 ): RequiredReadyConfig {
   if (value === undefined || value === null) {
-    return { mode: "all", users: [] };
+    return { minCount: 0, users: [] };
   }
 
-  // Array shorthand → mode: "all"
+  // Array shorthand → all required (minCount = list length)
   if (Array.isArray(value)) {
-    return { mode: "all", users: parseVotersList(value, repoFullName, "requiredReady") };
+    const users = parseVotersList(value, repoFullName, "requiredReady");
+    return { minCount: users.length, users };
   }
 
   if (typeof value !== "object") {
     logger.warn(
       `[${repoFullName}] Invalid requiredReady: expected object or array. Using default.`
     );
-    return { mode: "all", users: [] };
+    return { minCount: 0, users: [] };
   }
 
-  const obj = value as { mode?: unknown; users?: unknown };
+  const obj = value as { mode?: unknown; minCount?: unknown; users?: unknown };
+  const users = parseVotersList(obj.users, repoFullName, "requiredReady");
 
-  // Validate mode
-  let mode: RequiredVotersMode = "all";
-  if (obj.mode !== undefined && obj.mode !== null) {
-    if (obj.mode === "all" || obj.mode === "any") {
-      mode = obj.mode;
+  // Resolve minCount: prefer explicit minCount, fall back to mode for backward compat
+  let minCount: number;
+  if (obj.minCount !== undefined && obj.minCount !== null) {
+    if (typeof obj.minCount === "number" && Number.isFinite(obj.minCount)) {
+      minCount = Math.round(obj.minCount);
     } else {
       logger.warn(
-        `[${repoFullName}] Invalid requiredReady.mode: "${String(obj.mode)}". Using default ("all").`
+        `[${repoFullName}] Invalid requiredReady.minCount: expected number. Using list length.`
       );
+      minCount = users.length;
     }
+  } else if (obj.mode !== undefined && obj.mode !== null) {
+    // Backward compat: convert mode to minCount
+    if (obj.mode === "any") {
+      minCount = 1;
+    } else if (obj.mode === "all") {
+      minCount = users.length;
+    } else {
+      logger.warn(
+        `[${repoFullName}] Invalid requiredReady.mode: "${String(obj.mode)}". Defaulting to all.`
+      );
+      minCount = users.length;
+    }
+  } else {
+    // Neither minCount nor mode specified: default to all
+    minCount = users.length;
   }
 
-  return { mode, users: parseVotersList(obj.users, repoFullName, "requiredReady") };
+  // Clamp to valid range
+  minCount = clamp(minCount, 0, users.length);
+
+  return { minCount, users };
 }
 
 /**
@@ -479,7 +519,7 @@ function parseDiscussionExits(
   defaultAfterMs: number,
   repoFullName: string,
 ): DiscussionExit[] {
-  const defaultRequiredReady: RequiredReadyConfig = { mode: "all", users: [] };
+  const defaultRequiredReady: RequiredReadyConfig = { minCount: 0, users: [] };
 
   const defaultExit: DiscussionExit = {
     afterMs: defaultAfterMs,
@@ -623,7 +663,7 @@ export function getDefaultConfig(): EffectiveConfig {
           exits: [{
             afterMs: DISCUSSION_DURATION_MS,
             minReady: 0,
-            requiredReady: { mode: "all" as const, users: [] },
+            requiredReady: { minCount: 0, users: [] },
           }],
           durationMs: DISCUSSION_DURATION_MS,
         },
@@ -632,7 +672,7 @@ export function getDefaultConfig(): EffectiveConfig {
             afterMs: VOTING_DURATION_MS,
             requires: "majority" as const,
             minVoters: CONFIG_BOUNDS.voting.minVoters.default,
-            requiredVoters: { mode: "all" as const, voters: [] },
+            requiredVoters: { minCount: 0, voters: [] },
           }],
           durationMs: VOTING_DURATION_MS,
         },

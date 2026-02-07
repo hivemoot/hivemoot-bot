@@ -67,7 +67,6 @@ export type {
   RepoConfigFile,
   RepoConfigClient,
   RequiredVotersConfig,
-  RequiredVotersMode,
   RequiredReadyConfig,
   VotingExit,
   DiscussionExit,

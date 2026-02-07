@@ -525,7 +525,7 @@ describe("close-discussions script", () => {
         {
           afterMs: 15 * 60 * 1000, // 15 minutes
           minVoters: 2,
-          requiredVoters: { mode: "all", voters: ["agent-a", "agent-b"] },
+          requiredVoters: { minCount: 2, voters: ["agent-a", "agent-b"] },
           requires: "majority",
         },
       ],
@@ -535,7 +535,7 @@ describe("close-discussions script", () => {
         voters: ["agent-a", "agent-b"],
         participants: ["agent-a", "agent-b"],
       } as ValidatedVoteResult),
-      votingEndOptions: { votingConfig: { minVoters: 1, requiredVoters: { mode: "all", voters: [] } } },
+      votingEndOptions: { votingConfig: { minVoters: 1, requiredVoters: { minCount: 0, voters: [] } } },
       trackOutcome: vi.fn(),
       notifyPRs: vi.fn().mockResolvedValue(undefined),
       ...overrides,
@@ -586,7 +586,7 @@ describe("close-discussions script", () => {
         earlyDecision: true,
         votingConfig: {
           minVoters: 2,
-          requiredVoters: { mode: "all", voters: ["agent-a", "agent-b"] },
+          requiredVoters: { minCount: 2, voters: ["agent-a", "agent-b"] },
         },
       }));
     });
@@ -687,7 +687,7 @@ describe("close-discussions script", () => {
     function createDiscussionDeps(overrides?: Partial<DiscussionEarlyCheckDeps>): DiscussionEarlyCheckDeps {
       return {
         earlyExits: [
-          { afterMs: 30 * MS, minReady: 3, requiredReady: { mode: "all" as const, users: ["alice", "bob"] } },
+          { afterMs: 30 * MS, minReady: 3, requiredReady: { minCount: 2, users: ["alice", "bob"] } },
         ],
         getDiscussionReadiness: vi.fn().mockResolvedValue(new Set(["alice", "bob", "charlie"])),
         ...overrides,
@@ -753,9 +753,9 @@ describe("close-discussions script", () => {
       const deps = createDiscussionDeps({
         earlyExits: [
           // First exit: strict requirements (will fail)
-          { afterMs: 15 * MS, minReady: 5, requiredReady: { mode: "all" as const, users: [] } },
+          { afterMs: 15 * MS, minReady: 5, requiredReady: { minCount: 0, users: [] } },
           // Second exit: relaxed requirements (will pass)
-          { afterMs: 30 * MS, minReady: 2, requiredReady: { mode: "all" as const, users: [] } },
+          { afterMs: 30 * MS, minReady: 2, requiredReady: { minCount: 0, users: [] } },
         ],
         getDiscussionReadiness: vi.fn().mockResolvedValue(new Set(["alice", "bob", "charlie"])),
       });
@@ -768,10 +768,10 @@ describe("close-discussions script", () => {
       expect(transitionFn).toHaveBeenCalledWith(testRef);
     });
 
-    it("should work with mode: any for requiredReady", async () => {
+    it("should work with minCount: 1 for requiredReady", async () => {
       const deps = createDiscussionDeps({
         earlyExits: [
-          { afterMs: 30 * MS, minReady: 0, requiredReady: { mode: "any" as const, users: ["alice", "bob"] } },
+          { afterMs: 30 * MS, minReady: 0, requiredReady: { minCount: 1, users: ["alice", "bob"] } },
         ],
         getDiscussionReadiness: vi.fn().mockResolvedValue(new Set(["bob"])),
       });

@@ -60,7 +60,7 @@ export async function processPR(
 
     await prs.comment(ref, PR_MESSAGES.prStaleClosed(daysSinceActivity));
     await prs.close(ref);
-    await prs.removeLabel(ref, LABELS.IMPLEMENTATION);
+    await prs.removeGovernanceLabels(ref);
     await prs.removeLabel(ref, LABELS.STALE);
 
   } else if (daysSinceActivity >= threshold) {

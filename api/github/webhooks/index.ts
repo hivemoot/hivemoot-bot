@@ -263,13 +263,17 @@ function app(probotApp: Probot): void {
     const { number, merged } = context.payload.pull_request;
     const { owner, repo, fullName } = getRepoContext(context.payload.repository);
 
-    // PR closed without merge - just recalculate leaderboard
+    // PR closed without merge - clean governance labels and recalculate leaderboard
     if (!merged) {
-      context.log.info(`PR #${number} closed without merge, recalculating leaderboard`);
+      context.log.info(`PR #${number} closed without merge, cleaning up`);
       try {
+        const appId = getAppId();
+        const prs = createPROperations(context.octokit, { appId });
+        const prRef = { owner, repo, prNumber: number };
+        await prs.removeGovernanceLabels(prRef);
         await recalculateLeaderboardForPR(context.octokit, context.log, owner, repo, number);
       } catch (error) {
-        context.log.error({ err: error, pr: number, repo: fullName }, "Failed to recalculate leaderboard after PR close");
+        context.log.error({ err: error, pr: number, repo: fullName }, "Failed to process closed PR");
         throw error;
       }
       return;
@@ -284,6 +288,10 @@ function app(probotApp: Probot): void {
       const prs = createPROperations(context.octokit, { appId });
 
       const linkedIssues = await getLinkedIssues(context.octokit, owner, repo, number);
+
+      // Clean governance labels from the merged PR
+      const mergedPrRef = { owner, repo, prNumber: number };
+      await prs.removeGovernanceLabels(mergedPrRef);
 
       for (const linkedIssue of filterByLabel(linkedIssues, LABELS.READY_TO_IMPLEMENT)) {
         const issueRef = { owner, repo, issueNumber: linkedIssue.number };
@@ -301,6 +309,7 @@ function app(probotApp: Probot): void {
             const prRef = { owner, repo, prNumber: competingPR.number };
             await prs.comment(prRef, PR_MESSAGES.prSuperseded(number));
             await prs.close(prRef);
+            await prs.removeGovernanceLabels(prRef);
             context.log.info(`Closed competing PR #${competingPR.number}`);
           }
         }

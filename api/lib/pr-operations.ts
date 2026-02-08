@@ -8,6 +8,7 @@
 import type { PRRef } from "./types.js";
 import { validateClient, PR_CLIENT_CHECKS } from "./client-validation.js";
 import { isNotificationComment } from "./bot-comments.js";
+import { LABELS } from "../config.js";
 
 /**
  * Minimal GitHub client interface for PR operations.
@@ -293,6 +294,15 @@ export class PROperations {
         throw error;
       }
     }
+  }
+
+  /**
+   * Remove all transient governance labels (implementation, merge-ready) from a PR.
+   * Safe to call on PRs that don't have these labels — removeLabel handles 404s.
+   */
+  async removeGovernanceLabels(ref: PRRef): Promise<void> {
+    await this.removeLabel(ref, LABELS.IMPLEMENTATION);
+    await this.removeLabel(ref, LABELS.MERGE_READY);
   }
 
   /**

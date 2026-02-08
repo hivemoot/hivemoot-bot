@@ -3,6 +3,7 @@ import { PROperations, createPROperations } from "./pr-operations.js";
 import type { PRClient } from "./pr-operations.js";
 import type { PRRef } from "./types.js";
 import { buildNotificationComment, NOTIFICATION_TYPES } from "./bot-comments.js";
+import { LABELS } from "../config.js";
 
 /**
  * Tests for PROperations
@@ -381,6 +382,42 @@ describe("PROperations", () => {
       vi.mocked(mockClient.rest.issues.removeLabel).mockRejectedValue(error);
 
       await expect(prOps.removeLabel(testRef, "label")).rejects.toThrow("Network Error");
+    });
+  });
+
+  describe("removeGovernanceLabels", () => {
+    it("should remove both implementation and merge-ready labels", async () => {
+      await prOps.removeGovernanceLabels(testRef);
+
+      expect(mockClient.rest.issues.removeLabel).toHaveBeenCalledTimes(2);
+      expect(mockClient.rest.issues.removeLabel).toHaveBeenCalledWith({
+        owner: "test-org",
+        repo: "test-repo",
+        issue_number: 42,
+        name: LABELS.IMPLEMENTATION,
+      });
+      expect(mockClient.rest.issues.removeLabel).toHaveBeenCalledWith({
+        owner: "test-org",
+        repo: "test-repo",
+        issue_number: 42,
+        name: LABELS.MERGE_READY,
+      });
+    });
+
+    it("should succeed even when labels are not present (404s)", async () => {
+      const error = new Error("Not Found") as Error & { status: number };
+      error.status = 404;
+      vi.mocked(mockClient.rest.issues.removeLabel).mockRejectedValue(error);
+
+      await expect(prOps.removeGovernanceLabels(testRef)).resolves.toBeUndefined();
+    });
+
+    it("should propagate non-404 errors from the first label", async () => {
+      const error = new Error("Server Error") as Error & { status: number };
+      error.status = 500;
+      vi.mocked(mockClient.rest.issues.removeLabel).mockRejectedValue(error);
+
+      await expect(prOps.removeGovernanceLabels(testRef)).rejects.toThrow("Server Error");
     });
   });
 

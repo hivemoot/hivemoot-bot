@@ -75,6 +75,7 @@ describe("processPR", () => {
       close: vi.fn().mockResolvedValue(undefined),
       addLabels: vi.fn().mockResolvedValue(undefined),
       removeLabel: vi.fn().mockResolvedValue(undefined),
+      removeGovernanceLabels: vi.fn().mockResolvedValue(undefined),
       hasLabel: vi.fn().mockReturnValue(false),
     } as unknown as PROperations;
   });
@@ -104,7 +105,7 @@ describe("processPR", () => {
       expect(mockPRs.close).toHaveBeenCalledWith(testRef);
     });
 
-    it("should remove both implementation and stale labels when closing", async () => {
+    it("should remove governance labels and stale label when closing", async () => {
       const daysInactive = closeThreshold + 1;
       const pr = {
         number: 42,
@@ -113,7 +114,7 @@ describe("processPR", () => {
 
       await processPR(mockPRs, testRef, pr, threshold, daysAgo(daysInactive));
 
-      expect(mockPRs.removeLabel).toHaveBeenCalledWith(testRef, LABELS.IMPLEMENTATION);
+      expect(mockPRs.removeGovernanceLabels).toHaveBeenCalledWith(testRef);
       expect(mockPRs.removeLabel).toHaveBeenCalledWith(testRef, LABELS.STALE);
     });
 
@@ -272,6 +273,7 @@ describe("processRepository", () => {
         close: vi.fn().mockResolvedValue(undefined),
         addLabels: vi.fn().mockResolvedValue(undefined),
         removeLabel: vi.fn().mockResolvedValue(undefined),
+        removeGovernanceLabels: vi.fn().mockResolvedValue(undefined),
       }),
       loadRepositoryConfig: vi.fn().mockResolvedValue({
         version: 1,
@@ -378,6 +380,7 @@ describe("processRepository", () => {
       close: vi.fn().mockResolvedValue(undefined),
       addLabels: vi.fn().mockResolvedValue(undefined),
       removeLabel: vi.fn().mockResolvedValue(undefined),
+      removeGovernanceLabels: vi.fn().mockResolvedValue(undefined),
     };
     vi.mocked(createPROperations).mockReturnValue(mockPRs as unknown as ReturnType<typeof createPROperations>);
     vi.mocked(loadRepositoryConfig).mockResolvedValue(defaultMockConfig);
@@ -419,6 +422,7 @@ describe("processRepository", () => {
       close: vi.fn().mockResolvedValue(undefined),
       addLabels: vi.fn().mockResolvedValue(undefined),
       removeLabel: vi.fn().mockResolvedValue(undefined),
+      removeGovernanceLabels: vi.fn().mockResolvedValue(undefined),
     };
     vi.mocked(createPROperations).mockReturnValue(mockPRs as unknown as ReturnType<typeof createPROperations>);
     vi.mocked(loadRepositoryConfig).mockResolvedValue(defaultMockConfig);
@@ -450,6 +454,7 @@ describe("processRepository", () => {
       close: vi.fn().mockResolvedValue(undefined),
       addLabels: vi.fn().mockResolvedValue(undefined),
       removeLabel: vi.fn().mockResolvedValue(undefined),
+      removeGovernanceLabels: vi.fn().mockResolvedValue(undefined),
     };
     vi.mocked(createPROperations).mockReturnValue(mockPRs as unknown as ReturnType<typeof createPROperations>);
     vi.mocked(loadRepositoryConfig).mockResolvedValue(defaultMockConfig);

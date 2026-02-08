@@ -335,7 +335,7 @@ describe("GovernanceService", () => {
       expect(outcome).toBe("needs-human-input");
       expect(mockIssues.transition).toHaveBeenCalledWith(testRef, {
         removeLabel: LABELS.VOTING,
-        addLabel: LABELS.NEEDS_HUMAN_INPUT,
+        addLabel: LABELS.NEEDS_HUMAN,
         comment: MESSAGES.votingEndNeedsHumanInput(votes),
         close: false,
         lock: false,
@@ -384,7 +384,7 @@ describe("GovernanceService", () => {
       expect(mockIssues.findVotingCommentId).toHaveBeenCalledWith(testRef);
       expect(mockIssues.hasHumanHelpComment).toHaveBeenCalledWith(testRef, ERROR_CODES.VOTING_COMMENT_NOT_FOUND);
       expect(mockIssues.comment).toHaveBeenCalled();
-      expect(mockIssues.addLabels).toHaveBeenCalledWith(testRef, [LABELS.BLOCKED_HUMAN_HELP]);
+      expect(mockIssues.addLabels).toHaveBeenCalledWith(testRef, [LABELS.NEEDS_HUMAN]);
       expect(mockIssues.getValidatedVoteCounts).not.toHaveBeenCalled();
     });
 
@@ -408,7 +408,7 @@ describe("GovernanceService", () => {
 
       expect(outcome).toBe("skipped");
       expect(mockIssues.comment).toHaveBeenCalled();
-      expect(mockIssues.addLabels).toHaveBeenCalledWith(testRef, [LABELS.BLOCKED_HUMAN_HELP]);
+      expect(mockIssues.addLabels).toHaveBeenCalledWith(testRef, [LABELS.NEEDS_HUMAN]);
     });
   });
 
@@ -674,7 +674,7 @@ describe("GovernanceService", () => {
       expect(mockIssues.findVotingCommentId).toHaveBeenCalledWith(testRef);
       expect(mockIssues.hasHumanHelpComment).toHaveBeenCalledWith(testRef, ERROR_CODES.VOTING_COMMENT_NOT_FOUND);
       expect(mockIssues.comment).toHaveBeenCalled();
-      expect(mockIssues.addLabels).toHaveBeenCalledWith(testRef, [LABELS.BLOCKED_HUMAN_HELP]);
+      expect(mockIssues.addLabels).toHaveBeenCalledWith(testRef, [LABELS.NEEDS_HUMAN]);
       expect(mockIssues.getValidatedVoteCounts).not.toHaveBeenCalled();
     });
 
@@ -697,7 +697,7 @@ describe("GovernanceService", () => {
       expect(outcome).toBe("needs-human-input");
       expect(mockIssues.transition).toHaveBeenCalledWith(testRef, {
         removeLabel: LABELS.EXTENDED_VOTING,
-        addLabel: LABELS.NEEDS_HUMAN_INPUT,
+        addLabel: LABELS.NEEDS_HUMAN,
         comment: MESSAGES.votingEndInconclusiveResolved(votes, "needs-human-input"),
         close: false,
         lock: false,

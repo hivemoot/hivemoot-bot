@@ -190,7 +190,7 @@ ${formatVotes(votes)}
 
 The hive has spoken — this issue needs a human to weigh in. The issue remains open and unlocked for human response.
 
-Remove the \`needs:human-input\` label when you've addressed the concern.${SIGNATURE}`,
+Remove the \`needs:human\` label when you've addressed the concern.${SIGNATURE}`,
 
   // Posted when voting ends with tie/no votes (first round - extended voting begins)
   votingEndInconclusive: (votes: { thumbsUp: number; thumbsDown: number; confused: number; eyes: number }) => `# 🐝 Extended Voting ⚖️
@@ -244,7 +244,7 @@ ${params.final
       "needs-human-input": {
         status: "Needs Human Input",
         emoji: "👀",
-        explanation: "The hive has spoken — this issue needs a human to weigh in. Remove the `needs:human-input` label when you've addressed the concern.",
+        explanation: "The hive has spoken — this issue needs a human to weigh in. Remove the `needs:human` label when you've addressed the concern.",
       },
     }[outcome];
     return `# 🐝 ${config.status} ${config.emoji}
@@ -298,8 +298,7 @@ export const LABELS = {
   IMPLEMENTATION: "implementation",
   STALE: "stale",
   IMPLEMENTED: "implemented",
-  BLOCKED_HUMAN_HELP: "blocked:human-help-needed",
-  NEEDS_HUMAN_INPUT: "needs:human-input",
+  NEEDS_HUMAN: "needs:human",
   MERGE_READY: "merge-ready",
 } as const;
 

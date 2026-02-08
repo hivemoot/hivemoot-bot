@@ -324,7 +324,7 @@ export class GovernanceService {
         unlock: true,
       },
       "needs-human-input": {
-        label: LABELS.NEEDS_HUMAN_INPUT,
+        label: LABELS.NEEDS_HUMAN,
         message: earlyPrefix + MESSAGES.votingEndNeedsHumanInput(validated.votes),
         close: false,
         lock: false,
@@ -425,7 +425,7 @@ export class GovernanceService {
         unlock: true,
       },
       "needs-human-input": {
-        label: LABELS.NEEDS_HUMAN_INPUT,
+        label: LABELS.NEEDS_HUMAN,
         message: MESSAGES.votingEndInconclusiveResolved(validated.votes, "needs-human-input"),
         close: false,
         lock: false,
@@ -484,15 +484,15 @@ export class GovernanceService {
     );
     await this.issues.comment(ref, errorComment);
 
-    // Add the blocked label to make the issue visible in issue lists
+    // Add the needs:human label to make the issue visible in issue lists
     // Note: Label addition is best-effort - if the label doesn't exist in the repo,
     // we log a warning but don't fail the operation (the comment is the critical part)
     try {
-      await this.issues.addLabels(ref, [LABELS.BLOCKED_HUMAN_HELP]);
+      await this.issues.addLabels(ref, [LABELS.NEEDS_HUMAN]);
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       this.logger.warn(
-        `Failed to add ${LABELS.BLOCKED_HUMAN_HELP} label to issue #${ref.issueNumber}: ${errorMsg}`,
+        `Failed to add ${LABELS.NEEDS_HUMAN} label to issue #${ref.issueNumber}: ${errorMsg}`,
       );
     }
 

@@ -723,7 +723,7 @@ async function main(): Promise<void> {
         logger.warn(
           `${allSkippedIssues.length} issue(s) skipped due to missing voting comments: ${skippedList}`
         );
-        logger.warn("Human intervention requested for these issues (see blocked:human-help-needed label)");
+        logger.warn("Human intervention requested for these issues (see needs:human label)");
         core.warning(`${allSkippedIssues.length} issue(s) require human intervention`);
       }
 

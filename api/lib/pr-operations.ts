@@ -30,6 +30,7 @@ export interface PRClient {
           updated_at: string;
           user: { login: string } | null;
           head: { sha: string };
+          mergeable: boolean | null;
         };
       }>;
 
@@ -235,6 +236,7 @@ export class PROperations {
     updatedAt: Date;
     author: string;
     headSha: string;
+    mergeable: boolean | null;
   }> {
     const { data } = await this.client.rest.pulls.get({
       owner: ref.owner,
@@ -250,6 +252,7 @@ export class PROperations {
       updatedAt: new Date(data.updated_at),
       author: data.user?.login ?? "unknown",
       headSha: data.head.sha,
+      mergeable: data.mergeable,
     };
   }
 

@@ -7,7 +7,7 @@
  * Covers gaps that webhooks can't:
  * - Missed webhook events (transient errors, GitHub delivery failures)
  * - Stale labels from any cause (eventual consistency guarantee)
- * - Future: base branch updates causing conflicts (when mergeable check is added)
+ * - Base branch updates causing conflicts (mergeable may be null during webhooks)
  */
 
 import { Octokit } from "octokit";

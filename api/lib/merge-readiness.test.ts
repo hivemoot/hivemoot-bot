@@ -21,7 +21,7 @@ function createMockPrs(overrides: Partial<Record<keyof PROperations, unknown>> =
   return {
     getLabels: vi.fn().mockResolvedValue(["implementation"]),
     getApproverLogins: vi.fn().mockResolvedValue(new Set<string>()),
-    get: vi.fn().mockResolvedValue({ headSha: "abc123" }),
+    get: vi.fn().mockResolvedValue({ headSha: "abc123", mergeable: true }),
     getCheckRunsForRef: vi.fn().mockResolvedValue({ totalCount: 0, checkRuns: [] }),
     getCombinedStatus: vi.fn().mockResolvedValue({ state: "pending", totalCount: 0 }),
     addLabels: vi.fn().mockResolvedValue(undefined),
@@ -135,6 +135,69 @@ describe("evaluateMergeReadiness", () => {
 
       // alice is trusted → 1 approval meets minApprovals: 1
       expect(result.action).toBe("added");
+    });
+  });
+
+  describe("mergeable check", () => {
+    it("should skip when PR has merge conflicts (mergeable: false)", async () => {
+      const prs = createMockPrs({
+        getApproverLogins: vi.fn().mockResolvedValue(new Set(["alice"])),
+        get: vi.fn().mockResolvedValue({ headSha: "abc123", mergeable: false }),
+      });
+      const result = await evaluateMergeReadiness(buildParams({ prs }));
+
+      expect(result).toEqual({ action: "skipped", reason: "has merge conflicts" });
+      expect(prs.getCheckRunsForRef).not.toHaveBeenCalled();
+    });
+
+    it("should remove merge-ready when PR has conflicts and label is present", async () => {
+      const prs = createMockPrs({
+        getLabels: vi.fn().mockResolvedValue(["implementation", "merge-ready"]),
+        getApproverLogins: vi.fn().mockResolvedValue(new Set(["alice"])),
+        get: vi.fn().mockResolvedValue({ headSha: "abc123", mergeable: false }),
+      });
+      const result = await evaluateMergeReadiness(buildParams({ prs }));
+
+      expect(result).toEqual({ action: "removed" });
+      expect(prs.removeLabel).toHaveBeenCalledWith(defaultRef, "merge-ready");
+    });
+
+    it("should pass through when mergeable is null (not yet computed)", async () => {
+      const prs = createMockPrs({
+        getApproverLogins: vi.fn().mockResolvedValue(new Set(["alice"])),
+        get: vi.fn().mockResolvedValue({ headSha: "abc123", mergeable: null }),
+        getCheckRunsForRef: vi.fn().mockResolvedValue({ totalCount: 0, checkRuns: [] }),
+        getCombinedStatus: vi.fn().mockResolvedValue({ state: "pending", totalCount: 0 }),
+      });
+      const result = await evaluateMergeReadiness(buildParams({ prs }));
+
+      expect(result.action).toBe("added");
+    });
+
+    it("should pass through when mergeable is true", async () => {
+      const prs = createMockPrs({
+        getApproverLogins: vi.fn().mockResolvedValue(new Set(["alice"])),
+        get: vi.fn().mockResolvedValue({ headSha: "abc123", mergeable: true }),
+        getCheckRunsForRef: vi.fn().mockResolvedValue({ totalCount: 0, checkRuns: [] }),
+        getCombinedStatus: vi.fn().mockResolvedValue({ state: "pending", totalCount: 0 }),
+      });
+      const result = await evaluateMergeReadiness(buildParams({ prs }));
+
+      expect(result.action).toBe("added");
+    });
+
+    it("should skip mergeable check when headSha is pre-fetched (webhook path)", async () => {
+      const prs = createMockPrs({
+        getApproverLogins: vi.fn().mockResolvedValue(new Set(["alice"])),
+        getCheckRunsForRef: vi.fn().mockResolvedValue({ totalCount: 0, checkRuns: [] }),
+        getCombinedStatus: vi.fn().mockResolvedValue({ state: "pending", totalCount: 0 }),
+      });
+      const result = await evaluateMergeReadiness(
+        buildParams({ prs, headSha: "precomputed-sha" })
+      );
+
+      expect(result.action).toBe("added");
+      expect(prs.get).not.toHaveBeenCalled();
     });
   });
 

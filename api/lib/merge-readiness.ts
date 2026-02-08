@@ -6,12 +6,13 @@
  *
  * Conditions for the label (all must be true):
  * 1. PR has `implementation` label (active competing PR)
- * 2. All check runs on HEAD are completed with success/neutral/skipped
- * 3. All commit statuses on HEAD are success (legacy Status API)
- * 4. At least minApprovals approvals from trustedReviewers
+ * 2. At least minApprovals approvals from trustedReviewers
+ * 3. PR is not conflicting (`mergeable !== false`; `null` = not yet computed, allowed)
+ * 4. All check runs on HEAD are completed with success/neutral/skipped
+ * 5. All commit statuses on HEAD are success (legacy Status API)
  *
  * Short-circuit order optimized by API cost:
- * config → labels → approvals (1 call) → CI (2 calls)
+ * config → labels → approvals (1 call) → PR fetch (headSha + mergeable) → mergeable → CI (2 calls)
  */
 
 import { LABELS } from "../config.js";
@@ -98,10 +99,30 @@ export async function evaluateMergeReadiness(
     };
   }
 
-  // 4. Get HEAD SHA (use pre-fetched or fetch from PR)
-  const headSha = params.headSha ?? (await prs.get(ref)).headSha;
+  // 4. Get HEAD SHA + mergeable state (use pre-fetched or fetch from PR)
+  let headSha: string;
+  let mergeable: boolean | null;
+  if (params.headSha) {
+    headSha = params.headSha;
+    // When headSha is pre-fetched (webhook payload), we don't have mergeable — treat as unknown
+    mergeable = null;
+  } else {
+    const pr = await prs.get(ref);
+    headSha = pr.headSha;
+    mergeable = pr.mergeable;
+  }
 
-  // 5. Check CI status (2 API calls in parallel)
+  // 5. Check mergeable state (null = not yet computed by GitHub, allow through)
+  if (mergeable === false) {
+    if (hasMergeReady) {
+      await prs.removeLabel(ref, LABELS.MERGE_READY);
+      log?.info(`[PR #${ref.prNumber}] Removed merge-ready: has merge conflicts`);
+      return { action: "removed" };
+    }
+    return { action: "skipped", reason: "has merge conflicts" };
+  }
+
+  // 6. Check CI status (2 API calls in parallel)
   const ciPassing = await isCIPassing(prs, ref, headSha);
 
   if (!ciPassing) {

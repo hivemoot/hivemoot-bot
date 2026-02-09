@@ -19,6 +19,7 @@ import {
 } from "./bot-comments.js";
 import { createModelFromEnv } from "./llm/provider.js";
 import { STANDUP_SYSTEM_PROMPT, buildStandupUserPrompt } from "./llm/prompts.js";
+import { withLLMRetry } from "./llm/retry.js";
 import { logger } from "./logger.js";
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -713,14 +714,20 @@ export async function generateStandupLLMContent(
     const { model, config } = modelResult;
     logger.info(`Generating standup narrative with ${config.provider}/${config.model}`);
 
-    const result = await generateObject({
-      model,
-      schema: StandupOutputSchema,
-      system: STANDUP_SYSTEM_PROMPT,
-      prompt: buildStandupUserPrompt(data),
-      maxTokens: config.maxTokens,
-      temperature: 0.4,
-    });
+    const result = await withLLMRetry(
+      () =>
+        generateObject({
+          model,
+          schema: StandupOutputSchema,
+          system: STANDUP_SYSTEM_PROMPT,
+          prompt: buildStandupUserPrompt(data),
+          maxTokens: config.maxTokens,
+          temperature: 0.4,
+          maxRetries: 0, // Disable SDK retry; our wrapper handles rate-limits
+        }),
+      undefined,
+      logger
+    );
 
     const validNumbers = collectValidNumbers(data);
     const validated = validateLLMOutput(result.object, validNumbers);

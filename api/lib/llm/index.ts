@@ -21,5 +21,9 @@ export { isLLMConfigured, getLLMConfig, createModel, createModelFromEnv } from "
 export { DiscussionSummarizer, formatVotingMessage } from "./summarizer.js";
 export type { SummarizationResult, SummarizerConfig } from "./summarizer.js";
 
+// Retry
+export { withLLMRetry, isLLMRateLimitError, extractRetryDelay, LLM_RETRY_DEFAULTS } from "./retry.js";
+export type { LLMRetryConfig } from "./retry.js";
+
 // Prompts (exported for testing/debugging purposes)
 export { buildUserPrompt, SUMMARIZATION_SYSTEM_PROMPT } from "./prompts.js";

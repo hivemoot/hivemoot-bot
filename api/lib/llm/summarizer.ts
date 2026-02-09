@@ -13,6 +13,7 @@ import type { Logger } from "../logger.js";
 import { logger as defaultLogger } from "../logger.js";
 import { buildUserPrompt, SUMMARIZATION_SYSTEM_PROMPT } from "./prompts.js";
 import { createModelFromEnv } from "./provider.js";
+import { withLLMRetry } from "./retry.js";
 import type { DiscussionSummary, IssueContext, LLMConfig } from "./types.js";
 import { DiscussionSummarySchema, LLM_DEFAULTS } from "./types.js";
 
@@ -82,14 +83,20 @@ export class DiscussionSummarizer {
         `Generating summary with ${config.provider}/${config.model} for ${context.comments.length} comments`
       );
 
-      const result = await generateObject({
-        model,
-        schema: DiscussionSummarySchema,
-        system: SUMMARIZATION_SYSTEM_PROMPT,
-        prompt: buildUserPrompt(context),
-        maxTokens: config.maxTokens,
-        temperature: LLM_DEFAULTS.temperature,
-      });
+      const result = await withLLMRetry(
+        () =>
+          generateObject({
+            model,
+            schema: DiscussionSummarySchema,
+            system: SUMMARIZATION_SYSTEM_PROMPT,
+            prompt: buildUserPrompt(context),
+            maxTokens: config.maxTokens,
+            temperature: LLM_DEFAULTS.temperature,
+            maxRetries: 0, // Disable SDK retry; our wrapper handles rate-limits
+          }),
+        undefined,
+        this.logger
+      );
 
       const summary = result.object;
 

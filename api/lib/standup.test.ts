@@ -365,6 +365,47 @@ describe("formatStandupComment", () => {
     expect(result).toContain("Feature X");
   });
 
+  it("should keep detailed merged PR list when merged count is at threshold", () => {
+    const merged = Array.from({ length: 8 }, (_, i) => ({
+      number: i + 1,
+      title: `Feature ${i + 1}`,
+      author: "agent-1",
+    }));
+    const data = createEmptyStandupData({
+      discussionPhase: [{ number: 1, title: "X" }],
+      recentlyMergedPRs: merged,
+    });
+
+    const result = formatStandupComment(data);
+
+    expect(result).toContain("## Merged");
+    expect(result).toContain("**#8** Feature 8");
+    expect(result).not.toContain("View all merged PRs");
+  });
+
+  it("should render compact merged summary and link when merged count exceeds threshold", () => {
+    const merged = Array.from({ length: 9 }, (_, i) => ({
+      number: i + 1,
+      title: `Feature ${i + 1}`,
+      author: "agent-1",
+    }));
+    const data = createEmptyStandupData({
+      discussionPhase: [{ number: 1, title: "X" }],
+      repoFullName: "hivemoot/colony",
+      reportDate: "2026-02-08",
+      recentlyMergedPRs: merged,
+    });
+
+    const result = formatStandupComment(data);
+
+    expect(result).toContain("## Merged");
+    expect(result).toContain("**9 PRs merged**");
+    expect(result).toContain(
+      "[View all merged PRs for 2026-02-08](https://github.com/hivemoot/colony/pulls?q=is%3Apr%20is%3Amerged%20merged%3A2026-02-08..2026-02-08)"
+    );
+    expect(result).not.toContain("**#1** Feature 1");
+  });
+
   it("should include metadata tag with correct structure", () => {
     const data = createEmptyStandupData({
       discussionPhase: [{ number: 1, title: "X" }],

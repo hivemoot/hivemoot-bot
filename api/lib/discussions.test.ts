@@ -355,18 +355,18 @@ describe("getLastStandupDate", () => {
 });
 
 describe("computeDayNumber", () => {
-  it("should return 0 for same day as repo creation", () => {
+  it("should return 0 for same UTC calendar day as repo creation", () => {
     const result = computeDayNumber(
       "2024-06-01T00:00:00Z",
-      new Date("2024-06-01T12:00:00Z")
+      "2024-06-01"
     );
     expect(result).toBe(0);
   });
 
-  it("should return 1 after one full day", () => {
+  it("should return 1 for the next UTC calendar day", () => {
     const result = computeDayNumber(
       "2024-06-01T00:00:00Z",
-      new Date("2024-06-02T00:00:00Z")
+      "2024-06-02"
     );
     expect(result).toBe(1);
   });
@@ -374,16 +374,34 @@ describe("computeDayNumber", () => {
   it("should count days correctly over long periods", () => {
     const result = computeDayNumber(
       "2024-06-01T00:00:00Z",
-      new Date("2024-07-11T00:00:00Z") // 40 days later
+      "2024-07-11" // 40 days later
     );
     expect(result).toBe(40);
   });
 
-  it("should handle partial days", () => {
+  it("should ignore repo creation time-of-day and use UTC calendar math", () => {
     const result = computeDayNumber(
       "2024-06-01T12:00:00Z",
-      new Date("2024-06-02T06:00:00Z") // 18 hours later = 0 full days
+      "2024-06-02"
     );
+    expect(result).toBe(1);
+  });
+
+  it("should increment for consecutive report dates even when run less than 24h apart", () => {
+    const repoCreatedAt = "2026-02-01T17:00:00Z";
+
+    const daySeven = computeDayNumber(repoCreatedAt, "2026-02-07");
+    const dayEight = computeDayNumber(repoCreatedAt, "2026-02-08");
+
+    expect(dayEight).toBe(daySeven + 1);
+  });
+
+  it("should never return negative day numbers", () => {
+    const result = computeDayNumber(
+      "2026-02-10T00:00:00Z",
+      "2026-02-09"
+    );
+
     expect(result).toBe(0);
   });
 });

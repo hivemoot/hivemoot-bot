@@ -356,10 +356,19 @@ export async function getLastStandupDate(
 }
 
 /**
- * Compute the colony day number from the repo creation date.
- * Day 0 is the repo creation date, incrementing daily.
+ * Compute the colony day number for a specific report date (UTC calendar day).
+ * Day 0 is the repo creation calendar day, incrementing daily.
  */
-export function computeDayNumber(repoCreatedAt: string, now: Date = new Date()): number {
-  const epoch = new Date(repoCreatedAt).getTime();
-  return Math.floor((now.getTime() - epoch) / MS_PER_DAY);
+export function computeDayNumber(repoCreatedAt: string, reportDate: string): number {
+  const createdAt = new Date(repoCreatedAt);
+  const createdDayUTC = Date.UTC(
+    createdAt.getUTCFullYear(),
+    createdAt.getUTCMonth(),
+    createdAt.getUTCDate()
+  );
+
+  const [year, month, day] = reportDate.split("-").map(Number);
+  const reportDayUTC = Date.UTC(year, month - 1, day);
+
+  return Math.max(0, Math.floor((reportDayUTC - createdDayUTC) / MS_PER_DAY));
 }

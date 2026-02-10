@@ -100,7 +100,7 @@ export async function processRepository(
     }
 
     // 6. Compute day number
-    const dayNumber = computeDayNumber(repoInfo.repoCreatedAt);
+    const dayNumber = computeDayNumber(repoInfo.repoCreatedAt, reportDate);
 
     // 7. Collect standup data
     const prs = createPROperations(octokit, { appId: _appId });

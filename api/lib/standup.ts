@@ -753,6 +753,7 @@ export async function generateStandupLLMContent(
 
 /** GitHub comment body limit */
 const MAX_COMMENT_LENGTH = 60_000;
+const MAX_MERGED_LIST_ITEMS = 8;
 
 /**
  * Format the date for display (e.g., "Friday, Feb 7, 2026").
@@ -766,6 +767,14 @@ function formatDisplayDate(dateStr: string): string {
     year: "numeric",
     timeZone: "UTC",
   });
+}
+
+/**
+ * Build a GitHub search URL for merged PRs on a specific UTC date.
+ */
+function buildMergedPRSearchUrl(repoFullName: string, reportDate: string): string {
+  const query = `is:pr is:merged merged:${reportDate}..${reportDate}`;
+  return `https://github.com/${repoFullName}/pulls?q=${encodeURIComponent(query)}`;
 }
 
 /**
@@ -855,8 +864,14 @@ export function formatStandupComment(
   if (data.recentlyMergedPRs && data.recentlyMergedPRs.length > 0) {
     sections.push("## Merged");
     sections.push("");
-    for (const pr of data.recentlyMergedPRs) {
-      sections.push(`- **#${pr.number}** ${pr.title} (by @${pr.author})`);
+    if (data.recentlyMergedPRs.length > MAX_MERGED_LIST_ITEMS) {
+      const searchUrl = buildMergedPRSearchUrl(data.repoFullName, data.reportDate);
+      sections.push(`- **${data.recentlyMergedPRs.length} PRs merged**`);
+      sections.push(`- [View all merged PRs for ${data.reportDate}](${searchUrl})`);
+    } else {
+      for (const pr of data.recentlyMergedPRs) {
+        sections.push(`- **#${pr.number}** ${pr.title} (by @${pr.author})`);
+      }
     }
     sections.push("");
   }

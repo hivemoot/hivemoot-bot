@@ -29,6 +29,7 @@ export interface RequiredVotersConfig {
 }
 
 export type ExitRequires = "majority" | "unanimous";
+export type ProposalDecisionMethod = "manual" | "hivemoot_vote";
 
 // ── Intake Method Types ─────────────────────────────────────────────────────
 
@@ -81,6 +82,9 @@ export interface RepoConfigFile {
   version?: number;
   governance?: {
     proposals?: {
+      decision?: {
+        method?: unknown;
+      };
       discussion?: {
         exits?: unknown[];
       };
@@ -113,6 +117,9 @@ export interface EffectiveConfig {
   version: number;
   governance: {
     proposals: {
+      decision: {
+        method: ProposalDecisionMethod;
+      };
       discussion: {
         exits: DiscussionExit[];
         /** Derived from last exit's afterMs (the deadline) */
@@ -647,6 +654,40 @@ function parseDiscussionExits(
 
 const DEFAULT_INTAKE: IntakeMethod[] = [{ method: "update" }];
 const VALID_INTAKE_METHODS = new Set(["update", "approval"]);
+const DEFAULT_PROPOSAL_DECISION_METHOD: ProposalDecisionMethod = "manual";
+const VALID_PROPOSAL_DECISION_METHODS = new Set<ProposalDecisionMethod>([
+  "manual",
+  "hivemoot_vote",
+]);
+
+/**
+ * Parse and validate proposal decision method.
+ * Defaults to "manual" when missing or invalid.
+ */
+function parseProposalDecisionMethod(
+  value: unknown,
+  repoFullName: string
+): ProposalDecisionMethod {
+  if (value === undefined || value === null) {
+    return DEFAULT_PROPOSAL_DECISION_METHOD;
+  }
+
+  if (typeof value !== "string") {
+    logger.warn(
+      `[${repoFullName}] Invalid proposals.decision.method: expected string. Using default ("${DEFAULT_PROPOSAL_DECISION_METHOD}").`
+    );
+    return DEFAULT_PROPOSAL_DECISION_METHOD;
+  }
+
+  if (!VALID_PROPOSAL_DECISION_METHODS.has(value as ProposalDecisionMethod)) {
+    logger.warn(
+      `[${repoFullName}] Unknown proposals.decision.method: "${value}". Using default ("${DEFAULT_PROPOSAL_DECISION_METHOD}").`
+    );
+    return DEFAULT_PROPOSAL_DECISION_METHOD;
+  }
+
+  return value as ProposalDecisionMethod;
+}
 
 /**
  * Parse and validate trustedReviewers from config.
@@ -868,6 +909,10 @@ function parseStandupConfig(
  */
 function parseRepoConfig(raw: unknown, repoFullName: string): EffectiveConfig {
   const config = raw as RepoConfigFile | undefined;
+  const decisionMethod = parseProposalDecisionMethod(
+    config?.governance?.proposals?.decision?.method,
+    repoFullName
+  );
 
   // Discussion exits (default: single exit at DISCUSSION_DURATION_MS)
   const discussionExitsRaw = config?.governance?.proposals?.discussion?.exits;
@@ -890,6 +935,9 @@ function parseRepoConfig(raw: unknown, repoFullName: string): EffectiveConfig {
     version: typeof config?.version === "number" ? config.version : 1,
     governance: {
       proposals: {
+        decision: {
+          method: decisionMethod,
+        },
         discussion: {
           exits: discussionExits,
           durationMs: discussionExits[discussionExits.length - 1].afterMs,
@@ -940,6 +988,9 @@ export function getDefaultConfig(): EffectiveConfig {
     version: 1,
     governance: {
       proposals: {
+        decision: {
+          method: DEFAULT_PROPOSAL_DECISION_METHOD,
+        },
         discussion: {
           exits: [{
             afterMs: DISCUSSION_DURATION_MS,

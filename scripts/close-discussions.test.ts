@@ -56,16 +56,119 @@ vi.mock("../api/lib/env-validation.js", () => ({
 }));
 
 // Import after all mocks are in place
-import { notifyPendingPRs, isRetryableError, withRetry, makeEarlyDecisionCheck, makeDiscussionEarlyCheck, processIssuePhase } from "./close-discussions.js";
+import { notifyPendingPRs, isRetryableError, withRetry, makeEarlyDecisionCheck, makeDiscussionEarlyCheck, processIssuePhase, isVotingAutomationEnabled, processRepository } from "./close-discussions.js";
 import type { EarlyDecisionDeps, DiscussionEarlyCheckDeps } from "./close-discussions.js";
-import { getOpenPRsForIssue, logger } from "../api/lib/index.js";
+import { getOpenPRsForIssue, logger, loadRepositoryConfig, createIssueOperations } from "../api/lib/index.js";
 import { PR_MESSAGES } from "../api/config.js";
 import type { VotingOutcome, IssueRef, ValidatedVoteResult, DiscussionExit } from "../api/lib/index.js";
 import type { VotingExit } from "../api/lib/repo-config.js";
 
 const mockGetOpenPRsForIssue = vi.mocked(getOpenPRsForIssue);
+const mockLoadRepositoryConfig = vi.mocked(loadRepositoryConfig);
+const mockCreateIssueOperations = vi.mocked(createIssueOperations);
 
 describe("close-discussions script", () => {
+  function makeRepoConfig(method: "manual" | "hivemoot_vote") {
+    return {
+      version: 1,
+      governance: {
+        proposals: {
+          decision: { method },
+          discussion: {
+            durationMs: 60_000,
+            exits: [{ afterMs: 60_000, minReady: 0, requiredReady: { minCount: 0, users: [] } }],
+          },
+          voting: {
+            durationMs: 60_000,
+            exits: [{ afterMs: 60_000, requires: "majority", minVoters: 0, requiredVoters: { minCount: 0, voters: [] } }],
+          },
+          extendedVoting: {
+            durationMs: 60_000,
+            exits: [{ afterMs: 60_000, requires: "majority", minVoters: 0, requiredVoters: { minCount: 0, voters: [] } }],
+          },
+        },
+        pr: {
+          staleDays: 3,
+          maxPRsPerIssue: 3,
+          trustedReviewers: [],
+          intake: [{ method: "update" }],
+          mergeReady: null,
+        },
+      },
+      standup: { enabled: false, category: "" },
+    } as any;
+  }
+
+  describe("isVotingAutomationEnabled", () => {
+    it("should return true for hivemoot_vote method", () => {
+      const config = {
+        governance: { proposals: { decision: { method: "hivemoot_vote" } } },
+      } as any;
+
+      expect(isVotingAutomationEnabled(config)).toBe(true);
+    });
+
+    it("should return false for manual method", () => {
+      const config = {
+        governance: { proposals: { decision: { method: "manual" } } },
+      } as any;
+
+      expect(isVotingAutomationEnabled(config)).toBe(false);
+    });
+  });
+
+  describe("processRepository gating", () => {
+    const repo = {
+      owner: { login: "test-org" },
+      name: "test-repo",
+      full_name: "test-org/test-repo",
+    } as any;
+    const appId = 123;
+    const emptyIterator = async function* () {
+      // No issues in any phase
+    };
+
+    it("should skip discussion/voting automation when decision method is manual", async () => {
+      const fakeOctokit = {
+        rest: {
+          issues: {
+            listForRepo: vi.fn(),
+          },
+        },
+        paginate: {
+          iterator: vi.fn().mockReturnValue(emptyIterator()),
+        },
+      } as any;
+      mockLoadRepositoryConfig.mockResolvedValue(makeRepoConfig("manual"));
+
+      const result = await processRepository(fakeOctokit, repo, appId);
+
+      expect(result).toEqual({ skippedIssues: [], accessIssues: [] });
+      expect(mockCreateIssueOperations).not.toHaveBeenCalled();
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.stringContaining("skipping discussion/voting automation")
+      );
+    });
+
+    it("should continue processing when decision method is hivemoot_vote", async () => {
+      const fakeOctokit = {
+        rest: {
+          issues: {
+            listForRepo: vi.fn(),
+          },
+        },
+        paginate: {
+          iterator: vi.fn().mockReturnValue(emptyIterator()),
+        },
+      } as any;
+      mockLoadRepositoryConfig.mockResolvedValue(makeRepoConfig("hivemoot_vote"));
+
+      await processRepository(fakeOctokit, repo, appId);
+
+      expect(mockCreateIssueOperations).toHaveBeenCalled();
+    });
+  });
+
   describe("processIssuePhase", () => {
     const ref: IssueRef = { owner: "test-org", repo: "test-repo", issueNumber: 42 };
     const labelName = "governance:discussion";

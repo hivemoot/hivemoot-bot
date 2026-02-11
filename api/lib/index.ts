@@ -75,6 +75,7 @@ export type {
   VotingExit,
   DiscussionExit,
   ExitRequires,
+  ProposalDecisionMethod,
   IntakeMethod,
   MergeReadyConfig,
   StandupConfig,

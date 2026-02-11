@@ -58,6 +58,7 @@ describe("repo-config", () => {
     it("should return default values from env-derived config", () => {
       const defaults = getDefaultConfig();
 
+      expect(defaults.governance.proposals.decision.method).toBe("manual");
       expect(defaults.governance.proposals.discussion.durationMs).toBe(DISCUSSION_DURATION_MS);
       expect(defaults.governance.proposals.discussion.exits).toEqual([
         {
@@ -96,6 +97,8 @@ describe("repo-config", () => {
 version: 1
 governance:
   proposals:
+    decision:
+      method: hivemoot_vote
     discussion:
       exits:
         - afterMinutes: 30
@@ -145,6 +148,7 @@ governance:
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
         expect(config.version).toBe(1);
+        expect(config.governance.proposals.decision.method).toBe("hivemoot_vote");
         // Discussion exits parsed and sorted, durationMs from last exit
         // mode: "all" → minCount = users.length (backward compat)
         expect(config.governance.proposals.discussion.exits).toEqual([
@@ -187,6 +191,47 @@ governance:
 
         // Default exit should inherit the default requiredVoters
         expect(config.governance.proposals.voting.exits[0].requiredVoters).toEqual({ minCount: 0, voters: [] });
+      });
+
+      it("should default proposals decision method to manual when missing", async () => {
+        const configYaml = `
+governance:
+  proposals:
+    voting:
+      exits:
+        - afterMinutes: 60
+`;
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(configYaml),
+            encoding: "base64",
+          },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
+        expect(config.governance.proposals.decision.method).toBe("manual");
+      });
+
+      it("should default proposals decision method to manual when invalid", async () => {
+        const configYaml = `
+governance:
+  proposals:
+    decision:
+      method: invalid
+`;
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(configYaml),
+            encoding: "base64",
+          },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
+        expect(config.governance.proposals.decision.method).toBe("manual");
       });
 
       it("should convert mode: any to minCount: 1 (backward compat)", async () => {

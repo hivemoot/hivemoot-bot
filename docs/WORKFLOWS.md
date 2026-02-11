@@ -26,6 +26,7 @@ Issues go through a timed governance lifecycle with community voting.
 ```
 
 *Durations are configurable via environment variables. Default is 24 hours.
+Scheduled discussion/voting transitions run only when `.github/hivemoot.yml` sets `governance.proposals.decision.method: hivemoot_vote` (default is `manual`).
 
 ### Phase Details
 

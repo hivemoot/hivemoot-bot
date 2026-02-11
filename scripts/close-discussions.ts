@@ -48,6 +48,13 @@ interface AccessIssue {
   reason: AccessIssueReason;
 }
 
+/**
+ * Whether scheduled discussion/voting automation should run for a repo.
+ */
+export function isVotingAutomationEnabled(config: EffectiveConfig): boolean {
+  return config.governance.proposals.decision.method === "hivemoot_vote";
+}
+
 // ───────────────────────────────────────────────────────────────────────────────
 // Retry Utility
 // ───────────────────────────────────────────────────────────────────────────────
@@ -582,7 +589,7 @@ async function processPhaseIssues(
  *
  * @returns Skipped and access issues encountered during processing.
  */
-async function processRepository(
+export async function processRepository(
   octokit: InstanceType<typeof Octokit>,
   repo: Repository,
   appId: number
@@ -597,6 +604,12 @@ async function processRepository(
   try {
     // Load per-repo configuration (falls back to defaults if not present)
     const repoConfig: EffectiveConfig = await loadRepositoryConfig(octokit, owner, repoName);
+    if (!isVotingAutomationEnabled(repoConfig)) {
+      logger.info(
+        `[${repo.full_name}] proposals.decision.method=${repoConfig.governance.proposals.decision.method}; skipping discussion/voting automation`
+      );
+      return { skippedIssues, accessIssues };
+    }
 
     const issues = createIssueOperations(octokit, { appId });
     const governance = createGovernanceService(issues);

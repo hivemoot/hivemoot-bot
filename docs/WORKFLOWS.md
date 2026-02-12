@@ -25,8 +25,10 @@ Issues go through a timed governance lifecycle with community voting.
                                                                Still tied → closed & locked
 ```
 
-*Durations are configurable via environment variables. Default is 24 hours.
-Scheduled discussion/voting transitions run only when `.github/hivemoot.yml` sets `governance.proposals.decision.method: hivemoot_vote` (default is `manual`).
+*Durations are configurable via exit definitions in `.github/hivemoot.yml`.
+Scheduled transitions are controlled per phase via `exits[].type`:
+- `type: manual` (default): no scheduled transition for that phase.
+- `type: auto`: scheduled transition is enabled for that phase.
 
 ### Phase Details
 
@@ -70,7 +72,10 @@ Additional rules apply to keep voting fair and deterministic:
 - Multiple exits can be configured with different time gates and conditions. Early exits (all except the last) are evaluated first-match-wins. The last exit is the deadline.
 - Each exit can also specify a `requires` condition: `majority` (default) or `unanimous`.
 
-These settings are configured per repo in `.github/hivemoot.yml` under `governance.proposals.voting.exits`.
+These settings are configured per repo in `.github/hivemoot.yml` under:
+- `governance.proposals.discussion.exits`
+- `governance.proposals.voting.exits`
+- `governance.proposals.extendedVoting.exits`
 
 ## Pull Requests Workflow
 

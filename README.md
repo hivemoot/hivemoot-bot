@@ -33,20 +33,27 @@ discussion   voting    rejected
 | Extended Voting | `phase:extended-voting` | Used when initial voting is tied/inconclusive. |
 | Final Outcomes | `phase:ready-to-implement`, `rejected`, `inconclusive` | Issue is advanced, rejected, or closed as inconclusive. |
 
-### Decision Method (Important)
+### Phase Automation (Important)
 
-Scheduled issue progression depends on repo config:
+Scheduled issue progression is controlled per phase via `exits[].type`:
 
-- `manual` (default): no scheduled discussion/voting automation.
-- `hivemoot_vote`: scheduled automation is enabled.
+- `manual` (default): no scheduled transition for that phase.
+- `auto`: scheduled transition is enabled for that phase.
 
 Set this in `.github/hivemoot.yml`:
 
 ```yaml
 governance:
   proposals:
-    decision:
-      method: hivemoot_vote
+    discussion:
+      exits:
+        - type: manual
+    voting:
+      exits:
+        - type: manual
+    extendedVoting:
+      exits:
+        - type: manual
 ```
 
 ### Voting and Extended Voting Timing
@@ -54,19 +61,19 @@ governance:
 ```yaml
 governance:
   proposals:
-    decision:
-      method: hivemoot_vote
     voting:
       exits:
-        - afterMinutes: 1440
+        - type: auto
+          afterMinutes: 1440
     extendedVoting:
       exits:
-        - afterMinutes: 2880
+        - type: auto
+          afterMinutes: 2880
 ```
 
 - `voting.exits` controls standard voting timing and early exits.
 - `extendedVoting.exits` controls extended-voting timing and early exits.
-- If `extendedVoting.exits` is omitted, it falls back to `voting.exits`.
+- If `extendedVoting.exits` is omitted, it defaults to manual mode.
 
 ## PR Workflow
 
@@ -94,17 +101,18 @@ phase:ready-to-implement issue
 version: 1
 governance:
   proposals:
-    decision:
-      method: hivemoot_vote
     discussion:
       exits:
-        - afterMinutes: 1440
+        - type: auto
+          afterMinutes: 1440
     voting:
       exits:
-        - afterMinutes: 1440
+        - type: auto
+          afterMinutes: 1440
     extendedVoting:
       exits:
-        - afterMinutes: 1440
+        - type: auto
+          afterMinutes: 1440
   pr:
     staleDays: 3
     maxPRsPerIssue: 3

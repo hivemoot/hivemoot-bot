@@ -73,10 +73,15 @@ export type {
   RequiredVotersConfig,
   RequiredReadyConfig,
   VotingExit,
+  VotingAutoExit,
+  VotingManualExit,
   DiscussionExit,
+  DiscussionAutoExit,
+  DiscussionManualExit,
   ExitRequires,
-  ProposalDecisionMethod,
+  ExitType,
   IntakeMethod,
   MergeReadyConfig,
   StandupConfig,
 } from "./repo-config.js";
+export { isAutoVotingExit, isAutoDiscussionExit } from "./repo-config.js";

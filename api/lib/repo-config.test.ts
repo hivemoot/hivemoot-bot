@@ -2,8 +2,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { loadRepositoryConfig, getDefaultConfig } from "./repo-config.js";
 import {
   CONFIG_BOUNDS,
-  DISCUSSION_DURATION_MS,
-  VOTING_DURATION_MS,
   MAX_PRS_PER_ISSUE,
   PR_STALE_THRESHOLD_DAYS,
 } from "../config.js";
@@ -21,8 +19,6 @@ import {
  */
 
 const MS = 60 * 1000;
-const defaultDurationMs = VOTING_DURATION_MS;
-
 // Helper to encode content as base64
 function encodeBase64(content: string): string {
   return Buffer.from(content).toString("base64");
@@ -49,6 +45,26 @@ function createMockOctokit(response: {
   };
 }
 
+function getAutoVotingExit(
+  exit: ReturnType<typeof getDefaultConfig>["governance"]["proposals"]["voting"]["exits"][number]
+) {
+  expect(exit.type).toBe("auto");
+  if (exit.type !== "auto") {
+    throw new Error("Expected an auto voting exit");
+  }
+  return exit;
+}
+
+function getAutoDiscussionExit(
+  exit: ReturnType<typeof getDefaultConfig>["governance"]["proposals"]["discussion"]["exits"][number]
+) {
+  expect(exit.type).toBe("auto");
+  if (exit.type !== "auto") {
+    throw new Error("Expected an auto discussion exit");
+  }
+  return exit;
+}
+
 describe("repo-config", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -58,33 +74,12 @@ describe("repo-config", () => {
     it("should return default values from env-derived config", () => {
       const defaults = getDefaultConfig();
 
-      expect(defaults.governance.proposals.decision.method).toBe("manual");
-      expect(defaults.governance.proposals.discussion.durationMs).toBe(DISCUSSION_DURATION_MS);
-      expect(defaults.governance.proposals.discussion.exits).toEqual([
-        {
-          afterMs: DISCUSSION_DURATION_MS,
-          minReady: 0,
-          requiredReady: { minCount: 0, users: [] },
-        },
-      ]);
-      expect(defaults.governance.proposals.voting.exits).toEqual([
-        {
-          afterMs: defaultDurationMs,
-          requires: "majority",
-          minVoters: CONFIG_BOUNDS.voting.minVoters.default,
-          requiredVoters: { minCount: 0, voters: [] },
-        },
-      ]);
-      expect(defaults.governance.proposals.voting.durationMs).toBe(defaultDurationMs);
-      expect(defaults.governance.proposals.extendedVoting.exits).toEqual([
-        {
-          afterMs: defaultDurationMs,
-          requires: "majority",
-          minVoters: CONFIG_BOUNDS.voting.minVoters.default,
-          requiredVoters: { minCount: 0, voters: [] },
-        },
-      ]);
-      expect(defaults.governance.proposals.extendedVoting.durationMs).toBe(defaultDurationMs);
+      expect(defaults.governance.proposals.discussion.exits).toEqual([{ type: "manual" }]);
+      expect(defaults.governance.proposals.discussion.durationMs).toBe(0);
+      expect(defaults.governance.proposals.voting.exits).toEqual([{ type: "manual" }]);
+      expect(defaults.governance.proposals.voting.durationMs).toBe(0);
+      expect(defaults.governance.proposals.extendedVoting.exits).toEqual([{ type: "manual" }]);
+      expect(defaults.governance.proposals.extendedVoting.durationMs).toBe(0);
       expect(defaults.governance.pr.staleDays).toBe(PR_STALE_THRESHOLD_DAYS);
       expect(defaults.governance.pr.maxPRsPerIssue).toBe(MAX_PRS_PER_ISSUE);
     });
@@ -97,21 +92,22 @@ describe("repo-config", () => {
 version: 1
 governance:
   proposals:
-    decision:
-      method: hivemoot_vote
     discussion:
       exits:
-        - afterMinutes: 30
+        - type: auto
+          afterMinutes: 30
           minReady: 3
           requiredReady:
             mode: all
             users:
               - seed-scout
               - seed-worker
-        - afterMinutes: 120
+        - type: auto
+          afterMinutes: 120
     voting:
       exits:
-        - afterMinutes: 15
+        - type: auto
+          afterMinutes: 15
           requires: unanimous
           minVoters: 3
           requiredVoters:
@@ -119,14 +115,16 @@ governance:
             voters:
               - seed-scout
               - seed-worker
-        - afterMinutes: 60
+        - type: auto
+          afterMinutes: 60
           minVoters: 2
           requiredVoters:
             mode: any
             voters:
               - seed-scout
               - seed-worker
-        - afterMinutes: 360
+        - type: auto
+          afterMinutes: 360
           minVoters: 3
           requiredVoters:
             mode: all
@@ -148,25 +146,23 @@ governance:
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
         expect(config.version).toBe(1);
-        expect(config.governance.proposals.decision.method).toBe("hivemoot_vote");
         // Discussion exits parsed and sorted, durationMs from last exit
         // mode: "all" → minCount = users.length (backward compat)
         expect(config.governance.proposals.discussion.exits).toEqual([
-          { afterMs: 30 * MS, minReady: 3, requiredReady: { minCount: 2, users: ["seed-scout", "seed-worker"] } },
-          { afterMs: 120 * MS, minReady: 0, requiredReady: { minCount: 0, users: [] } },
+          { type: "auto", afterMs: 30 * MS, minReady: 3, requiredReady: { minCount: 2, users: ["seed-scout", "seed-worker"] } },
+          { type: "auto", afterMs: 120 * MS, minReady: 0, requiredReady: { minCount: 0, users: [] } },
         ]);
         expect(config.governance.proposals.discussion.durationMs).toBe(120 * MS);
         // mode: "all" → minCount = voters.length, mode: "any" → minCount = 1
         expect(config.governance.proposals.voting.exits).toEqual([
-          { afterMs: 15 * MS, requires: "unanimous", minVoters: 3, requiredVoters: { minCount: 2, voters: ["seed-scout", "seed-worker"] } },
-          { afterMs: 60 * MS, requires: "majority", minVoters: 2, requiredVoters: { minCount: 1, voters: ["seed-scout", "seed-worker"] } },
-          { afterMs: 360 * MS, requires: "majority", minVoters: 3, requiredVoters: { minCount: 2, voters: ["seed-scout", "seed-worker"] } },
+          { type: "auto", afterMs: 15 * MS, requires: "unanimous", minVoters: 3, requiredVoters: { minCount: 2, voters: ["seed-scout", "seed-worker"] } },
+          { type: "auto", afterMs: 60 * MS, requires: "majority", minVoters: 2, requiredVoters: { minCount: 1, voters: ["seed-scout", "seed-worker"] } },
+          { type: "auto", afterMs: 360 * MS, requires: "majority", minVoters: 3, requiredVoters: { minCount: 2, voters: ["seed-scout", "seed-worker"] } },
         ]);
         // durationMs derived from last exit
         expect(config.governance.proposals.voting.durationMs).toBe(360 * MS);
-        // extendedVoting falls back to voting exits when not explicitly configured
-        expect(config.governance.proposals.extendedVoting.exits).toEqual(config.governance.proposals.voting.exits);
-        expect(config.governance.proposals.extendedVoting.durationMs).toBe(360 * MS);
+        expect(config.governance.proposals.extendedVoting.exits).toEqual([{ type: "manual" }]);
+        expect(config.governance.proposals.extendedVoting.durationMs).toBe(0);
         expect(config.governance.pr.staleDays).toBe(3);
         expect(config.governance.pr.maxPRsPerIssue).toBe(3);
       });
@@ -177,7 +173,8 @@ governance:
   proposals:
     voting:
       exits:
-        - afterMinutes: 60
+        - type: auto
+          afterMinutes: 60
 `;
         const octokit = createMockOctokit({
           data: {
@@ -190,48 +187,10 @@ governance:
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
         // Default exit should inherit the default requiredVoters
-        expect(config.governance.proposals.voting.exits[0].requiredVoters).toEqual({ minCount: 0, voters: [] });
-      });
-
-      it("should default proposals decision method to manual when missing", async () => {
-        const configYaml = `
-governance:
-  proposals:
-    voting:
-      exits:
-        - afterMinutes: 60
-`;
-        const octokit = createMockOctokit({
-          data: {
-            type: "file",
-            content: encodeBase64(configYaml),
-            encoding: "base64",
-          },
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[0]).requiredVoters).toEqual({
+          minCount: 0,
+          voters: [],
         });
-
-        const config = await loadRepositoryConfig(octokit, "owner", "repo");
-
-        expect(config.governance.proposals.decision.method).toBe("manual");
-      });
-
-      it("should default proposals decision method to manual when invalid", async () => {
-        const configYaml = `
-governance:
-  proposals:
-    decision:
-      method: invalid
-`;
-        const octokit = createMockOctokit({
-          data: {
-            type: "file",
-            content: encodeBase64(configYaml),
-            encoding: "base64",
-          },
-        });
-
-        const config = await loadRepositoryConfig(octokit, "owner", "repo");
-
-        expect(config.governance.proposals.decision.method).toBe("manual");
       });
 
       it("should convert mode: any to minCount: 1 (backward compat)", async () => {
@@ -240,7 +199,8 @@ governance:
   proposals:
     voting:
       exits:
-        - afterMinutes: 60
+        - type: auto
+          afterMinutes: 60
           requiredVoters:
             mode: any
             voters:
@@ -256,7 +216,7 @@ governance:
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
-        expect(config.governance.proposals.voting.exits[0].requiredVoters).toEqual({
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[0]).requiredVoters).toEqual({
           minCount: 1,
           voters: ["alice"],
         });
@@ -268,7 +228,8 @@ governance:
   proposals:
     voting:
       exits:
-        - afterMinutes: 60
+        - type: auto
+          afterMinutes: 60
           requiredVoters:
             mode: invalid
             voters:
@@ -285,7 +246,7 @@ governance:
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
         // Invalid mode defaults to "all" → minCount = voters.length
-        expect(config.governance.proposals.voting.exits[0].requiredVoters.minCount).toBe(1);
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[0]).requiredVoters.minCount).toBe(1);
       });
 
       it("should default to minCount = voters.length when neither minCount nor mode specified", async () => {
@@ -294,7 +255,8 @@ governance:
   proposals:
     voting:
       exits:
-        - afterMinutes: 60
+        - type: auto
+          afterMinutes: 60
           requiredVoters:
             voters:
               - alice
@@ -309,8 +271,10 @@ governance:
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
-        expect(config.governance.proposals.voting.exits[0].requiredVoters.minCount).toBe(1);
-        expect(config.governance.proposals.voting.exits[0].requiredVoters.voters).toEqual(["alice"]);
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[0]).requiredVoters.minCount).toBe(1);
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[0]).requiredVoters.voters).toEqual([
+          "alice",
+        ]);
       });
 
       it("should handle array shorthand for requiredVoters", async () => {
@@ -319,7 +283,8 @@ governance:
   proposals:
     voting:
       exits:
-        - afterMinutes: 60
+        - type: auto
+          afterMinutes: 60
           requiredVoters:
             - seed-scout
             - seed-worker
@@ -334,7 +299,7 @@ governance:
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
-        expect(config.governance.proposals.voting.exits[0].requiredVoters).toEqual({
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[0]).requiredVoters).toEqual({
           minCount: 2,
           voters: ["seed-scout", "seed-worker"],
         });
@@ -346,7 +311,8 @@ governance:
   proposals:
     voting:
       exits:
-        - afterMinutes: 60
+        - type: auto
+          afterMinutes: 60
           requiredVoters:
             mode: all
             voters:
@@ -364,7 +330,7 @@ governance:
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
-        expect(config.governance.proposals.voting.exits[0].requiredVoters.voters).toEqual(["seed-scout", "seed-worker"]);
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[0]).requiredVoters.voters).toEqual(["seed-scout", "seed-worker"]);
       });
 
       it("should strip leading @ from requiredVoters entries", async () => {
@@ -373,7 +339,8 @@ governance:
   proposals:
     voting:
       exits:
-        - afterMinutes: 60
+        - type: auto
+          afterMinutes: 60
           requiredVoters:
             voters:
               - "@seed-scout"
@@ -389,7 +356,7 @@ governance:
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
-        expect(config.governance.proposals.voting.exits[0].requiredVoters.voters).toEqual(["seed-scout", "seed-worker"]);
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[0]).requiredVoters.voters).toEqual(["seed-scout", "seed-worker"]);
       });
 
       it("should trim whitespace from requiredVoters entries", async () => {
@@ -398,7 +365,8 @@ governance:
   proposals:
     voting:
       exits:
-        - afterMinutes: 60
+        - type: auto
+          afterMinutes: 60
           requiredVoters:
             voters:
               - "  seed-scout  "
@@ -414,7 +382,7 @@ governance:
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
-        expect(config.governance.proposals.voting.exits[0].requiredVoters.voters).toEqual(["seed-scout", "seed-worker"]);
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[0]).requiredVoters.voters).toEqual(["seed-scout", "seed-worker"]);
       });
 
       it("should skip entries that are only @ or whitespace", async () => {
@@ -423,7 +391,8 @@ governance:
   proposals:
     voting:
       exits:
-        - afterMinutes: 60
+        - type: auto
+          afterMinutes: 60
           requiredVoters:
             voters:
               - "@"
@@ -440,7 +409,7 @@ governance:
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
-        expect(config.governance.proposals.voting.exits[0].requiredVoters.voters).toEqual(["valid-user"]);
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[0]).requiredVoters.voters).toEqual(["valid-user"]);
       });
 
       it("should skip invalid GitHub usernames in requiredVoters", async () => {
@@ -449,7 +418,8 @@ governance:
   proposals:
     voting:
       exits:
-        - afterMinutes: 60
+        - type: auto
+          afterMinutes: 60
           requiredVoters:
             voters:
               - "-bad"
@@ -468,7 +438,7 @@ governance:
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
-        expect(config.governance.proposals.voting.exits[0].requiredVoters.voters).toEqual(["valid-user"]);
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[0]).requiredVoters.voters).toEqual(["valid-user"]);
       });
 
       it("should skip requiredVoters entries that exceed max username length", async () => {
@@ -478,7 +448,8 @@ governance:
   proposals:
     voting:
       exits:
-        - afterMinutes: 60
+        - type: auto
+          afterMinutes: 60
           requiredVoters:
             voters:
               - ${tooLong}
@@ -494,7 +465,7 @@ governance:
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
-        expect(config.governance.proposals.voting.exits[0].requiredVoters.voters).toEqual(["valid-user"]);
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[0]).requiredVoters.voters).toEqual(["valid-user"]);
       });
 
       it("should skip non-string entries in requiredVoters", async () => {
@@ -503,7 +474,8 @@ governance:
   proposals:
     voting:
       exits:
-        - afterMinutes: 60
+        - type: auto
+          afterMinutes: 60
           requiredVoters:
             voters:
               - valid-user
@@ -521,7 +493,7 @@ governance:
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
-        expect(config.governance.proposals.voting.exits[0].requiredVoters.voters).toEqual(["valid-user", "another-user"]);
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[0]).requiredVoters.voters).toEqual(["valid-user", "another-user"]);
       });
 
     });
@@ -533,7 +505,8 @@ governance:
   proposals:
     voting:
       exits:
-        - afterMinutes: 120
+        - type: auto
+          afterMinutes: 120
           minVoters: 2
 `;
         const octokit = createMockOctokit({
@@ -548,6 +521,7 @@ governance:
 
         expect(config.governance.proposals.voting.exits).toHaveLength(1);
         expect(config.governance.proposals.voting.exits[0]).toEqual({
+          type: "auto",
           afterMs: 120 * MS,
           requires: "majority",
           minVoters: 2,
@@ -556,13 +530,14 @@ governance:
         expect(config.governance.proposals.voting.durationMs).toBe(120 * MS);
       });
 
-      it("should use voting exits for extendedVoting when extendedVoting.exits is missing", async () => {
+      it("should default extendedVoting to manual when extendedVoting.exits is missing", async () => {
         const configYaml = `
 governance:
   proposals:
     voting:
       exits:
-        - afterMinutes: 120
+        - type: auto
+          afterMinutes: 120
           minVoters: 2
 `;
         const octokit = createMockOctokit({
@@ -575,12 +550,8 @@ governance:
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
-        expect(config.governance.proposals.extendedVoting.exits).toEqual(
-          config.governance.proposals.voting.exits
-        );
-        expect(config.governance.proposals.extendedVoting.durationMs).toBe(
-          config.governance.proposals.voting.durationMs
-        );
+        expect(config.governance.proposals.extendedVoting.exits).toEqual([{ type: "manual" }]);
+        expect(config.governance.proposals.extendedVoting.durationMs).toBe(0);
       });
 
       it("should parse extendedVoting exits independently when configured", async () => {
@@ -589,13 +560,16 @@ governance:
   proposals:
     voting:
       exits:
-        - afterMinutes: 60
+        - type: auto
+          afterMinutes: 60
           minVoters: 2
     extendedVoting:
       exits:
-        - afterMinutes: 120
+        - type: auto
+          afterMinutes: 120
           minVoters: 3
-        - afterMinutes: 2880
+        - type: auto
+          afterMinutes: 2880
           minVoters: 1
 `;
         const octokit = createMockOctokit({
@@ -610,8 +584,8 @@ governance:
 
         expect(config.governance.proposals.voting.durationMs).toBe(60 * MS);
         expect(config.governance.proposals.extendedVoting.exits).toEqual([
-          { afterMs: 120 * MS, requires: "majority", minVoters: 3, requiredVoters: { minCount: 0, voters: [] } },
-          { afterMs: 2880 * MS, requires: "majority", minVoters: 1, requiredVoters: { minCount: 0, voters: [] } },
+          { type: "auto", afterMs: 120 * MS, requires: "majority", minVoters: 3, requiredVoters: { minCount: 0, voters: [] } },
+          { type: "auto", afterMs: 2880 * MS, requires: "majority", minVoters: 1, requiredVoters: { minCount: 0, voters: [] } },
         ]);
         expect(config.governance.proposals.extendedVoting.durationMs).toBe(2880 * MS);
       });
@@ -622,9 +596,12 @@ governance:
   proposals:
     voting:
       exits:
-        - afterMinutes: 360
-        - afterMinutes: 15
-        - afterMinutes: 60
+        - type: auto
+          afterMinutes: 360
+        - type: auto
+          afterMinutes: 15
+        - type: auto
+          afterMinutes: 60
 `;
         const octokit = createMockOctokit({
           data: {
@@ -637,9 +614,9 @@ governance:
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
         expect(config.governance.proposals.voting.exits).toHaveLength(3);
-        expect(config.governance.proposals.voting.exits[0].afterMs).toBe(15 * MS);
-        expect(config.governance.proposals.voting.exits[1].afterMs).toBe(60 * MS);
-        expect(config.governance.proposals.voting.exits[2].afterMs).toBe(360 * MS);
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[0]).afterMs).toBe(15 * MS);
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[1]).afterMs).toBe(60 * MS);
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[2]).afterMs).toBe(360 * MS);
         // deadline = last exit
         expect(config.governance.proposals.voting.durationMs).toBe(360 * MS);
       });
@@ -650,9 +627,11 @@ governance:
   proposals:
     voting:
       exits:
-        - afterMinutes: 15
+        - type: auto
+          afterMinutes: 15
           requires: unanimous
-        - afterMinutes: 360
+        - type: auto
+          afterMinutes: 360
 `;
         const octokit = createMockOctokit({
           data: {
@@ -664,8 +643,8 @@ governance:
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
-        expect(config.governance.proposals.voting.exits[0].requires).toBe("unanimous");
-        expect(config.governance.proposals.voting.exits[1].requires).toBe("majority");
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[0]).requires).toBe("unanimous");
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[1]).requires).toBe("majority");
       });
 
       it("should default missing requires to majority", async () => {
@@ -674,7 +653,8 @@ governance:
   proposals:
     voting:
       exits:
-        - afterMinutes: 60
+        - type: auto
+          afterMinutes: 60
 `;
         const octokit = createMockOctokit({
           data: {
@@ -686,7 +666,7 @@ governance:
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
-        expect(config.governance.proposals.voting.exits[0].requires).toBe("majority");
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[0]).requires).toBe("majority");
       });
 
       it("should default invalid requires to majority", async () => {
@@ -695,7 +675,8 @@ governance:
   proposals:
     voting:
       exits:
-        - afterMinutes: 60
+        - type: auto
+          afterMinutes: 60
           requires: supermajority
 `;
         const octokit = createMockOctokit({
@@ -708,7 +689,7 @@ governance:
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
-        expect(config.governance.proposals.voting.exits[0].requires).toBe("majority");
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[0]).requires).toBe("majority");
       });
 
       it("should parse per-exit requiredVoters and minVoters", async () => {
@@ -717,14 +698,16 @@ governance:
   proposals:
     voting:
       exits:
-        - afterMinutes: 60
+        - type: auto
+          afterMinutes: 60
           minVoters: 5
           requiredVoters:
             mode: any
             voters:
               - alice
               - bob
-        - afterMinutes: 360
+        - type: auto
+          afterMinutes: 360
           minVoters: 2
 `;
         const octokit = createMockOctokit({
@@ -737,14 +720,14 @@ governance:
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
-        expect(config.governance.proposals.voting.exits[0].requiredVoters).toEqual({
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[0]).requiredVoters).toEqual({
           minCount: 1,
           voters: ["alice", "bob"],
         });
-        expect(config.governance.proposals.voting.exits[0].minVoters).toBe(5);
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[0]).minVoters).toBe(5);
         // Second exit: no requiredVoters specified, inherits default
-        expect(config.governance.proposals.voting.exits[1].requiredVoters).toEqual({ minCount: 0, voters: [] });
-        expect(config.governance.proposals.voting.exits[1].minVoters).toBe(2);
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[1]).requiredVoters).toEqual({ minCount: 0, voters: [] });
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[1]).minVoters).toBe(2);
       });
 
       it("should allow different exits with different minVoters/requiredVoters", async () => {
@@ -753,7 +736,8 @@ governance:
   proposals:
     voting:
       exits:
-        - afterMinutes: 15
+        - type: auto
+          afterMinutes: 15
           requires: unanimous
           minVoters: 3
           requiredVoters:
@@ -761,7 +745,8 @@ governance:
             voters:
               - alice
               - bob
-        - afterMinutes: 360
+        - type: auto
+          afterMinutes: 360
           minVoters: 1
           requiredVoters:
             mode: any
@@ -778,10 +763,10 @@ governance:
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
-        expect(config.governance.proposals.voting.exits[0].minVoters).toBe(3);
-        expect(config.governance.proposals.voting.exits[0].requiredVoters.minCount).toBe(2); // mode: all → voters.length
-        expect(config.governance.proposals.voting.exits[1].minVoters).toBe(1);
-        expect(config.governance.proposals.voting.exits[1].requiredVoters.minCount).toBe(1); // mode: any → 1
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[0]).minVoters).toBe(3);
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[0]).requiredVoters.minCount).toBe(2); // mode: all → voters.length
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[1]).minVoters).toBe(1);
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[1]).requiredVoters.minCount).toBe(1); // mode: any → 1
       });
 
       it("should clamp exit afterMinutes per exit", async () => {
@@ -790,8 +775,10 @@ governance:
   proposals:
     voting:
       exits:
-        - afterMinutes: 0
-        - afterMinutes: 999999999
+        - type: auto
+          afterMinutes: 0
+        - type: auto
+          afterMinutes: 999999999
 `;
         const octokit = createMockOctokit({
           data: {
@@ -805,11 +792,11 @@ governance:
 
         const minMs = CONFIG_BOUNDS.phaseDurationMinutes.min * MS;
         const maxMs = CONFIG_BOUNDS.phaseDurationMinutes.max * MS;
-        expect(config.governance.proposals.voting.exits[0].afterMs).toBe(minMs);
-        expect(config.governance.proposals.voting.exits[1].afterMs).toBe(maxMs);
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[0]).afterMs).toBe(minMs);
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[1]).afterMs).toBe(maxMs);
       });
 
-      it("should use default single exit for empty array", async () => {
+      it("should use manual exit for empty array", async () => {
         const configYaml = `
 governance:
   proposals:
@@ -826,8 +813,150 @@ governance:
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
+        expect(config.governance.proposals.voting.exits).toEqual([{ type: "manual" }]);
+        expect(config.governance.proposals.voting.durationMs).toBe(0);
+      });
+
+      it("should resolve mixed manual and auto voting exits to manual", async () => {
+        const configYaml = `
+governance:
+  proposals:
+    voting:
+      exits:
+        - type: manual
+        - type: auto
+          afterMinutes: 60
+`;
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(configYaml),
+            encoding: "base64",
+          },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
+        expect(config.governance.proposals.voting.exits).toEqual([{ type: "manual" }]);
+        expect(config.governance.proposals.voting.durationMs).toBe(0);
+      });
+
+      it("should skip voting exit entries with invalid type", async () => {
+        const configYaml = `
+governance:
+  proposals:
+    voting:
+      exits:
+        - type: invalid
+        - type: auto
+          afterMinutes: 60
+`;
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(configYaml),
+            encoding: "base64",
+          },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
         expect(config.governance.proposals.voting.exits).toHaveLength(1);
-        expect(config.governance.proposals.voting.exits[0].afterMs).toBe(defaultDurationMs);
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[0]).afterMs).toBe(60 * MS);
+      });
+
+      it("should skip non-object voting exit entries", async () => {
+        const configYaml = `
+governance:
+  proposals:
+    voting:
+      exits:
+        - "not-an-object"
+        - type: auto
+          afterMinutes: 60
+`;
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(configYaml),
+            encoding: "base64",
+          },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
+        expect(config.governance.proposals.voting.exits).toHaveLength(1);
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[0]).afterMs).toBe(60 * MS);
+      });
+
+      it("should fall back to manual when all voting exit entries are invalid", async () => {
+        const configYaml = `
+governance:
+  proposals:
+    voting:
+      exits:
+        - type: invalid
+        - type: bogus
+`;
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(configYaml),
+            encoding: "base64",
+          },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
+        expect(config.governance.proposals.voting.exits).toEqual([{ type: "manual" }]);
+        expect(config.governance.proposals.voting.durationMs).toBe(0);
+      });
+
+      it("should collapse multiple manual voting exits to a single manual exit", async () => {
+        const configYaml = `
+governance:
+  proposals:
+    voting:
+      exits:
+        - type: manual
+        - type: manual
+`;
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(configYaml),
+            encoding: "base64",
+          },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
+        expect(config.governance.proposals.voting.exits).toEqual([{ type: "manual" }]);
+        expect(config.governance.proposals.voting.durationMs).toBe(0);
+      });
+
+      it("should skip auto voting exit with missing afterMinutes", async () => {
+        const configYaml = `
+governance:
+  proposals:
+    voting:
+      exits:
+        - type: auto
+        - type: auto
+          afterMinutes: 60
+`;
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(configYaml),
+            encoding: "base64",
+          },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
+        expect(config.governance.proposals.voting.exits).toHaveLength(1);
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[0]).afterMs).toBe(60 * MS);
       });
     });
 
@@ -838,7 +967,8 @@ governance:
   proposals:
     discussion:
       exits:
-        - afterMinutes: 30
+        - type: auto
+          afterMinutes: 30
           minReady: 3
           requiredReady:
             mode: all
@@ -846,14 +976,16 @@ governance:
               - seed-scout
               - seed-worker
               - seed-analyst
-        - afterMinutes: 120
+        - type: auto
+          afterMinutes: 120
           minReady: 2
           requiredReady:
             mode: any
             users:
               - seed-scout
               - seed-worker
-        - afterMinutes: 1440
+        - type: auto
+          afterMinutes: 1440
 `;
         const octokit = createMockOctokit({
           data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
@@ -862,20 +994,21 @@ governance:
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
         expect(config.governance.proposals.discussion.exits).toEqual([
-          { afterMs: 30 * MS, minReady: 3, requiredReady: { minCount: 3, users: ["seed-scout", "seed-worker", "seed-analyst"] } },
-          { afterMs: 120 * MS, minReady: 2, requiredReady: { minCount: 1, users: ["seed-scout", "seed-worker"] } },
-          { afterMs: 1440 * MS, minReady: 0, requiredReady: { minCount: 0, users: [] } },
+          { type: "auto", afterMs: 30 * MS, minReady: 3, requiredReady: { minCount: 3, users: ["seed-scout", "seed-worker", "seed-analyst"] } },
+          { type: "auto", afterMs: 120 * MS, minReady: 2, requiredReady: { minCount: 1, users: ["seed-scout", "seed-worker"] } },
+          { type: "auto", afterMs: 1440 * MS, minReady: 0, requiredReady: { minCount: 0, users: [] } },
         ]);
         expect(config.governance.proposals.discussion.durationMs).toBe(1440 * MS);
       });
 
-      it("should default to single exit at DISCUSSION_DURATION_MS when no exits configured", async () => {
+      it("should default discussion to manual when no exits configured", async () => {
         const configYaml = `
 governance:
   proposals:
     voting:
       exits:
-        - afterMinutes: 60
+        - type: auto
+          afterMinutes: 60
 `;
         const octokit = createMockOctokit({
           data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
@@ -883,14 +1016,11 @@ governance:
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
-        expect(config.governance.proposals.discussion.exits).toHaveLength(1);
-        expect(config.governance.proposals.discussion.exits[0].afterMs).toBe(DISCUSSION_DURATION_MS);
-        expect(config.governance.proposals.discussion.exits[0].minReady).toBe(0);
-        expect(config.governance.proposals.discussion.exits[0].requiredReady).toEqual({ minCount: 0, users: [] });
-        expect(config.governance.proposals.discussion.durationMs).toBe(DISCUSSION_DURATION_MS);
+        expect(config.governance.proposals.discussion.exits).toEqual([{ type: "manual" }]);
+        expect(config.governance.proposals.discussion.durationMs).toBe(0);
       });
 
-      it("should default to single exit when empty array", async () => {
+      it("should default discussion to manual when exits are empty", async () => {
         const configYaml = `
 governance:
   proposals:
@@ -903,8 +1033,126 @@ governance:
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
+        expect(config.governance.proposals.discussion.exits).toEqual([{ type: "manual" }]);
+        expect(config.governance.proposals.discussion.durationMs).toBe(0);
+      });
+
+      it("should resolve mixed manual and auto discussion exits to manual", async () => {
+        const configYaml = `
+governance:
+  proposals:
+    discussion:
+      exits:
+        - type: auto
+          afterMinutes: 30
+        - type: manual
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
+        expect(config.governance.proposals.discussion.exits).toEqual([{ type: "manual" }]);
+        expect(config.governance.proposals.discussion.durationMs).toBe(0);
+      });
+
+      it("should skip discussion exit entries with invalid type", async () => {
+        const configYaml = `
+governance:
+  proposals:
+    discussion:
+      exits:
+        - type: invalid
+        - type: auto
+          afterMinutes: 60
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
         expect(config.governance.proposals.discussion.exits).toHaveLength(1);
-        expect(config.governance.proposals.discussion.exits[0].afterMs).toBe(DISCUSSION_DURATION_MS);
+        expect(getAutoDiscussionExit(config.governance.proposals.discussion.exits[0]).afterMs).toBe(60 * MS);
+      });
+
+      it("should skip non-object discussion exit entries", async () => {
+        const configYaml = `
+governance:
+  proposals:
+    discussion:
+      exits:
+        - "not-an-object"
+        - type: auto
+          afterMinutes: 60
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
+        expect(config.governance.proposals.discussion.exits).toHaveLength(1);
+        expect(getAutoDiscussionExit(config.governance.proposals.discussion.exits[0]).afterMs).toBe(60 * MS);
+      });
+
+      it("should fall back to manual when all discussion exit entries are invalid", async () => {
+        const configYaml = `
+governance:
+  proposals:
+    discussion:
+      exits:
+        - type: invalid
+        - type: bogus
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
+        expect(config.governance.proposals.discussion.exits).toEqual([{ type: "manual" }]);
+        expect(config.governance.proposals.discussion.durationMs).toBe(0);
+      });
+
+      it("should collapse multiple manual discussion exits to a single manual exit", async () => {
+        const configYaml = `
+governance:
+  proposals:
+    discussion:
+      exits:
+        - type: manual
+        - type: manual
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
+        expect(config.governance.proposals.discussion.exits).toEqual([{ type: "manual" }]);
+        expect(config.governance.proposals.discussion.durationMs).toBe(0);
+      });
+
+      it("should skip auto discussion exit with missing afterMinutes", async () => {
+        const configYaml = `
+governance:
+  proposals:
+    discussion:
+      exits:
+        - type: auto
+        - type: auto
+          afterMinutes: 60
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
+        expect(config.governance.proposals.discussion.exits).toHaveLength(1);
+        expect(getAutoDiscussionExit(config.governance.proposals.discussion.exits[0]).afterMs).toBe(60 * MS);
       });
 
       it("should default minReady to 0 and requiredReady to empty when not specified", async () => {
@@ -913,7 +1161,8 @@ governance:
   proposals:
     discussion:
       exits:
-        - afterMinutes: 60
+        - type: auto
+          afterMinutes: 60
 `;
         const octokit = createMockOctokit({
           data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
@@ -921,8 +1170,8 @@ governance:
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
-        expect(config.governance.proposals.discussion.exits[0].minReady).toBe(0);
-        expect(config.governance.proposals.discussion.exits[0].requiredReady).toEqual({ minCount: 0, users: [] });
+        expect(getAutoDiscussionExit(config.governance.proposals.discussion.exits[0]).minReady).toBe(0);
+        expect(getAutoDiscussionExit(config.governance.proposals.discussion.exits[0]).requiredReady).toEqual({ minCount: 0, users: [] });
       });
 
       it("should handle array shorthand for requiredReady", async () => {
@@ -931,7 +1180,8 @@ governance:
   proposals:
     discussion:
       exits:
-        - afterMinutes: 60
+        - type: auto
+          afterMinutes: 60
           requiredReady:
             - alice
             - bob
@@ -942,7 +1192,7 @@ governance:
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
-        expect(config.governance.proposals.discussion.exits[0].requiredReady).toEqual({
+        expect(getAutoDiscussionExit(config.governance.proposals.discussion.exits[0]).requiredReady).toEqual({
           minCount: 2,
           users: ["alice", "bob"],
         });
@@ -954,7 +1204,8 @@ governance:
   proposals:
     discussion:
       exits:
-        - afterMinutes: 60
+        - type: auto
+          afterMinutes: 60
           requiredReady:
             mode: any
             users:
@@ -967,7 +1218,7 @@ governance:
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
-        expect(config.governance.proposals.discussion.exits[0].requiredReady).toEqual({
+        expect(getAutoDiscussionExit(config.governance.proposals.discussion.exits[0]).requiredReady).toEqual({
           minCount: 1,
           users: ["alice", "bob"],
         });
@@ -979,7 +1230,8 @@ governance:
   proposals:
     discussion:
       exits:
-        - afterMinutes: 60
+        - type: auto
+          afterMinutes: 60
           requiredReady:
             minCount: 3
             users:
@@ -994,7 +1246,7 @@ governance:
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
-        expect(config.governance.proposals.discussion.exits[0].requiredReady).toEqual({
+        expect(getAutoDiscussionExit(config.governance.proposals.discussion.exits[0]).requiredReady).toEqual({
           minCount: 3,
           users: ["alice", "bob", "charlie", "dave"],
         });
@@ -1006,7 +1258,8 @@ governance:
   proposals:
     discussion:
       exits:
-        - afterMinutes: 60
+        - type: auto
+          afterMinutes: 60
           requiredReady:
             minCount: 10
             users:
@@ -1019,7 +1272,7 @@ governance:
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
-        expect(config.governance.proposals.discussion.exits[0].requiredReady.minCount).toBe(2);
+        expect(getAutoDiscussionExit(config.governance.proposals.discussion.exits[0]).requiredReady.minCount).toBe(2);
       });
 
       it("should clamp minCount to 0 when negative", async () => {
@@ -1028,7 +1281,8 @@ governance:
   proposals:
     discussion:
       exits:
-        - afterMinutes: 60
+        - type: auto
+          afterMinutes: 60
           requiredReady:
             minCount: -1
             users:
@@ -1040,7 +1294,7 @@ governance:
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
-        expect(config.governance.proposals.discussion.exits[0].requiredReady.minCount).toBe(0);
+        expect(getAutoDiscussionExit(config.governance.proposals.discussion.exits[0]).requiredReady.minCount).toBe(0);
       });
 
       it("should sort discussion exits ascending by afterMs", async () => {
@@ -1049,9 +1303,12 @@ governance:
   proposals:
     discussion:
       exits:
-        - afterMinutes: 120
-        - afterMinutes: 30
-        - afterMinutes: 60
+        - type: auto
+          afterMinutes: 120
+        - type: auto
+          afterMinutes: 30
+        - type: auto
+          afterMinutes: 60
 `;
         const octokit = createMockOctokit({
           data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
@@ -1059,7 +1316,7 @@ governance:
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
-        const afterMsValues = config.governance.proposals.discussion.exits.map(e => e.afterMs);
+        const afterMsValues = config.governance.proposals.discussion.exits.map((e) => getAutoDiscussionExit(e).afterMs);
         expect(afterMsValues).toEqual([30 * MS, 60 * MS, 120 * MS]);
       });
 
@@ -1069,7 +1326,8 @@ governance:
   proposals:
     discussion:
       exits:
-        - afterMinutes: -5
+        - type: auto
+          afterMinutes: -5
 `;
         const octokit = createMockOctokit({
           data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
@@ -1077,7 +1335,7 @@ governance:
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
-        expect(config.governance.proposals.discussion.exits[0].afterMs).toBe(
+        expect(getAutoDiscussionExit(config.governance.proposals.discussion.exits[0]).afterMs).toBe(
           CONFIG_BOUNDS.phaseDurationMinutes.min * MS
         );
       });
@@ -1178,7 +1436,7 @@ governance:
     });
 
     describe("invalid value types", () => {
-      it("should use default when duration is a string", async () => {
+      it("should ignore legacy discussion.durationMinutes and keep manual default", async () => {
         const configYaml = `
 governance:
   proposals:
@@ -1195,7 +1453,8 @@ governance:
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
-        expect(config.governance.proposals.discussion.durationMs).toBe(DISCUSSION_DURATION_MS);
+        expect(config.governance.proposals.discussion.exits).toEqual([{ type: "manual" }]);
+        expect(config.governance.proposals.discussion.durationMs).toBe(0);
       });
 
       it("should use default when staleDays is an object", async () => {
@@ -1225,7 +1484,8 @@ governance:
   proposals:
     voting:
       exits:
-        - afterMinutes: 60
+        - type: auto
+          afterMinutes: 60
           requiredVoters: "not-valid"
 `;
         const octokit = createMockOctokit({
@@ -1238,7 +1498,7 @@ governance:
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
-        expect(config.governance.proposals.voting.exits[0].requiredVoters).toEqual({ minCount: 0, voters: [] });
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[0]).requiredVoters).toEqual({ minCount: 0, voters: [] });
       });
     });
 
@@ -1249,7 +1509,8 @@ governance:
   proposals:
     discussion:
       exits:
-        - afterMinutes: 0
+        - type: auto
+          afterMinutes: 0
 `;
         const octokit = createMockOctokit({
           data: {
@@ -1263,7 +1524,7 @@ governance:
 
         const minMs = CONFIG_BOUNDS.phaseDurationMinutes.min * MS;
         expect(config.governance.proposals.discussion.durationMs).toBe(minMs);
-        expect(config.governance.proposals.discussion.exits[0].afterMs).toBe(minMs);
+        expect(getAutoDiscussionExit(config.governance.proposals.discussion.exits[0]).afterMs).toBe(minMs);
       });
 
       it("should clamp discussion exit afterMinutes above maximum to maximum", async () => {
@@ -1272,7 +1533,8 @@ governance:
   proposals:
     discussion:
       exits:
-        - afterMinutes: 999999999
+        - type: auto
+          afterMinutes: 999999999
 `;
         const octokit = createMockOctokit({
           data: {
@@ -1286,7 +1548,7 @@ governance:
 
         const maxMs = CONFIG_BOUNDS.phaseDurationMinutes.max * MS;
         expect(config.governance.proposals.discussion.durationMs).toBe(maxMs);
-        expect(config.governance.proposals.discussion.exits[0].afterMs).toBe(maxMs);
+        expect(getAutoDiscussionExit(config.governance.proposals.discussion.exits[0]).afterMs).toBe(maxMs);
       });
 
       it("should clamp staleDays to boundaries", async () => {
@@ -1333,7 +1595,8 @@ governance:
   proposals:
     discussion:
       exits:
-        - afterMinutes: ${CONFIG_BOUNDS.phaseDurationMinutes.min}
+        - type: auto
+          afterMinutes: ${CONFIG_BOUNDS.phaseDurationMinutes.min}
   pr:
     staleDays: ${CONFIG_BOUNDS.prStaleDays.max}
     maxPRsPerIssue: ${CONFIG_BOUNDS.maxPRsPerIssue.min}

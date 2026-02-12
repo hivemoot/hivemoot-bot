@@ -21,7 +21,12 @@ import type { IssueOperations } from "./github-client.js";
 import { createModelFromEnv } from "./llm/provider.js";
 import { DiscussionSummarizer, formatVotingMessage } from "./llm/summarizer.js";
 import { logger as defaultLogger, type Logger } from "./logger.js";
-import type { RequiredVotersConfig, VotingExit, ExitRequires, DiscussionExit } from "./repo-config.js";
+import type {
+  RequiredVotersConfig,
+  VotingAutoExit,
+  ExitRequires,
+  DiscussionAutoExit,
+} from "./repo-config.js";
 import type {
   IssueRef,
   VoteCounts,
@@ -652,7 +657,7 @@ export function isDecisive(votes: VoteCounts): boolean {
  * requires condition (majority/unanimous).
  */
 export function isExitEligible(
-  exit: VotingExit,
+  exit: VotingAutoExit,
   validated: ValidatedVoteResult,
 ): boolean {
   if (validated.voters.length < exit.minVoters) {
@@ -681,7 +686,7 @@ export function isExitEligible(
  * Simpler than isExitEligible — no majority/unanimous distinction.
  */
 export function isDiscussionExitEligible(
-  exit: DiscussionExit,
+  exit: DiscussionAutoExit,
   readyUsers: Set<string>,
 ): boolean {
   if (readyUsers.size < exit.minReady) {

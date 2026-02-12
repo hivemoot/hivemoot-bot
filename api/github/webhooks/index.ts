@@ -77,10 +77,11 @@ function app(probotApp: Probot): void {
       const issues = createIssueOperations(context.octokit, { appId });
       const governance = createGovernanceService(issues);
       const repoConfig = await loadRepositoryConfig(context.octokit, owner, repo);
+      const hasAutomaticDiscussion = repoConfig.governance.proposals.discussion.exits.some(
+        (exit) => exit.type === "auto"
+      );
       const issueWelcomeMessage =
-        repoConfig.governance.proposals.decision.method === "manual"
-          ? MESSAGES.ISSUE_WELCOME_MANUAL
-          : MESSAGES.ISSUE_WELCOME_VOTING;
+        hasAutomaticDiscussion ? MESSAGES.ISSUE_WELCOME_VOTING : MESSAGES.ISSUE_WELCOME_MANUAL;
 
       await governance.startDiscussion({ owner, repo, issueNumber: number }, issueWelcomeMessage);
     } catch (error) {

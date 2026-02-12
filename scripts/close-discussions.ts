@@ -4,8 +4,8 @@
  * This script runs on a schedule (via GitHub Actions) to automatically
  * transition issues through governance phases:
  *
- * 1. Discussion phase → Voting phase (after DISCUSSION_DURATION_MS)
- * 2. Voting phase → Closed/Decided (after VOTING_DURATION_MS)
+ * 1. Discussion phase → Voting phase (when a discussion `type: auto` exit is eligible)
+ * 2. Voting / Extended voting phase → Outcome (when a voting `type: auto` exit is eligible)
  *
  * It authenticates as a GitHub App and processes all installations.
  */
@@ -18,6 +18,8 @@ import {
   createPROperations,
   createGovernanceService,
   getOpenPRsForIssue,
+  isAutoDiscussionExit,
+  isAutoVotingExit,
   loadRepositoryConfig,
   logger,
 } from "../api/lib/index.js";
@@ -26,7 +28,17 @@ import { processImplementationIntake } from "../api/lib/implementation-intake.js
 import { getLinkedIssues } from "../api/lib/graphql-queries.js";
 import { runForAllRepositories, runIfMain } from "./shared/run-installations.js";
 import { isExitEligible, isDiscussionExitEligible } from "../api/lib/governance.js";
-import type { Repository, Issue, IssueRef, EffectiveConfig, VotingOutcome, DiscussionExit, IntakeMethod } from "../api/lib/index.js";
+import type {
+  Repository,
+  Issue,
+  IssueRef,
+  EffectiveConfig,
+  VotingOutcome,
+  DiscussionAutoExit,
+  VotingAutoExit,
+  IntakeMethod,
+  ExitType,
+} from "../api/lib/index.js";
 import type { IssueOperations } from "../api/lib/github-client.js";
 import type { GovernanceService } from "../api/lib/governance.js";
 
@@ -49,10 +61,18 @@ interface AccessIssue {
 }
 
 /**
- * Whether scheduled discussion/voting automation should run for a repo.
+ * Whether a phase has automatic exits enabled.
  */
-export function isVotingAutomationEnabled(config: EffectiveConfig): boolean {
-  return config.governance.proposals.decision.method === "hivemoot_vote";
+export function hasAutoExits(exits: Array<{ type: ExitType }>): boolean {
+  return exits.some((exit) => exit.type === "auto");
+}
+
+/**
+ * Whether any governance phase has automatic exits enabled.
+ */
+export function hasAutomaticGovernancePhases(config: EffectiveConfig): boolean {
+  const { discussion, voting, extendedVoting } = config.governance.proposals;
+  return hasAutoExits(discussion.exits) || hasAutoExits(voting.exits) || hasAutoExits(extendedVoting.exits);
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -155,7 +175,7 @@ export async function withRetry<T>(
  */
 export interface EarlyDecisionDeps {
   /** Early exits to evaluate (all except deadline) */
-  earlyExits: import("../api/lib/repo-config.js").VotingExit[];
+  earlyExits: VotingAutoExit[];
   /** Find the voting comment ID for an issue */
   findVotingCommentId: (ref: IssueRef) => Promise<number | null>;
   /** Get validated vote counts from a voting comment */
@@ -262,7 +282,7 @@ export function makeEarlyDecisionCheck(
  */
 export interface DiscussionEarlyCheckDeps {
   /** Early exits to evaluate (all except deadline) */
-  earlyExits: DiscussionExit[];
+  earlyExits: DiscussionAutoExit[];
   /** Get 👍 reactors on the issue itself */
   getDiscussionReadiness: (ref: IssueRef) => Promise<Set<string>>;
 }
@@ -604,9 +624,9 @@ export async function processRepository(
   try {
     // Load per-repo configuration (falls back to defaults if not present)
     const repoConfig: EffectiveConfig = await loadRepositoryConfig(octokit, owner, repoName);
-    if (!isVotingAutomationEnabled(repoConfig)) {
+    if (!hasAutomaticGovernancePhases(repoConfig)) {
       logger.info(
-        `[${repo.full_name}] proposals.decision.method=${repoConfig.governance.proposals.decision.method}; skipping discussion/voting automation`
+        `[${repo.full_name}] all proposal exits are manual; skipping scheduled phase transitions`
       );
       return { skippedIssues, accessIssues };
     }
@@ -628,27 +648,9 @@ export async function processRepository(
       accessIssues.push({ repo: repo.full_name, issueNumber: ref.issueNumber, status, reason });
     };
 
-    const { voting, extendedVoting } = repoConfig.governance.proposals;
+    const { discussion, voting, extendedVoting } = repoConfig.governance.proposals;
     const { trustedReviewers, intake, maxPRsPerIssue } = repoConfig.governance.pr;
     const prIntakeConfig = { maxPRsPerIssue, trustedReviewers, intake };
-
-    // Deadline exit (last) provides the default voting config for timer-based transitions
-    const deadlineExit = voting.exits[voting.exits.length - 1];
-    const votingEndOptions: import("../api/lib/governance.js").EndVotingOptions = {
-      votingConfig: {
-        minVoters: deadlineExit.minVoters,
-        requiredVoters: deadlineExit.requiredVoters,
-        requires: deadlineExit.requires,
-      },
-    };
-    const extendedDeadlineExit = extendedVoting.exits[extendedVoting.exits.length - 1];
-    const extendedVotingEndOptions: import("../api/lib/governance.js").EndVotingOptions = {
-      votingConfig: {
-        minVoters: extendedDeadlineExit.minVoters,
-        requiredVoters: extendedDeadlineExit.requiredVoters,
-        requires: extendedDeadlineExit.requires,
-      },
-    };
 
     // Voting/inconclusive phases share a transition pattern: end voting, track
     // outcome, and notify pending PRs if the proposal passed.
@@ -665,56 +667,88 @@ export async function processRepository(
       }
     };
 
-    // Early decision check dependencies for the voting phase
-    const votingEarlyDecisionDeps: EarlyDecisionDeps = {
-      earlyExits: voting.exits.slice(0, -1), // all except deadline
-      findVotingCommentId: (ref) => issues.findVotingCommentId(ref),
-      getValidatedVoteCounts: (ref, commentId) => issues.getValidatedVoteCounts(ref, commentId),
-      votingEndOptions,
-      trackOutcome,
-      notifyPRs: (issueNumber) => notifyPendingPRs(octokit, appId, owner, repoName, issueNumber, prIntakeConfig),
-    };
-    // Early decision check dependencies for the extended-voting phase
-    const extendedEarlyDecisionDeps: EarlyDecisionDeps = {
-      earlyExits: extendedVoting.exits.slice(0, -1), // all except deadline
-      findVotingCommentId: (ref) => issues.findVotingCommentId(ref),
-      getValidatedVoteCounts: (ref, commentId) => issues.getValidatedVoteCounts(ref, commentId),
-      votingEndOptions: extendedVotingEndOptions,
-      trackOutcome,
-      notifyPRs: (issueNumber) => notifyPendingPRs(octokit, appId, owner, repoName, issueNumber, prIntakeConfig),
-    };
+    const createEndOptions = (
+      deadlineExit: VotingAutoExit,
+    ): import("../api/lib/governance.js").EndVotingOptions => ({
+      votingConfig: {
+        minVoters: deadlineExit.minVoters,
+        requiredVoters: deadlineExit.requiredVoters,
+        requires: deadlineExit.requires,
+      },
+    });
 
-    const { discussion } = repoConfig.governance.proposals;
+    const phases: PhaseConfig[] = [];
 
-    const phases: PhaseConfig[] = [
-      {
+    const discussionAutoExits = discussion.exits.filter(isAutoDiscussionExit);
+    if (discussionAutoExits.length > 0) {
+      const deadlineExit = discussionAutoExits[discussionAutoExits.length - 1];
+      phases.push({
         label: LABELS.DISCUSSION,
-        durationMs: discussion.durationMs,
+        durationMs: deadlineExit.afterMs,
         phaseName: "discussion",
         transition: (_gov, ref) => governance.transitionToVoting(ref),
         earlyCheck: makeDiscussionEarlyCheck(
           (ref) => governance.transitionToVoting(ref),
           {
-            earlyExits: discussion.exits.slice(0, -1),
+            earlyExits: discussionAutoExits.slice(0, -1),
             getDiscussionReadiness: (ref) => issues.getDiscussionReadiness(ref),
           },
         ),
-      },
-      {
+      });
+    } else {
+      logger.info(`[${repo.full_name}] discussion exits are manual; skipping automatic discussion transitions`);
+    }
+
+    const votingAutoExits = voting.exits.filter(isAutoVotingExit);
+    if (votingAutoExits.length > 0) {
+      const deadlineExit = votingAutoExits[votingAutoExits.length - 1];
+      const votingEndOptions = createEndOptions(deadlineExit);
+      const votingEarlyDecisionDeps: EarlyDecisionDeps = {
+        earlyExits: votingAutoExits.slice(0, -1), // all except deadline
+        findVotingCommentId: (ref) => issues.findVotingCommentId(ref),
+        getValidatedVoteCounts: (ref, commentId) => issues.getValidatedVoteCounts(ref, commentId),
+        votingEndOptions,
+        trackOutcome,
+        notifyPRs: (issueNumber) => notifyPendingPRs(octokit, appId, owner, repoName, issueNumber, prIntakeConfig),
+      };
+
+      phases.push({
         label: LABELS.VOTING,
-        durationMs: voting.durationMs,
+        durationMs: deadlineExit.afterMs,
         phaseName: "voting",
         transition: votingTransition((ref, opts) => governance.endVoting(ref, opts), votingEndOptions),
         earlyCheck: makeEarlyDecisionCheck((ref, opts) => governance.endVoting(ref, opts), votingEarlyDecisionDeps),
-      },
-      {
+      });
+    } else {
+      logger.info(`[${repo.full_name}] voting exits are manual; skipping automatic voting transitions`);
+    }
+
+    const extendedAutoExits = extendedVoting.exits.filter(isAutoVotingExit);
+    if (extendedAutoExits.length > 0) {
+      const deadlineExit = extendedAutoExits[extendedAutoExits.length - 1];
+      const extendedVotingEndOptions = createEndOptions(deadlineExit);
+      const extendedEarlyDecisionDeps: EarlyDecisionDeps = {
+        earlyExits: extendedAutoExits.slice(0, -1), // all except deadline
+        findVotingCommentId: (ref) => issues.findVotingCommentId(ref),
+        getValidatedVoteCounts: (ref, commentId) => issues.getValidatedVoteCounts(ref, commentId),
+        votingEndOptions: extendedVotingEndOptions,
+        trackOutcome,
+        notifyPRs: (issueNumber) => notifyPendingPRs(octokit, appId, owner, repoName, issueNumber, prIntakeConfig),
+      };
+
+      phases.push({
         label: LABELS.EXTENDED_VOTING,
-        durationMs: extendedVoting.durationMs,
+        durationMs: deadlineExit.afterMs,
         phaseName: "extended voting",
         transition: votingTransition((ref, opts) => governance.resolveInconclusive(ref, opts), extendedVotingEndOptions),
-        earlyCheck: makeEarlyDecisionCheck((ref, opts) => governance.resolveInconclusive(ref, opts), extendedEarlyDecisionDeps),
-      },
-    ];
+        earlyCheck: makeEarlyDecisionCheck(
+          (ref, opts) => governance.resolveInconclusive(ref, opts),
+          extendedEarlyDecisionDeps,
+        ),
+      });
+    } else {
+      logger.info(`[${repo.full_name}] extendedVoting exits are manual; skipping automatic extended voting transitions`);
+    }
 
     for (const phase of phases) {
       await processPhaseIssues(
@@ -741,7 +775,7 @@ export async function processRepository(
 async function main(): Promise<void> {
   await runForAllRepositories<{ skippedIssues: SkippedIssue[]; accessIssues: AccessIssue[] }>({
     scriptName: "scheduled discussion/voting phase closer",
-    startMessage: "Per-repo config loaded from .github/hivemoot.yml (defaults: 24h discussion, 24h voting)",
+    startMessage: "Per-repo config loaded from .github/hivemoot.yml (processing phases with auto exits; manual-only phases are skipped)",
     processRepository,
     afterAll: ({ results }) => {
       const allSkippedIssues = results.flatMap((r) => r.result.skippedIssues);

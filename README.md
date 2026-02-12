@@ -68,6 +68,15 @@ governance:
 - `extendedVoting.exits` controls extended-voting timing and early exits.
 - If `extendedVoting.exits` is omitted, it falls back to `voting.exits`.
 
+### Voting Signals
+
+Voting is counted on the bot's voting comment using four signals:
+
+- 👍 `Ready` — support implementation
+- 👎 `Not Ready` — reject proposal
+- 😕 `Needs Discussion` — send back for more iteration
+- 👀 `Needs Human Input` — escalate with the `needs:human` label
+
 ## PR Workflow
 
 ```

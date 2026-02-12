@@ -117,6 +117,15 @@ describe("config", () => {
 
       expect(config.MESSAGES.VOTING_START).toContain(SIGNATURES.VOTING);
     });
+
+    it("should list all four voting reaction options", async () => {
+      const config = await import("./config.js");
+
+      expect(config.MESSAGES.VOTING_START).toContain("👍");
+      expect(config.MESSAGES.VOTING_START).toContain("👎");
+      expect(config.MESSAGES.VOTING_START).toContain("😕");
+      expect(config.MESSAGES.VOTING_START).toContain("👀");
+    });
   });
 
   describe("labels", () => {

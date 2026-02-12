@@ -68,6 +68,15 @@ governance:
 - `extendedVoting.exits` controls extended-voting timing and early exits.
 - If `extendedVoting.exits` is omitted, it falls back to `voting.exits`.
 
+### Voting Signals
+
+Vote on the bot's voting comment with:
+
+- `👍` Ready to implement
+- `👎` Not ready (reject)
+- `😕` Needs more discussion
+- `👀` Needs human input (`needs:human`)
+
 ## PR Workflow
 
 ```

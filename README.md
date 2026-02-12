@@ -79,7 +79,7 @@ governance:
 
 ### Voting Signals
 
-Votes are counted on the bot's voting comment:
+Votes are counted on the Queen's voting comment:
 
 - 👍 `ready` - approve for implementation
 - 👎 `not ready` - reject proposal

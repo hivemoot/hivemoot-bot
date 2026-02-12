@@ -39,6 +39,16 @@ import type { IssueOperations } from "../api/lib/github-client.js";
  */
 const VOTING_PASSED_LEGACY_SIGNATURE = "passed voting and is ready for implementation";
 
+function hasLegacyIssueNumberMatch(body: string, issueNumber: number): boolean {
+  const issueNumberPattern = /\bIssue #(\d+)\b/g;
+  for (const match of body.matchAll(issueNumberPattern)) {
+    if (Number(match[1]) === issueNumber) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Check if a PR already has a voting-passed notification for this issue.
  *
@@ -71,7 +81,7 @@ export async function hasVotingPassedNotification(
     if (
       comment.body &&
       comment.body.includes(VOTING_PASSED_LEGACY_SIGNATURE) &&
-      comment.body.includes(`Issue #${issueNumber}`)
+      hasLegacyIssueNumberMatch(comment.body, issueNumber)
     ) {
       return true;
     }

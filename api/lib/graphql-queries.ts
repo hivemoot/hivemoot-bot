@@ -148,6 +148,12 @@ const GET_OPEN_PRS_FOR_ISSUE_QUERY = `
                   author {
                     login
                   }
+                  repository {
+                    name
+                    owner {
+                      login
+                    }
+                  }
                 }
               }
             }
@@ -165,6 +171,12 @@ interface CrossReferencedEvent {
     state?: "OPEN" | "CLOSED" | "MERGED";
     author?: {
       login: string;
+    };
+    repository?: {
+      name?: string;
+      owner?: {
+        login?: string;
+      };
     };
   } | null;
 }
@@ -204,12 +216,25 @@ function isValidOpenPRSource(
   title?: string;
   state: "OPEN";
   author?: { login: string };
+  repository?: {
+    name?: string;
+    owner?: {
+      login?: string;
+    };
+  };
 } {
   return (
     source !== null &&
     typeof source.number === "number" &&
     source.state === "OPEN"
   );
+}
+
+function isNotFoundPRVerificationError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return /Could not resolve to a PullRequest with the number of \d+/i.test(error.message);
 }
 
 /**
@@ -258,12 +283,19 @@ export async function getOpenPRsForIssue(
       if (result.status === "fulfilled" && result.value !== null) {
         verified.push(result.value);
       } else if (result.status === "rejected") {
-        failedCount++;
         const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
-        logger.warn(
-          `Failed to verify closing syntax for candidate PR in ${owner}/${repo} ` +
-          `(issue #${issueNumber}): ${reason}`
-        );
+        if (isNotFoundPRVerificationError(result.reason)) {
+          logger.debug(
+            `Skipping stale PR candidate during closing-syntax verification in ${owner}/${repo} ` +
+            `(issue #${issueNumber}): ${reason}`
+          );
+        } else {
+          failedCount++;
+          logger.warn(
+            `Failed to verify closing syntax for candidate PR in ${owner}/${repo} ` +
+            `(issue #${issueNumber}): ${reason}`
+          );
+        }
       }
     }
   }
@@ -317,6 +349,14 @@ async function getCrossReferencedOpenPRs(
     const openPRs = timelineItems
       .map((event: CrossReferencedEvent) => event.source)
       .filter(isValidOpenPRSource)
+      .filter((source) => {
+        const sourceOwner = source.repository?.owner?.login?.toLowerCase();
+        const sourceRepo = source.repository?.name?.toLowerCase();
+        if (!sourceOwner || !sourceRepo) {
+          return true;
+        }
+        return sourceOwner === owner.toLowerCase() && sourceRepo === repo.toLowerCase();
+      })
       .map((source) => ({
         number: source.number,
         title: source.title ?? "",

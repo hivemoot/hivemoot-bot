@@ -264,6 +264,67 @@ describe("getOpenPRsForIssue", () => {
     expect(result.map((pr) => pr.number)).toEqual([1, 4]);
   });
 
+  it("should ignore cross-repo candidates before local verification", async () => {
+    vi.mocked(mockClient.graphql).mockImplementation(async (query: string, variables?: Record<string, unknown>) => {
+      if (query.includes("getOpenPRsForIssue")) {
+        return {
+          repository: {
+            issue: {
+              timelineItems: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [
+                  {
+                    source: {
+                      number: 1,
+                      title: "External PR",
+                      state: "OPEN",
+                      author: { login: "external-user" },
+                      repository: { name: "other-repo", owner: { login: "other-owner" } },
+                    },
+                  },
+                  {
+                    source: {
+                      number: 2,
+                      title: "Local PR",
+                      state: "OPEN",
+                      author: { login: "local-user" },
+                      repository: { name: "repo", owner: { login: "owner" } },
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        };
+      } else if (query.includes("getLinkedIssues")) {
+        const prNumber = variables?.pr as number;
+        return {
+          repository: {
+            pullRequest: {
+              closingIssuesReferences: {
+                nodes: prNumber === 2
+                  ? [{ number: 123, title: "Issue", state: "OPEN", labels: { nodes: [] } }]
+                  : [],
+              },
+            },
+          },
+        };
+      }
+      throw new Error(`Unexpected GraphQL query in test mock: ${query.slice(0, 80)}`);
+    });
+
+    const result = await getOpenPRsForIssue(mockClient, "owner", "repo", 123);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].number).toBe(2);
+
+    const linkedIssuesCalls = vi.mocked(mockClient.graphql).mock.calls.filter(
+      (call) => (call[0] as string).includes("getLinkedIssues")
+    );
+    expect(linkedIssuesCalls).toHaveLength(1);
+    expect(linkedIssuesCalls[0]?.[1]).toMatchObject({ pr: 2 });
+  });
+
   it("should filter out events without PR number", async () => {
     vi.mocked(mockClient.graphql).mockImplementation(async (query: string) => {
       if (query.includes("getOpenPRsForIssue")) {
@@ -885,6 +946,96 @@ describe("getOpenPRsForIssue", () => {
     // PR 1 and PR 3 verified successfully; PR 2's failure is tolerated
     expect(result).toHaveLength(2);
     expect(result.map((pr) => pr.number)).toEqual([1, 3]);
+  });
+
+  it("should skip stale candidate errors when at least one PR verifies", async () => {
+    vi.mocked(mockClient.graphql).mockImplementation(async (query: string, variables?: Record<string, unknown>) => {
+      if (query.includes("getOpenPRsForIssue")) {
+        return {
+          repository: {
+            issue: {
+              timelineItems: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [
+                  {
+                    source: {
+                      number: 1,
+                      title: "Stale candidate",
+                      state: "OPEN",
+                      author: { login: "user1" },
+                      repository: { name: "repo", owner: { login: "owner" } },
+                    },
+                  },
+                  {
+                    source: {
+                      number: 2,
+                      title: "Valid candidate",
+                      state: "OPEN",
+                      author: { login: "user2" },
+                      repository: { name: "repo", owner: { login: "owner" } },
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        };
+      } else if (query.includes("getLinkedIssues")) {
+        const prNumber = variables?.pr as number;
+        if (prNumber === 1) {
+          throw new Error("Could not resolve to a PullRequest with the number of 1.");
+        }
+        return {
+          repository: {
+            pullRequest: {
+              closingIssuesReferences: {
+                nodes: [{ number: 123, title: "Issue", state: "OPEN", labels: { nodes: [] } }],
+              },
+            },
+          },
+        };
+      }
+      throw new Error(`Unexpected GraphQL query in test mock: ${query.slice(0, 80)}`);
+    });
+
+    const result = await getOpenPRsForIssue(mockClient, "owner", "repo", 123);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.number).toBe(2);
+  });
+
+  it("should return empty array when all candidates are stale references", async () => {
+    vi.mocked(mockClient.graphql).mockImplementation(async (query: string) => {
+      if (query.includes("getOpenPRsForIssue")) {
+        return {
+          repository: {
+            issue: {
+              timelineItems: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [
+                  {
+                    source: {
+                      number: 1,
+                      title: "Stale candidate",
+                      state: "OPEN",
+                      author: { login: "user1" },
+                      repository: { name: "repo", owner: { login: "owner" } },
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        };
+      } else if (query.includes("getLinkedIssues")) {
+        throw new Error("Could not resolve to a PullRequest with the number of 1.");
+      }
+      throw new Error(`Unexpected GraphQL query in test mock: ${query.slice(0, 80)}`);
+    });
+
+    await expect(
+      getOpenPRsForIssue(mockClient, "owner", "repo", 123)
+    ).resolves.toEqual([]);
   });
 
   it("should throw when all verifications fail (total failure)", async () => {

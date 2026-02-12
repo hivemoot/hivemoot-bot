@@ -663,6 +663,42 @@ describe("getOpenPRsForIssue", () => {
     expect(result).toHaveLength(1);
   });
 
+  it("should ignore null timeline nodes without throwing", async () => {
+    vi.mocked(mockClient.graphql).mockImplementation(async (query: string) => {
+      if (query.includes("getOpenPRsForIssue")) {
+        return {
+          repository: {
+            issue: {
+              timelineItems: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [
+                  null,
+                  { source: { number: 1, title: "PR 1", state: "OPEN", author: { login: "user1" } } },
+                ],
+              },
+            },
+          },
+        };
+      } else if (query.includes("getLinkedIssues")) {
+        return {
+          repository: {
+            pullRequest: {
+              closingIssuesReferences: {
+                nodes: [{ number: 123, title: "Issue", state: "OPEN", labels: { nodes: [] } }],
+              },
+            },
+          },
+        };
+      }
+      throw new Error(`Unexpected GraphQL query in test mock: ${query.slice(0, 80)}`);
+    });
+
+    const result = await getOpenPRsForIssue(mockClient, "owner", "repo", 123);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].number).toBe(1);
+  });
+
   it("should transform response correctly", async () => {
     vi.mocked(mockClient.graphql).mockImplementation(async (query: string) => {
       if (query.includes("getOpenPRsForIssue")) {

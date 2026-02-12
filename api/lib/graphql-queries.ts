@@ -177,7 +177,7 @@ interface OpenPRsForIssueResponse {
           hasNextPage: boolean;
           endCursor: string | null;
         };
-        nodes: CrossReferencedEvent[];
+        nodes: Array<CrossReferencedEvent | null>;
       };
     } | null;
   };
@@ -315,7 +315,7 @@ async function getCrossReferencedOpenPRs(
     // Filter to PRs that are open and have the expected structure
     // Uses "ghost" for deleted authors (matching GitHub's web UI convention)
     const openPRs = timelineItems
-      .map((event: CrossReferencedEvent) => event.source)
+      .map((event) => event?.source ?? null)
       .filter(isValidOpenPRSource)
       .map((source) => ({
         number: source.number,

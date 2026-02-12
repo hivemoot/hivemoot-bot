@@ -14,6 +14,9 @@ permissions:
 jobs:
   dependency_audit:
     name: Dependency Audit
+    if: >
+      github.event_name != 'pull_request_target' ||
+      contains(fromJSON('["hivemoot","hivemoot-worker","hivemoot-builder","hivemoot-polisher","hivemoot-scout"]'), github.event.pull_request.head.repo.owner.login)
     runs-on: ubuntu-latest
 
     steps:
@@ -23,11 +26,18 @@ jobs:
           ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
-      - name: Setup Node.js
+      - name: Setup Node.js (push)
+        if: github.event_name != 'pull_request_target'
         uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: "npm"
+
+      - name: Setup Node.js (pull_request_target)
+        if: github.event_name == 'pull_request_target'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
 
       - name: Install dependencies
         run: npm ci

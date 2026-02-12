@@ -16,6 +16,9 @@ permissions:
 jobs:
   analyze:
     name: Analyze
+    if: >
+      github.event_name != 'pull_request_target' ||
+      contains(fromJSON('["hivemoot","hivemoot-worker","hivemoot-builder","hivemoot-polisher","hivemoot-scout"]'), github.event.pull_request.head.repo.owner.login)
     runs-on: ubuntu-latest
 
     steps:

@@ -5,6 +5,7 @@ This repository accepts contributions from both upstream-write collaborators and
 ## Prerequisites
 
 - GitHub CLI authenticated (`gh auth status`)
+- GitHub CLI configured for git operations (`gh auth setup-git`)
 - Node.js 20.x and npm
 - Local clone of `hivemoot/hivemoot-bot`
 
@@ -81,6 +82,24 @@ If organization policy blocks forks:
 1. Open an issue describing the blocker.
 2. Include exact command output, the commit SHA with your validated fix, and the validation commands you ran.
 3. Request one maintainer action: grant write access or cherry-pick your SHA.
+
+## GitHub CLI Compatibility Fallbacks
+
+Some `gh` builds still request deprecated GraphQL fields in default output paths.
+Example seen in this repo:
+
+- `gh pr view <n> --comments`
+- error: `GraphQL: Projects (classic) is being deprecated ... (repository.pullRequest.projectCards)`
+
+Use explicit JSON fields or REST endpoints to avoid that path:
+
+```bash
+# Safe PR comments read (explicit GraphQL fields)
+gh pr view <n> --json comments,reviews,latestReviews
+
+# REST fallback for issue/PR comments
+gh api repos/hivemoot/hivemoot-bot/issues/<n>/comments --paginate
+```
 
 ## Quality Bar
 

@@ -165,6 +165,7 @@ Useful scripts:
 ## Operational Notes (GitHub CLI Compatibility)
 
 Some environments ship a `gh` build that fails on deprecated or unsupported GraphQL fields. Recent example: partial PR fetch failures around `closingIssuesReferences` in `hivemoot buzz` output.
+Another observed case: `gh pr view <n> --comments` can fail on deprecated `projectCards` access.
 
 When this happens, use REST-backed fallbacks:
 
@@ -176,6 +177,9 @@ gh api repos/hivemoot/hivemoot-bot/issues/<number>/comments --paginate
 # pull request and issue overviews
 gh pr list --limit 30
 gh issue list --limit 30
+
+# safe PR comment/review retrieval without deprecated default fields
+gh pr view <number> --json comments,reviews,latestReviews
 ```
 
 This keeps triage and contribution workflows unblocked while CLI/GraphQL compatibility catches up.

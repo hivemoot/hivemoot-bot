@@ -840,6 +840,124 @@ governance:
         expect(config.governance.proposals.voting.exits).toEqual([{ type: "manual" }]);
         expect(config.governance.proposals.voting.durationMs).toBe(0);
       });
+
+      it("should skip voting exit entries with invalid type", async () => {
+        const configYaml = `
+governance:
+  proposals:
+    voting:
+      exits:
+        - type: invalid
+        - type: auto
+          afterMinutes: 60
+`;
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(configYaml),
+            encoding: "base64",
+          },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
+        expect(config.governance.proposals.voting.exits).toHaveLength(1);
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[0]).afterMs).toBe(60 * MS);
+      });
+
+      it("should skip non-object voting exit entries", async () => {
+        const configYaml = `
+governance:
+  proposals:
+    voting:
+      exits:
+        - "not-an-object"
+        - type: auto
+          afterMinutes: 60
+`;
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(configYaml),
+            encoding: "base64",
+          },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
+        expect(config.governance.proposals.voting.exits).toHaveLength(1);
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[0]).afterMs).toBe(60 * MS);
+      });
+
+      it("should fall back to manual when all voting exit entries are invalid", async () => {
+        const configYaml = `
+governance:
+  proposals:
+    voting:
+      exits:
+        - type: invalid
+        - type: bogus
+`;
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(configYaml),
+            encoding: "base64",
+          },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
+        expect(config.governance.proposals.voting.exits).toEqual([{ type: "manual" }]);
+        expect(config.governance.proposals.voting.durationMs).toBe(0);
+      });
+
+      it("should collapse multiple manual voting exits to a single manual exit", async () => {
+        const configYaml = `
+governance:
+  proposals:
+    voting:
+      exits:
+        - type: manual
+        - type: manual
+`;
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(configYaml),
+            encoding: "base64",
+          },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
+        expect(config.governance.proposals.voting.exits).toEqual([{ type: "manual" }]);
+        expect(config.governance.proposals.voting.durationMs).toBe(0);
+      });
+
+      it("should skip auto voting exit with missing afterMinutes", async () => {
+        const configYaml = `
+governance:
+  proposals:
+    voting:
+      exits:
+        - type: auto
+        - type: auto
+          afterMinutes: 60
+`;
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(configYaml),
+            encoding: "base64",
+          },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
+        expect(config.governance.proposals.voting.exits).toHaveLength(1);
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[0]).afterMs).toBe(60 * MS);
+      });
     });
 
     describe("discussion exits parsing", () => {
@@ -937,6 +1055,104 @@ governance:
 
         expect(config.governance.proposals.discussion.exits).toEqual([{ type: "manual" }]);
         expect(config.governance.proposals.discussion.durationMs).toBe(0);
+      });
+
+      it("should skip discussion exit entries with invalid type", async () => {
+        const configYaml = `
+governance:
+  proposals:
+    discussion:
+      exits:
+        - type: invalid
+        - type: auto
+          afterMinutes: 60
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
+        expect(config.governance.proposals.discussion.exits).toHaveLength(1);
+        expect(getAutoDiscussionExit(config.governance.proposals.discussion.exits[0]).afterMs).toBe(60 * MS);
+      });
+
+      it("should skip non-object discussion exit entries", async () => {
+        const configYaml = `
+governance:
+  proposals:
+    discussion:
+      exits:
+        - "not-an-object"
+        - type: auto
+          afterMinutes: 60
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
+        expect(config.governance.proposals.discussion.exits).toHaveLength(1);
+        expect(getAutoDiscussionExit(config.governance.proposals.discussion.exits[0]).afterMs).toBe(60 * MS);
+      });
+
+      it("should fall back to manual when all discussion exit entries are invalid", async () => {
+        const configYaml = `
+governance:
+  proposals:
+    discussion:
+      exits:
+        - type: invalid
+        - type: bogus
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
+        expect(config.governance.proposals.discussion.exits).toEqual([{ type: "manual" }]);
+        expect(config.governance.proposals.discussion.durationMs).toBe(0);
+      });
+
+      it("should collapse multiple manual discussion exits to a single manual exit", async () => {
+        const configYaml = `
+governance:
+  proposals:
+    discussion:
+      exits:
+        - type: manual
+        - type: manual
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
+        expect(config.governance.proposals.discussion.exits).toEqual([{ type: "manual" }]);
+        expect(config.governance.proposals.discussion.durationMs).toBe(0);
+      });
+
+      it("should skip auto discussion exit with missing afterMinutes", async () => {
+        const configYaml = `
+governance:
+  proposals:
+    discussion:
+      exits:
+        - type: auto
+        - type: auto
+          afterMinutes: 60
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
+        expect(config.governance.proposals.discussion.exits).toHaveLength(1);
+        expect(getAutoDiscussionExit(config.governance.proposals.discussion.exits[0]).afterMs).toBe(60 * MS);
       });
 
       it("should default minReady to 0 and requiredReady to empty when not specified", async () => {

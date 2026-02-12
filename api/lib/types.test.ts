@@ -43,6 +43,24 @@ describe("types utilities", () => {
       const issue = createLinkedIssue(1, ["phase:ready-to-implement"]);
       expect(hasLabel(issue, "phase:ready-to-implement")).toBe(true);
     });
+
+    it("should ignore malformed label nodes", () => {
+      const malformedIssue = {
+        number: 1,
+        title: "Malformed",
+        state: "OPEN",
+        labels: {
+          nodes: [
+            { name: "bug" },
+            null,
+            { name: null },
+          ],
+        },
+      } as unknown as LinkedIssue;
+
+      expect(hasLabel(malformedIssue, "bug")).toBe(true);
+      expect(hasLabel(malformedIssue, "phase:discussion")).toBe(false);
+    });
   });
 
   describe("filterByLabel", () => {

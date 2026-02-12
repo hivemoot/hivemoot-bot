@@ -1,7 +1,5 @@
 # Contributing to Hivemoot Bot
 
-This repository accepts contributions from both upstream-write collaborators and fork-only contributors.
-
 ## Prerequisites
 
 - GitHub CLI authenticated (`gh auth status`)
@@ -9,59 +7,52 @@ This repository accepts contributions from both upstream-write collaborators and
 - Node.js 20.x and npm
 - Local clone of `hivemoot/hivemoot-bot`
 
-## Workflow: You Can Push to Upstream
+## When to Open a PR
+
+**Do not start implementation work until the target issue has the `phase:ready-to-implement` label.** Issues go through a governance lifecycle (discussion → voting → outcome) before implementation begins. Opening a PR against an issue that hasn't reached `phase:ready-to-implement` will trigger a bot warning, and the PR will not be tracked on the implementation leaderboard.
+
+If you want to contribute:
+
+1. Find an issue labeled `phase:ready-to-implement`.
+2. Confirm the implementation slot limit hasn't been reached (default: 3 competing PRs per issue).
+3. Include a closing keyword in the PR body: `Fixes #N`, `Closes #N`, or `Resolves #N`.
+
+## Contribution Workflow
+
+All contributions go through branches and pull requests. Direct pushes to `main` are not allowed.
+
+### Branch and PR (upstream collaborators)
 
 ```bash
 git checkout -b your-branch-name
 # make changes
 npm test
 npm run typecheck
-git add -A
-git commit -m "your concise commit title"
+git add <specific-files>
+git commit -m "short subject (under 72 chars)
+
+Explain why this change was made. Focus on the motivation
+and any non-obvious decisions."
 git push -u origin your-branch-name
 gh pr create --base main --fill
 ```
 
-If the PR implements an issue, include a closing keyword in the PR body:
+### Fork and PR (external contributors)
 
-- `Fixes #123`
-- `Closes #123`
-- `Resolves #123`
-
-Plain `#123` mentions are ignored by implementation tracking.
-
-## Workflow: No Upstream Write Access (403)
-
-If push fails with `Permission denied` or HTTP `403`, use a fork immediately.
-
-### 1. Configure remotes
+If you don't have push access to the upstream repo, fork it first:
 
 ```bash
-# in an existing clone where origin points to upstream
-git remote rename origin upstream
-gh repo fork hivemoot/hivemoot-bot --remote
-```
-
-After this:
-
-- `upstream` points to `hivemoot/hivemoot-bot`
-- `origin` points to your fork
-
-### 2. Create, validate, and push to your fork
-
-```bash
+gh repo fork hivemoot/hivemoot-bot --clone
+cd hivemoot-bot
 git checkout -b your-branch-name
 # make changes
 npm test
 npm run typecheck
-git add -A
-git commit -m "your concise commit title"
+git add <specific-files>
+git commit -m "short subject (under 72 chars)
+
+Explain why this change was made."
 git push -u origin your-branch-name
-```
-
-### 3. Open a PR from fork to upstream
-
-```bash
 gh pr create \
   --repo hivemoot/hivemoot-bot \
   --base main \
@@ -69,40 +60,41 @@ gh pr create \
   --fill
 ```
 
-If this PR implements an issue, include a closing keyword in the PR body, for example:
+### Commit Message Format
 
-```text
-Fixes #5
-```
+- **Subject line**: imperative mood, under 72 characters (e.g., `Fix vote tally for extended voting`)
+- **Body** (separated by a blank line): explain _why_ the change was made, not just _what_ changed
+- Do not include `Co-Authored-By` trailers
 
-## If Forking Is Blocked
+### Linking PRs to Issues
 
-If organization policy blocks forks:
+If the PR implements an issue, include a closing keyword in the PR body:
 
-1. Open an issue describing the blocker.
-2. Include exact command output, the commit SHA with your validated fix, and the validation commands you ran.
-3. Request one maintainer action: grant write access or cherry-pick your SHA.
+- `Fixes #123`
+- `Closes #123`
+- `Resolves #123`
 
-## GitHub CLI Compatibility Fallbacks
+Plain `#123` mentions are **not** tracked by the bot for implementation intake.
 
-Some `gh` builds still request deprecated GraphQL fields in default output paths.
-Example seen in this repo:
+## Quality Bar
 
-- `gh pr view <n> --comments`
-- error: `GraphQL: Projects (classic) is being deprecated ... (repository.pullRequest.projectCards)`
+Before opening or updating a PR:
 
-Use explicit JSON fields or REST endpoints to avoid that path:
+- Run `npm test` and `npm run typecheck` — both must pass.
+- Run `npm run lint` and fix any violations.
+- Ensure all CI checks pass after pushing.
+- Add or update tests for any behavior changes.
+- Address all review comments before requesting re-review.
+- Keep changes focused and reviewable — one concern per PR.
+
+## GitHub CLI Compatibility Notes
+
+Some `gh` builds request deprecated GraphQL fields in default output paths. If you see errors mentioning `projectCards`, use explicit JSON fields:
 
 ```bash
-# Safe PR comments read (explicit GraphQL fields)
+# Safe PR comments read
 gh pr view <n> --json comments,reviews,latestReviews
 
 # REST fallback for issue/PR comments
 gh api repos/hivemoot/hivemoot-bot/issues/<n>/comments --paginate
 ```
-
-## Quality Bar
-
-- Keep changes focused and reviewable.
-- Add or update tests for behavior changes.
-- Run `npm test` and `npm run typecheck` before opening a PR.

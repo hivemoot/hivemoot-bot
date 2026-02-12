@@ -66,6 +66,7 @@ function createWebhookHarness() {
 function createInstallationOctokit(options?: {
   existingLabels?: Array<{ name: string }>;
   fallbackRepositories?: Array<{ name: string; full_name: string; owner?: { login?: string } | null }>;
+  fallbackRepositoryPages?: Array<Array<{ name: string; full_name: string; owner?: { login?: string } | null }>>;
   createLabelImpl?: (params: {
     owner: string;
     repo: string;
@@ -76,6 +77,7 @@ function createInstallationOctokit(options?: {
 }) {
   const existingLabels = options?.existingLabels ?? [];
   const fallbackRepositories = options?.fallbackRepositories ?? [];
+  const fallbackRepositoryPages = options?.fallbackRepositoryPages ?? [fallbackRepositories];
   const createLabelImpl = options?.createLabelImpl ?? (async () => ({}));
 
   const rest = {
@@ -84,11 +86,14 @@ function createInstallationOctokit(options?: {
       createLabel: vi.fn().mockImplementation(createLabelImpl),
     },
     apps: {
-      listReposAccessibleToInstallation: vi.fn().mockResolvedValue({
+      listReposAccessibleToInstallation: vi.fn().mockImplementation(async ({ page = 1 }: {
+        per_page?: number;
+        page?: number;
+      }) => ({
         data: {
-          repositories: fallbackRepositories,
+          repositories: fallbackRepositoryPages[page - 1] ?? [],
         },
-      }),
+      })),
     },
   };
 
@@ -216,6 +221,53 @@ describe("Queen Bot", () => {
       );
       expect(log.info).toHaveBeenCalledWith(
         `[installation.created] Label bootstrap summary: reposProcessed=2, reposFailed=0, labelsCreated=${REQUIRED_REPOSITORY_LABELS.length * fallbackRepositories.length}, labelsSkipped=0`
+      );
+    });
+
+    it("should paginate installation repository fallback listing beyond first page", async () => {
+      const { handlers } = createWebhookHarness();
+      const handler = handlers.get("installation.created");
+      expect(handler).toBeDefined();
+
+      const pageOneRepositories = Array.from({ length: 100 }, (_, index) => ({
+        name: `repo-${index + 1}`,
+        full_name: `hivemoot/repo-${index + 1}`,
+      }));
+      const pageTwoRepositories = [{ name: "repo-101", full_name: "hivemoot/repo-101" }];
+      const octokit = createInstallationOctokit({
+        fallbackRepositoryPages: [pageOneRepositories, pageTwoRepositories],
+      });
+      const log = {
+        info: vi.fn(),
+        error: vi.fn(),
+      };
+
+      await handler!({
+        octokit,
+        log,
+        payload: {},
+      });
+
+      expect(octokit.rest.apps.listReposAccessibleToInstallation).toHaveBeenNthCalledWith(1, {
+        per_page: 100,
+        page: 1,
+      });
+      expect(octokit.rest.apps.listReposAccessibleToInstallation).toHaveBeenNthCalledWith(2, {
+        per_page: 100,
+        page: 2,
+      });
+      expect(octokit.rest.apps.listReposAccessibleToInstallation).toHaveBeenCalledTimes(2);
+      expect(octokit.rest.issues.createLabel).toHaveBeenCalledWith(
+        expect.objectContaining({ repo: "repo-1" })
+      );
+      expect(octokit.rest.issues.createLabel).toHaveBeenCalledWith(
+        expect.objectContaining({ repo: "repo-101" })
+      );
+      expect(octokit.rest.issues.createLabel).toHaveBeenCalledTimes(
+        REQUIRED_REPOSITORY_LABELS.length * 101
+      );
+      expect(log.info).toHaveBeenCalledWith(
+        `[installation.created] Label bootstrap summary: reposProcessed=101, reposFailed=0, labelsCreated=${REQUIRED_REPOSITORY_LABELS.length * 101}, labelsSkipped=0`
       );
     });
 

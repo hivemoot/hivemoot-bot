@@ -157,22 +157,43 @@ export class GovernanceService {
    * correct vote counting when issues return from needs-more-discussion.
    */
   async transitionToVoting(ref: IssueRef): Promise<void> {
-    // Calculate the next cycle number based on existing voting comments
-    const cycle = await this.calculateVotingCycle(ref);
-    const votingMessage = await this.generateVotingMessage(ref);
-
-    // Build complete voting comment with embedded metadata
-    const commentBody = buildVotingComment(
-      votingMessage,
-      ref.issueNumber,
-      cycle,
-    );
+    const commentBody = await this.buildVotingCommentBody(ref);
 
     await this.issues.transition(ref, {
       removeLabel: LABELS.DISCUSSION,
       addLabel: LABELS.VOTING,
       comment: commentBody,
     });
+  }
+
+  /**
+   * Post a voting comment on an issue that already has the phase:voting label
+   * but is missing the voting comment (e.g., manual label addition).
+   *
+   * Idempotent — skips if a voting comment already exists. Does NOT change labels.
+   */
+  async postVotingComment(ref: IssueRef): Promise<"posted" | "skipped"> {
+    const existingId = await this.issues.findVotingCommentId(ref);
+    if (existingId !== null) {
+      this.logger.info(
+        `Voting comment already exists for issue #${ref.issueNumber}, skipping`,
+      );
+      return "skipped";
+    }
+
+    const commentBody = await this.buildVotingCommentBody(ref);
+    await this.issues.comment(ref, commentBody);
+    return "posted";
+  }
+
+  /**
+   * Build the complete voting comment body with metadata.
+   * Includes an LLM-generated discussion summary when available.
+   */
+  private async buildVotingCommentBody(ref: IssueRef): Promise<string> {
+    const cycle = await this.calculateVotingCycle(ref);
+    const votingMessage = await this.generateVotingMessage(ref);
+    return buildVotingComment(votingMessage, ref.issueNumber, cycle);
   }
 
   /**
@@ -249,9 +270,9 @@ export class GovernanceService {
    * End voting and apply the outcome.
    * Votes are counted from the bot's voting comment reactions.
    *
-   * If the voting comment is not found, posts a human help request
-   * and returns "skipped" to allow the script to continue processing
-   * other issues.
+   * If the voting comment is not found, attempts to self-heal by posting
+   * the voting comment. Falls back to a human help request if self-healing
+   * fails. Returns "skipped" in either case.
    *
    * @param options.earlyDecision - When true, prepend early decision note to outcome message
    * @param options.votingConfig - When provided, enforce requiredVoters/minVoters (missing → inconclusive)
@@ -353,8 +374,9 @@ export class GovernanceService {
    * - needs-more-discussion → return to discussion (open, unlocked)
    * - Still tied → final inconclusive (closed, locked)
    *
-   * If the voting comment is not found, posts a human help request
-   * and returns "skipped" to allow the script to continue processing.
+   * If the voting comment is not found, attempts to self-heal by posting
+   * the voting comment. Falls back to a human help request if self-healing
+   * fails. Returns "skipped" in either case.
    *
    * @param options.votingConfig - When provided, enforce requiredVoters/minVoters (missing → inconclusive)
    * @param options.validatedVotes - Pre-fetched validated votes (avoids redundant API call)
@@ -467,10 +489,37 @@ export class GovernanceService {
   }
 
   /**
-   * Handle missing voting comment by posting a human help request.
-   * Idempotent - checks if warning was already posted to avoid duplicates.
+   * Handle missing voting comment by attempting to self-heal first.
+   *
+   * Three possible outcomes:
+   * - "posted": voting comment was successfully created (self-healed)
+   * - "skipped": voting comment appeared between the caller's check and ours
+   *   (race with webhook handler or cron reconciliation — healthy state)
+   * - exception: self-heal failed, falls back to human help request
    */
   private async handleMissingVotingComment(ref: IssueRef): Promise<void> {
+    // Attempt self-heal: post the missing voting comment
+    try {
+      const result = await this.postVotingComment(ref);
+      if (result === "posted") {
+        this.logger.info(
+          `Self-healed missing voting comment for issue #${ref.issueNumber}`,
+        );
+      } else {
+        // "skipped" = comment appeared between the caller's check and ours
+        // (race with webhook handler or cron reconciliation). Healthy state.
+        this.logger.info(
+          `Voting comment already present for issue #${ref.issueNumber} (concurrent post)`,
+        );
+      }
+      return;
+    } catch (error) {
+      this.logger.warn(
+        `Self-heal failed for issue #${ref.issueNumber}: ${(error as Error).message}. Falling back to human help.`,
+      );
+    }
+
+    // Original behavior: flag for human intervention
     const errorCode = ERROR_CODES.VOTING_COMMENT_NOT_FOUND;
 
     // Check if we already posted this error (idempotent)

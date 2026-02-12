@@ -758,6 +758,43 @@ export function app(probotApp: Probot): void {
       throw error;
     }
   });
+
+  /**
+   * Handle manual phase:voting label additions.
+   *
+   * When a human adds the `phase:voting` label manually (bypassing the automatic
+   * discussion→voting transition), the voting comment is missing. This handler
+   * detects that scenario and posts the voting comment idempotently.
+   *
+   * Skips Bot senders — the automatic transition in `transitionToVoting()` already
+   * handles the comment when the app adds the label.
+   */
+  probotApp.on("issues.labeled", async (context) => {
+    const { label, issue, sender } = context.payload;
+    if (label?.name !== LABELS.VOTING) return;
+    if (sender.type === "Bot") return;
+
+    const { owner, repo, fullName } = getRepoContext(context.payload.repository);
+    context.log.info(
+      `Manual phase:voting label on issue #${issue.number} in ${fullName} (by ${sender.login})`,
+    );
+
+    try {
+      const appId = getAppId();
+      const issues = createIssueOperations(context.octokit, { appId });
+      const governance = createGovernanceService(issues);
+      const result = await governance.postVotingComment({
+        owner, repo, issueNumber: issue.number,
+      });
+      context.log.info(`Voting comment for issue #${issue.number}: ${result}`);
+    } catch (error) {
+      context.log.error(
+        { err: error, issue: issue.number, repo: fullName },
+        "Failed to post voting comment for manually labeled issue",
+      );
+      throw error;
+    }
+  });
 }
 
 const probot = createProbot();

@@ -68,9 +68,10 @@ import {
   hasAutoExits,
   hasAutomaticGovernancePhases,
   processRepository,
+  reconcileMissingVotingComments,
 } from "./close-discussions.js";
 import type { EarlyDecisionDeps, DiscussionEarlyCheckDeps } from "./close-discussions.js";
-import { getOpenPRsForIssue, logger, loadRepositoryConfig, createIssueOperations } from "../api/lib/index.js";
+import { getOpenPRsForIssue, logger, loadRepositoryConfig, createIssueOperations, createGovernanceService } from "../api/lib/index.js";
 import { PR_MESSAGES } from "../api/config.js";
 import type {
   VotingOutcome,
@@ -83,6 +84,17 @@ import type {
 const mockGetOpenPRsForIssue = vi.mocked(getOpenPRsForIssue);
 const mockLoadRepositoryConfig = vi.mocked(loadRepositoryConfig);
 const mockCreateIssueOperations = vi.mocked(createIssueOperations);
+const mockCreateGovernanceService = vi.mocked(createGovernanceService);
+
+function buildIterator<T>(pages: T[][]): AsyncIterable<{ data: T[] }> {
+  return {
+    async *[Symbol.asyncIterator]() {
+      for (const page of pages) {
+        yield { data: page };
+      }
+    },
+  };
+}
 
 describe("close-discussions script", () => {
   function makeRepoConfig(mode: "manual" | "auto") {
@@ -144,6 +156,119 @@ describe("close-discussions script", () => {
     });
   });
 
+  describe("reconcileMissingVotingComments", () => {
+    const owner = "test-org";
+    const repoName = "test-repo";
+
+    it("should post voting comment for issues missing it", async () => {
+      const mockGovernance = {
+        postVotingComment: vi.fn().mockResolvedValue("posted"),
+      } as any;
+
+      const fakeOctokit = {
+        rest: { issues: { listForRepo: vi.fn() } },
+        paginate: {
+          iterator: vi.fn().mockReturnValue(
+            buildIterator([[{ number: 10 }, { number: 20 }]])
+          ),
+        },
+      } as any;
+
+      const count = await reconcileMissingVotingComments(fakeOctokit, owner, repoName, mockGovernance);
+
+      expect(count).toBe(2);
+      expect(mockGovernance.postVotingComment).toHaveBeenCalledTimes(2);
+      expect(mockGovernance.postVotingComment).toHaveBeenCalledWith({ owner, repo: repoName, issueNumber: 10 });
+      expect(mockGovernance.postVotingComment).toHaveBeenCalledWith({ owner, repo: repoName, issueNumber: 20 });
+    });
+
+    it("should skip issues where voting comment already exists", async () => {
+      const mockGovernance = {
+        postVotingComment: vi.fn().mockResolvedValue("skipped"),
+      } as any;
+
+      const fakeOctokit = {
+        rest: { issues: { listForRepo: vi.fn() } },
+        paginate: {
+          iterator: vi.fn().mockReturnValue(
+            buildIterator([[{ number: 10 }]])
+          ),
+        },
+      } as any;
+
+      const count = await reconcileMissingVotingComments(fakeOctokit, owner, repoName, mockGovernance);
+
+      expect(count).toBe(0);
+      expect(mockGovernance.postVotingComment).toHaveBeenCalledTimes(1);
+    });
+
+    it("should skip pull requests", async () => {
+      const mockGovernance = {
+        postVotingComment: vi.fn().mockResolvedValue("posted"),
+      } as any;
+
+      const fakeOctokit = {
+        rest: { issues: { listForRepo: vi.fn() } },
+        paginate: {
+          iterator: vi.fn().mockReturnValue(
+            buildIterator([[
+              { number: 10 },
+              { number: 11, pull_request: {} },
+              { number: 20 },
+            ]])
+          ),
+        },
+      } as any;
+
+      const count = await reconcileMissingVotingComments(fakeOctokit, owner, repoName, mockGovernance);
+
+      expect(count).toBe(2);
+      expect(mockGovernance.postVotingComment).toHaveBeenCalledTimes(2);
+    });
+
+    it("should survive per-issue errors and continue processing", async () => {
+      const mockGovernance = {
+        postVotingComment: vi.fn()
+          .mockRejectedValueOnce(new Error("API error"))
+          .mockResolvedValueOnce("posted"),
+      } as any;
+
+      const fakeOctokit = {
+        rest: { issues: { listForRepo: vi.fn() } },
+        paginate: {
+          iterator: vi.fn().mockReturnValue(
+            buildIterator([[{ number: 10 }, { number: 20 }]])
+          ),
+        },
+      } as any;
+
+      const count = await reconcileMissingVotingComments(fakeOctokit, owner, repoName, mockGovernance);
+
+      expect(count).toBe(1); // Only #20 succeeded
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining("Failed to reconcile #10"),
+      );
+    });
+
+    it("should return 0 when there are no voting issues", async () => {
+      const mockGovernance = { postVotingComment: vi.fn() } as any;
+
+      const fakeOctokit = {
+        rest: { issues: { listForRepo: vi.fn() } },
+        paginate: {
+          iterator: vi.fn().mockReturnValue(
+            buildIterator([[]])
+          ),
+        },
+      } as any;
+
+      const count = await reconcileMissingVotingComments(fakeOctokit, owner, repoName, mockGovernance);
+
+      expect(count).toBe(0);
+      expect(mockGovernance.postVotingComment).not.toHaveBeenCalled();
+    });
+  });
+
   describe("processRepository gating", () => {
     const repo = {
       owner: { login: "test-org" },
@@ -155,7 +280,10 @@ describe("close-discussions script", () => {
       // No issues in any phase
     };
 
-    it("should skip scheduled transitions when all exits are manual", async () => {
+    it("should run reconciliation even when all exits are manual, then skip transitions", async () => {
+      const mockGovernance = { postVotingComment: vi.fn() } as any;
+      mockCreateGovernanceService.mockReturnValue(mockGovernance);
+
       const fakeOctokit = {
         rest: {
           issues: {
@@ -171,13 +299,19 @@ describe("close-discussions script", () => {
       const result = await processRepository(fakeOctokit, repo, appId);
 
       expect(result).toEqual({ skippedIssues: [], accessIssues: [] });
-      expect(mockCreateIssueOperations).not.toHaveBeenCalled();
+      // Services ARE created now (for reconciliation)
+      expect(mockCreateIssueOperations).toHaveBeenCalled();
+      expect(mockCreateGovernanceService).toHaveBeenCalled();
+      // But scheduled transitions are still skipped
       expect(logger.info).toHaveBeenCalledWith(
         expect.stringContaining("all proposal exits are manual")
       );
     });
 
     it("should continue processing when at least one phase is auto", async () => {
+      const mockGovernance = { postVotingComment: vi.fn() } as any;
+      mockCreateGovernanceService.mockReturnValue(mockGovernance);
+
       const fakeOctokit = {
         rest: {
           issues: {
@@ -193,6 +327,41 @@ describe("close-discussions script", () => {
       await processRepository(fakeOctokit, repo, appId);
 
       expect(mockCreateIssueOperations).toHaveBeenCalled();
+    });
+
+    it("should continue with phase transitions when reconciliation fails", async () => {
+      const mockGovernance = { postVotingComment: vi.fn() } as any;
+      mockCreateGovernanceService.mockReturnValue(mockGovernance);
+
+      // First call (reconciliation) throws; subsequent calls (phase iteration) succeed
+      const mockIterator = vi.fn()
+        .mockImplementationOnce(() => {
+          throw new Error("Paginator exploded");
+        })
+        .mockReturnValue(emptyIterator());
+
+      const fakeOctokit = {
+        rest: {
+          issues: {
+            listForRepo: vi.fn(),
+          },
+        },
+        paginate: {
+          iterator: mockIterator,
+        },
+      } as any;
+      mockLoadRepositoryConfig.mockResolvedValue(makeRepoConfig("auto"));
+
+      const result = await processRepository(fakeOctokit, repo, appId);
+
+      // Reconciliation failure was caught and logged
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining("Reconciliation failed"),
+      );
+      // Phase transitions still ran (paginate.iterator called for phase issues)
+      expect(mockIterator.mock.calls.length).toBeGreaterThan(1);
+      // No skipped or access issues from the empty iterator
+      expect(result).toEqual({ skippedIssues: [], accessIssues: [] });
     });
   });
 

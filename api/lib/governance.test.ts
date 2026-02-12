@@ -249,6 +249,143 @@ describe("GovernanceService", () => {
     });
   });
 
+  describe("postVotingComment", () => {
+    it("should post voting comment when none exists", async () => {
+      vi.mocked(mockIssues.findVotingCommentId).mockResolvedValue(null);
+
+      const result = await governance.postVotingComment(testRef);
+
+      expect(result).toBe("posted");
+      expect(mockIssues.findVotingCommentId).toHaveBeenCalledWith(testRef);
+      expect(mockIssues.comment).toHaveBeenCalledTimes(1);
+      // Should contain voting metadata
+      const commentBody = vi.mocked(mockIssues.comment).mock.calls[0][1];
+      expect(commentBody).toContain('"type":"voting"');
+      expect(commentBody).toContain(MESSAGES.VOTING_START);
+    });
+
+    it("should skip when voting comment already exists", async () => {
+      vi.mocked(mockIssues.findVotingCommentId).mockResolvedValue(12345);
+
+      const result = await governance.postVotingComment(testRef);
+
+      expect(result).toBe("skipped");
+      expect(mockIssues.comment).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("handleMissingVotingComment (via endVoting)", () => {
+    it("should self-heal by posting voting comment when comment not found", async () => {
+      vi.mocked(mockIssues.findVotingCommentId).mockResolvedValue(null);
+
+      const outcome = await governance.endVoting(testRef);
+
+      expect(outcome).toBe("skipped");
+      // Self-heal posts the voting comment, NOT the human help comment
+      expect(mockIssues.comment).toHaveBeenCalledTimes(1);
+      const commentBody = vi.mocked(mockIssues.comment).mock.calls[0][1];
+      expect(commentBody).toContain('"type":"voting"');
+      // Human help path should NOT be reached
+      expect(mockIssues.hasHumanHelpComment).not.toHaveBeenCalled();
+      expect(mockIssues.addLabels).not.toHaveBeenCalledWith(testRef, [LABELS.NEEDS_HUMAN]);
+    });
+
+    it("should fall back to human help when self-heal fails", async () => {
+      vi.mocked(mockIssues.findVotingCommentId).mockResolvedValue(null);
+      vi.mocked(mockIssues.hasHumanHelpComment).mockResolvedValue(false);
+      // First comment call (self-heal) fails; second (human help) succeeds
+      vi.mocked(mockIssues.comment)
+        .mockRejectedValueOnce(new Error("API error"))
+        .mockResolvedValueOnce(undefined);
+
+      const outcome = await governance.endVoting(testRef);
+
+      expect(outcome).toBe("skipped");
+      expect(mockIssues.hasHumanHelpComment).toHaveBeenCalledWith(testRef, ERROR_CODES.VOTING_COMMENT_NOT_FOUND);
+      // Two comment calls: failed self-heal + successful human help
+      expect(mockIssues.comment).toHaveBeenCalledTimes(2);
+      expect(mockIssues.addLabels).toHaveBeenCalledWith(testRef, [LABELS.NEEDS_HUMAN]);
+    });
+
+    it("should skip duplicate human help after self-heal failure", async () => {
+      vi.mocked(mockIssues.findVotingCommentId).mockResolvedValue(null);
+      vi.mocked(mockIssues.hasHumanHelpComment).mockResolvedValue(true);
+      // Self-heal fails
+      vi.mocked(mockIssues.comment)
+        .mockRejectedValueOnce(new Error("API error"));
+
+      const outcome = await governance.endVoting(testRef);
+
+      expect(outcome).toBe("skipped");
+      // Only the failed self-heal attempt; human help was already posted
+      expect(mockIssues.comment).toHaveBeenCalledTimes(1);
+      expect(mockIssues.addLabels).not.toHaveBeenCalled();
+    });
+
+    it("should survive addLabels failure in human help fallback", async () => {
+      vi.mocked(mockIssues.findVotingCommentId).mockResolvedValue(null);
+      vi.mocked(mockIssues.hasHumanHelpComment).mockResolvedValue(false);
+      vi.mocked(mockIssues.comment)
+        .mockRejectedValueOnce(new Error("API error"))
+        .mockResolvedValueOnce(undefined);
+      vi.mocked(mockIssues.addLabels).mockRejectedValue(new Error("Label not found"));
+
+      const outcome = await governance.endVoting(testRef);
+
+      expect(outcome).toBe("skipped");
+      expect(mockIssues.addLabels).toHaveBeenCalledWith(testRef, [LABELS.NEEDS_HUMAN]);
+    });
+
+    it("should not post human help when race condition causes skipped result", async () => {
+      // endVoting sees null (no voting comment), but by the time postVotingComment
+      // checks, the comment appeared (race with webhook handler or cron)
+      vi.mocked(mockIssues.findVotingCommentId)
+        .mockResolvedValueOnce(null)    // endVoting check
+        .mockResolvedValueOnce(99999);  // postVotingComment check (comment appeared)
+
+      const outcome = await governance.endVoting(testRef);
+
+      expect(outcome).toBe("skipped");
+      // No voting comment posted (it already exists)
+      expect(mockIssues.comment).not.toHaveBeenCalled();
+      // Human help path should NOT be reached
+      expect(mockIssues.hasHumanHelpComment).not.toHaveBeenCalled();
+      expect(mockIssues.addLabels).not.toHaveBeenCalledWith(testRef, [LABELS.NEEDS_HUMAN]);
+    });
+
+    it("should fall back to human help when findVotingCommentId throws in postVotingComment", async () => {
+      vi.mocked(mockIssues.findVotingCommentId)
+        .mockResolvedValueOnce(null)                     // endVoting check
+        .mockRejectedValueOnce(new Error("API timeout")); // postVotingComment check throws
+      vi.mocked(mockIssues.hasHumanHelpComment).mockResolvedValue(false);
+      vi.mocked(mockIssues.comment).mockResolvedValue(undefined);
+
+      const outcome = await governance.endVoting(testRef);
+
+      expect(outcome).toBe("skipped");
+      // Self-heal threw, so we should see human help
+      expect(mockIssues.hasHumanHelpComment).toHaveBeenCalledWith(testRef, ERROR_CODES.VOTING_COMMENT_NOT_FOUND);
+      expect(mockIssues.addLabels).toHaveBeenCalledWith(testRef, [LABELS.NEEDS_HUMAN]);
+    });
+
+    it("should fall back to human help when comment() throws in postVotingComment", async () => {
+      // findVotingCommentId returns null both times (no race), but comment() throws
+      vi.mocked(mockIssues.findVotingCommentId).mockResolvedValue(null);
+      vi.mocked(mockIssues.hasHumanHelpComment).mockResolvedValue(false);
+      vi.mocked(mockIssues.comment)
+        .mockRejectedValueOnce(new Error("Comment creation failed"))  // postVotingComment
+        .mockResolvedValueOnce(undefined);                            // human help comment
+
+      const outcome = await governance.endVoting(testRef);
+
+      expect(outcome).toBe("skipped");
+      expect(mockIssues.hasHumanHelpComment).toHaveBeenCalledWith(testRef, ERROR_CODES.VOTING_COMMENT_NOT_FOUND);
+      // Two calls: failed voting comment + successful human help comment
+      expect(mockIssues.comment).toHaveBeenCalledTimes(2);
+      expect(mockIssues.addLabels).toHaveBeenCalledWith(testRef, [LABELS.NEEDS_HUMAN]);
+    });
+  });
+
   describe("endVoting", () => {
     /** Helper: create a ValidatedVoteResult where every vote is from a unique single-reaction voter */
     function validatedFrom(votes: VoteCounts): ValidatedVoteResult {
@@ -383,41 +520,16 @@ describe("GovernanceService", () => {
       expect(outcome).toBe("phase:ready-to-implement");
     });
 
-    it("should return skipped and post human help when voting comment not found", async () => {
+    it("should return skipped and self-heal when voting comment not found", async () => {
       vi.mocked(mockIssues.findVotingCommentId).mockResolvedValue(null);
-      vi.mocked(mockIssues.hasHumanHelpComment).mockResolvedValue(false);
 
       const outcome = await governance.endVoting(testRef);
 
       expect(outcome).toBe("skipped");
       expect(mockIssues.findVotingCommentId).toHaveBeenCalledWith(testRef);
-      expect(mockIssues.hasHumanHelpComment).toHaveBeenCalledWith(testRef, ERROR_CODES.VOTING_COMMENT_NOT_FOUND);
-      expect(mockIssues.comment).toHaveBeenCalled();
-      expect(mockIssues.addLabels).toHaveBeenCalledWith(testRef, [LABELS.NEEDS_HUMAN]);
+      // Self-heal posts the voting comment
+      expect(mockIssues.comment).toHaveBeenCalledTimes(1);
       expect(mockIssues.getValidatedVoteCounts).not.toHaveBeenCalled();
-    });
-
-    it("should skip posting duplicate human help comment", async () => {
-      vi.mocked(mockIssues.findVotingCommentId).mockResolvedValue(null);
-      vi.mocked(mockIssues.hasHumanHelpComment).mockResolvedValue(true);
-
-      const outcome = await governance.endVoting(testRef);
-
-      expect(outcome).toBe("skipped");
-      expect(mockIssues.comment).not.toHaveBeenCalled();
-      expect(mockIssues.addLabels).not.toHaveBeenCalled();
-    });
-
-    it("should still return skipped when addLabels fails (label may not exist)", async () => {
-      vi.mocked(mockIssues.findVotingCommentId).mockResolvedValue(null);
-      vi.mocked(mockIssues.hasHumanHelpComment).mockResolvedValue(false);
-      vi.mocked(mockIssues.addLabels).mockRejectedValue(new Error("Label not found"));
-
-      const outcome = await governance.endVoting(testRef);
-
-      expect(outcome).toBe("skipped");
-      expect(mockIssues.comment).toHaveBeenCalled();
-      expect(mockIssues.addLabels).toHaveBeenCalledWith(testRef, [LABELS.NEEDS_HUMAN]);
     });
   });
 
@@ -673,28 +785,32 @@ describe("GovernanceService", () => {
       });
     });
 
-    it("should return skipped and post human help when voting comment not found", async () => {
+    it("should self-heal when voting comment not found in resolveInconclusive", async () => {
       vi.mocked(mockIssues.findVotingCommentId).mockResolvedValue(null);
-      vi.mocked(mockIssues.hasHumanHelpComment).mockResolvedValue(false);
 
       const outcome = await governance.resolveInconclusive(testRef);
 
       expect(outcome).toBe("skipped");
       expect(mockIssues.findVotingCommentId).toHaveBeenCalledWith(testRef);
-      expect(mockIssues.hasHumanHelpComment).toHaveBeenCalledWith(testRef, ERROR_CODES.VOTING_COMMENT_NOT_FOUND);
-      expect(mockIssues.comment).toHaveBeenCalled();
-      expect(mockIssues.addLabels).toHaveBeenCalledWith(testRef, [LABELS.NEEDS_HUMAN]);
+      // Self-heal posts the voting comment
+      expect(mockIssues.comment).toHaveBeenCalledTimes(1);
+      const commentBody = vi.mocked(mockIssues.comment).mock.calls[0][1];
+      expect(commentBody).toContain('"type":"voting"');
       expect(mockIssues.getValidatedVoteCounts).not.toHaveBeenCalled();
     });
 
-    it("should skip posting duplicate human help comment in resolveInconclusive", async () => {
+    it("should fall back to human help when self-heal fails in resolveInconclusive", async () => {
       vi.mocked(mockIssues.findVotingCommentId).mockResolvedValue(null);
-      vi.mocked(mockIssues.hasHumanHelpComment).mockResolvedValue(true);
+      vi.mocked(mockIssues.hasHumanHelpComment).mockResolvedValue(false);
+      vi.mocked(mockIssues.comment)
+        .mockRejectedValueOnce(new Error("API error"))
+        .mockResolvedValueOnce(undefined);
 
       const outcome = await governance.resolveInconclusive(testRef);
 
       expect(outcome).toBe("skipped");
-      expect(mockIssues.comment).not.toHaveBeenCalled();
+      expect(mockIssues.hasHumanHelpComment).toHaveBeenCalledWith(testRef, ERROR_CODES.VOTING_COMMENT_NOT_FOUND);
+      expect(mockIssues.addLabels).toHaveBeenCalledWith(testRef, [LABELS.NEEDS_HUMAN]);
     });
 
     it("should apply needs-human-input when eyes > all others after extended voting", async () => {

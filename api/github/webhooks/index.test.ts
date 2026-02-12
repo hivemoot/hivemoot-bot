@@ -464,6 +464,165 @@ describe("Queen Bot", () => {
     });
   });
 
+  describe("issues.labeled Handler (manual voting transition)", () => {
+    /** Build a valid mock Octokit that passes createIssueOperations validation */
+    const createLabeledMockOctokit = (overrides?: {
+      comments?: Array<{ id: number; body: string; performed_via_github_app?: { id: number } | null }>;
+    }) => {
+      const comments = overrides?.comments ?? [];
+      return {
+        rest: {
+          issues: {
+            get: vi.fn().mockResolvedValue({ data: {} }),
+            addLabels: vi.fn().mockResolvedValue({}),
+            removeLabel: vi.fn().mockResolvedValue({}),
+            createComment: vi.fn().mockResolvedValue({}),
+            update: vi.fn().mockResolvedValue({}),
+            lock: vi.fn().mockResolvedValue({}),
+            unlock: vi.fn().mockResolvedValue({}),
+            listComments: vi.fn(),
+          },
+          reactions: {
+            listForIssueComment: vi.fn().mockResolvedValue({ data: [] }),
+            listForIssue: vi.fn().mockResolvedValue({ data: [] }),
+          },
+        },
+        paginate: {
+          // Each call gets a fresh generator (generators are single-use)
+          iterator: vi.fn().mockImplementation(() => ({
+            async *[Symbol.asyncIterator]() {
+              yield { data: comments };
+            },
+          })),
+        },
+      };
+    };
+
+    it("should register the issues.labeled handler", () => {
+      const { handlers } = createWebhookHarness();
+      expect(handlers.get("issues.labeled")).toBeDefined();
+    });
+
+    it("should skip non-voting labels", async () => {
+      const { handlers } = createWebhookHarness();
+      const handler = handlers.get("issues.labeled")!;
+      const mockOctokit = createLabeledMockOctokit();
+
+      await handler({
+        payload: {
+          label: { name: "bug" },
+          issue: { number: 42 },
+          sender: { type: "User", login: "alice" },
+          repository: { name: "test-repo", full_name: "hivemoot/test-repo", owner: { login: "hivemoot" } },
+        },
+        octokit: mockOctokit,
+        log: { info: vi.fn(), error: vi.fn() },
+      });
+
+      expect(mockOctokit.rest.issues.createComment).not.toHaveBeenCalled();
+    });
+
+    it("should skip Bot senders (automatic transitions)", async () => {
+      const { handlers } = createWebhookHarness();
+      const handler = handlers.get("issues.labeled")!;
+      const mockOctokit = createLabeledMockOctokit();
+
+      await handler({
+        payload: {
+          label: { name: LABELS.VOTING },
+          issue: { number: 42 },
+          sender: { type: "Bot", login: "hivemoot-bot[bot]" },
+          repository: { name: "test-repo", full_name: "hivemoot/test-repo", owner: { login: "hivemoot" } },
+        },
+        octokit: mockOctokit,
+        log: { info: vi.fn(), error: vi.fn() },
+      });
+
+      expect(mockOctokit.rest.issues.createComment).not.toHaveBeenCalled();
+    });
+
+    it("should post voting comment for manual user label addition", async () => {
+      const { handlers } = createWebhookHarness();
+      const handler = handlers.get("issues.labeled")!;
+      // No existing comments → findVotingCommentId returns null → posts new comment
+      const mockOctokit = createLabeledMockOctokit();
+      const log = { info: vi.fn(), error: vi.fn() };
+
+      await handler({
+        payload: {
+          label: { name: LABELS.VOTING },
+          issue: { number: 26 },
+          sender: { type: "User", login: "hivemoot" },
+          repository: { name: "sandbox", full_name: "hivemoot/sandbox", owner: { login: "hivemoot" } },
+        },
+        octokit: mockOctokit,
+        log,
+      });
+
+      expect(mockOctokit.rest.issues.createComment).toHaveBeenCalledTimes(1);
+      const commentBody = mockOctokit.rest.issues.createComment.mock.calls[0][0].body;
+      expect(commentBody).toContain('"type":"voting"');
+      expect(log.info).toHaveBeenCalledWith(
+        expect.stringContaining("Voting comment for issue #26: posted"),
+      );
+    });
+
+    it("should skip when voting comment already exists", async () => {
+      const { handlers } = createWebhookHarness();
+      const handler = handlers.get("issues.labeled")!;
+      const existingVotingComment = {
+        id: 999,
+        body: `<!-- hivemoot-metadata: ${JSON.stringify({ version: 1, type: "voting", issueNumber: 26, cycle: 1 })} -->\nVoting stuff`,
+        performed_via_github_app: { id: TEST_APP_ID },
+      };
+      const mockOctokit = createLabeledMockOctokit({ comments: [existingVotingComment] });
+      const log = { info: vi.fn(), error: vi.fn() };
+
+      await handler({
+        payload: {
+          label: { name: LABELS.VOTING },
+          issue: { number: 26 },
+          sender: { type: "User", login: "hivemoot" },
+          repository: { name: "sandbox", full_name: "hivemoot/sandbox", owner: { login: "hivemoot" } },
+        },
+        octokit: mockOctokit,
+        log,
+      });
+
+      expect(mockOctokit.rest.issues.createComment).not.toHaveBeenCalled();
+      expect(log.info).toHaveBeenCalledWith(
+        expect.stringContaining("Voting comment for issue #26: skipped"),
+      );
+    });
+
+    it("should propagate errors from postVotingComment", async () => {
+      const { handlers } = createWebhookHarness();
+      const handler = handlers.get("issues.labeled")!;
+      const mockOctokit = createLabeledMockOctokit();
+      // Force createComment to fail
+      mockOctokit.rest.issues.createComment.mockRejectedValue(new Error("API failure"));
+      const log = { info: vi.fn(), error: vi.fn() };
+
+      await expect(
+        handler({
+          payload: {
+            label: { name: LABELS.VOTING },
+            issue: { number: 42 },
+            sender: { type: "User", login: "alice" },
+            repository: { name: "test-repo", full_name: "hivemoot/test-repo", owner: { login: "hivemoot" } },
+          },
+          octokit: mockOctokit,
+          log,
+        }),
+      ).rejects.toThrow("API failure");
+
+      expect(log.error).toHaveBeenCalledWith(
+        expect.objectContaining({ issue: 42 }),
+        expect.stringContaining("Failed to post voting comment"),
+      );
+    });
+  });
+
   describe("Health Check Endpoint", () => {
     const originalEnv = process.env;
 

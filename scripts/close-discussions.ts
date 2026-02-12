@@ -44,7 +44,8 @@ import type { GovernanceService } from "../api/lib/governance.js";
 
 /**
  * Represents an issue that was skipped due to missing voting comment.
- * Human intervention has been requested for these issues.
+ * The system may have self-healed by posting the voting comment, or
+ * flagged it for human intervention.
  */
 interface SkippedIssue {
   repo: string;
@@ -538,6 +539,53 @@ export async function notifyPendingPRs(
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
+// Voting Comment Reconciliation
+// ───────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Reconcile missing voting comments for phase:voting issues.
+ *
+ * Iterates all open issues with the phase:voting label and calls
+ * governance.postVotingComment() on each. Since postVotingComment is
+ * idempotent (skips when a voting comment already exists), this is safe
+ * to call on every cron run. Errors on individual issues are logged
+ * but do not abort the loop.
+ *
+ * @returns Number of issues where a voting comment was newly posted
+ */
+export async function reconcileMissingVotingComments(
+  octokit: InstanceType<typeof Octokit>,
+  owner: string,
+  repoName: string,
+  governance: GovernanceService,
+): Promise<number> {
+  let reconciledCount = 0;
+  const iterator = octokit.paginate.iterator(
+    octokit.rest.issues.listForRepo,
+    { owner, repo: repoName, state: "open", labels: LABELS.VOTING, per_page: 100 },
+  );
+
+  for await (const { data: page } of iterator) {
+    for (const issue of page as Issue[]) {
+      if ('pull_request' in issue) continue;
+      const ref: IssueRef = { owner, repo: repoName, issueNumber: issue.number };
+      try {
+        const result = await governance.postVotingComment(ref);
+        if (result === "posted") {
+          reconciledCount++;
+          logger.info(`[${owner}/${repoName}] Reconciled voting comment for #${issue.number}`);
+        }
+      } catch (error) {
+        logger.warn(
+          `[${owner}/${repoName}] Failed to reconcile #${issue.number}: ${(error as Error).message}`,
+        );
+      }
+    }
+  }
+  return reconciledCount;
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
 // Repository Processing
 // ───────────────────────────────────────────────────────────────────────────────
 
@@ -624,15 +672,29 @@ export async function processRepository(
   try {
     // Load per-repo configuration (falls back to defaults if not present)
     const repoConfig: EffectiveConfig = await loadRepositoryConfig(octokit, owner, repoName);
+    const issues = createIssueOperations(octokit, { appId });
+    const governance = createGovernanceService(issues);
+
+    // ── Reconciliation (always runs, even for manual-only repos) ──
+    // Best-effort: do not let reconciliation failures block phase transitions.
+    try {
+      const reconciled = await reconcileMissingVotingComments(octokit, owner, repoName, governance);
+      if (reconciled > 0) {
+        logger.info(`[${repo.full_name}] Reconciled ${reconciled} missing voting comment(s)`);
+      }
+    } catch (error) {
+      logger.warn(
+        `[${repo.full_name}] Reconciliation failed: ${(error as Error).message}. Continuing with phase transitions.`,
+      );
+    }
+
+    // ── Automatic transitions (only for repos with auto exits) ──
     if (!hasAutomaticGovernancePhases(repoConfig)) {
       logger.info(
         `[${repo.full_name}] all proposal exits are manual; skipping scheduled phase transitions`
       );
       return { skippedIssues, accessIssues };
     }
-
-    const issues = createIssueOperations(octokit, { appId });
-    const governance = createGovernanceService(issues);
 
     const trackOutcome = (outcome: VotingOutcome, issueNumber: number) => {
       if (outcome === "skipped") {

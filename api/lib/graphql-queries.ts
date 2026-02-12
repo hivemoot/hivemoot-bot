@@ -179,7 +179,11 @@ async function getLinkedIssuesFallbackFromBody(
   for (const result of results) {
     if (result.status === "fulfilled") {
       const issue = result.value.repository.issue;
-      if (issue) linkedIssues.push(issue);
+      if (issue) {
+        linkedIssues.push(issue);
+      } else {
+        failed++;
+      }
     } else {
       failed++;
     }

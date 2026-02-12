@@ -148,6 +148,12 @@ const GET_OPEN_PRS_FOR_ISSUE_QUERY = `
                   author {
                     login
                   }
+                  repository {
+                    owner {
+                      login
+                    }
+                    name
+                  }
                 }
               }
             }
@@ -166,6 +172,12 @@ interface CrossReferencedEvent {
     author?: {
       login: string;
     };
+    repository?: {
+      owner: {
+        login: string;
+      };
+      name: string;
+    };
   } | null;
 }
 
@@ -177,11 +189,19 @@ interface OpenPRsForIssueResponse {
           hasNextPage: boolean;
           endCursor: string | null;
         };
-        nodes: CrossReferencedEvent[];
+        nodes: Array<CrossReferencedEvent | null>;
       };
     } | null;
   };
 }
+
+/**
+ * Pattern for GitHub GraphQL errors indicating a stale or deleted PR.
+ * These are expected when cross-references point to PRs that no longer exist
+ * (e.g., force-deleted branches, renumbered PRs after repo transfer).
+ * Classified as noise rather than systemic failures.
+ */
+const STALE_CANDIDATE_PATTERN = /Could not resolve to a PullRequest with the number/;
 
 /**
  * Maximum number of PRs to fetch for an issue.
@@ -243,7 +263,8 @@ export async function getOpenPRsForIssue(
   // Per-PR errors are caught so one transient failure doesn't lose all results.
   const BATCH_SIZE = 5;
   const verified: PullRequest[] = [];
-  let failedCount = 0;
+  let staleCandidateCount = 0;
+  let hardFailureCount = 0;
 
   for (let i = 0; i < candidates.length; i += BATCH_SIZE) {
     const batch = candidates.slice(i, i + BATCH_SIZE);
@@ -258,23 +279,36 @@ export async function getOpenPRsForIssue(
       if (result.status === "fulfilled" && result.value !== null) {
         verified.push(result.value);
       } else if (result.status === "rejected") {
-        failedCount++;
         const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
-        logger.warn(
-          `Failed to verify closing syntax for candidate PR in ${owner}/${repo} ` +
-          `(issue #${issueNumber}): ${reason}`
-        );
+        if (STALE_CANDIDATE_PATTERN.test(reason)) {
+          // Stale/deleted PR cross-reference — expected noise, not a systemic failure.
+          staleCandidateCount++;
+          logger.debug(
+            `Skipped stale candidate PR in ${owner}/${repo} ` +
+            `(issue #${issueNumber}): ${reason}`
+          );
+        } else {
+          hardFailureCount++;
+          logger.warn(
+            `Failed to verify closing syntax for candidate PR in ${owner}/${repo} ` +
+            `(issue #${issueNumber}): ${reason}`
+          );
+        }
       }
     }
   }
 
-  // If every verification failed, this is likely a systemic issue (rate limit,
-  // auth failure, outage) — not a per-PR transient error. Throw so callers
-  // (especially webhook handlers that don't retry) don't silently proceed
-  // with an empty result that looks like "no PRs close this issue."
-  if (failedCount > 0 && verified.length === 0) {
+  if (staleCandidateCount > 0) {
+    logger.info(
+      `Skipped ${staleCandidateCount} stale candidate(s) for ${owner}/${repo}#${issueNumber}`
+    );
+  }
+
+  // Fail-closed only on non-stale systemic failures (rate limit, auth, outage).
+  // Stale candidates are expected noise and do not trigger fail-closed.
+  if (hardFailureCount > 0 && verified.length === 0) {
     throw new Error(
-      `All ${failedCount} PR closing-syntax verification(s) failed for ` +
+      `All ${hardFailureCount} PR closing-syntax verification(s) failed for ` +
       `${owner}/${repo}#${issueNumber}. Cannot determine linked PRs.`
     );
   }
@@ -312,10 +346,24 @@ async function getCrossReferencedOpenPRs(
     const timelineItems = issue.timelineItems.nodes;
     eventsScanned += timelineItems.length;
 
-    // Filter to PRs that are open and have the expected structure
-    // Uses "ghost" for deleted authors (matching GitHub's web UI convention)
+    // Layer 1: Null safety — GitHub GraphQL can return null entries in sparse arrays.
+    // Layer 2: Cross-repo filtering — drop candidates from other repositories.
+    // Layer 3: State + number filtering (existing) — only OPEN PRs with valid numbers.
+    // Uses "ghost" for deleted authors (matching GitHub's web UI convention).
     const openPRs = timelineItems
-      .map((event: CrossReferencedEvent) => event.source)
+      .filter((event): event is CrossReferencedEvent => event !== null)
+      .filter((event) => {
+        // Drop candidates from other repositories to avoid querying
+        // local repo for non-existent PR numbers.
+        const sourceRepo = event.source?.repository;
+        if (sourceRepo) {
+          return sourceRepo.owner.login === owner && sourceRepo.name === repo;
+        }
+        // If repository field is missing (shouldn't happen with our query,
+        // but defensive), allow through for verification step to handle.
+        return true;
+      })
+      .map((event) => event.source)
       .filter(isValidOpenPRSource)
       .map((source) => ({
         number: source.number,

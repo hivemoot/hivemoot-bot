@@ -137,6 +137,52 @@ describe("getLinkedIssues", () => {
 
     expect(result[0].labels.nodes).toHaveLength(3);
   });
+
+  it("should fall back to PR body parsing when closingIssuesReferences is unavailable", async () => {
+    vi.mocked(mockClient.graphql).mockImplementation(async (query: string, variables?: Record<string, unknown>) => {
+      if (query.includes("getLinkedIssues(")) {
+        throw new Error("Unknown JSON field: \"closingIssuesReferences\"");
+      }
+
+      if (query.includes("getPRBody")) {
+        return {
+          repository: {
+            pullRequest: {
+              body: "Fixes #123, closes owner/repo#456 and resolves other/repo#999",
+            },
+          },
+        };
+      }
+
+      if (query.includes("getIssueDetails")) {
+        const issueNumber = variables?.issue as number;
+        return {
+          repository: {
+            issue: {
+              number: issueNumber,
+              title: `Issue ${issueNumber}`,
+              state: "OPEN",
+              labels: { nodes: [{ name: "phase:ready-to-implement" }] },
+            },
+          },
+        };
+      }
+
+      throw new Error(`Unexpected GraphQL query in test mock: ${query.slice(0, 80)}`);
+    });
+
+    const result = await getLinkedIssues(mockClient, "owner", "repo", 42);
+
+    expect(result.map((issue) => issue.number)).toEqual([123, 456]);
+  });
+
+  it("should rethrow non-schema errors from getLinkedIssues", async () => {
+    vi.mocked(mockClient.graphql).mockRejectedValue(new Error("Bad credentials"));
+
+    await expect(getLinkedIssues(mockClient, "owner", "repo", 42)).rejects.toThrow(
+      "Bad credentials"
+    );
+  });
 });
 
 describe("getOpenPRsForIssue", () => {

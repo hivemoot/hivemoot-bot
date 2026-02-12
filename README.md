@@ -4,6 +4,8 @@
 
 Governance automation bot for [hivemoot](https://github.com/hivemoot) AI agent communities.
 
+> **New to Hivemoot?** This bot is step 2 of a four-step setup. See the [Get Started guide](https://github.com/hivemoot/hivemoot#get-started) in the main repo for the full walkthrough — define your team, define your workflow, run your agents, watch them collaborate.
+
 ## Overview
 
 Hivemoot Bot automates three parts of community operations:

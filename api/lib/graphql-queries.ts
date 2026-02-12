@@ -257,9 +257,18 @@ export async function getOpenPRsForIssue(
   issueNumber: number
 ): Promise<PullRequest[]> {
   // Step 1: Get candidate PRs via cross-references
-  const candidates = await getCrossReferencedOpenPRs(client, owner, repo, issueNumber);
+  const {
+    prs: candidates,
+    crossRepoCandidateSkipped,
+  } = await getCrossReferencedOpenPRs(client, owner, repo, issueNumber);
 
   if (candidates.length === 0) {
+    logger.debug(
+      `PR reconciliation stats for ${owner}/${repo}#${issueNumber}: ` +
+      `crossRepoCandidateSkipped=${crossRepoCandidateSkipped} ` +
+      `staleCandidateSkipped=0 verificationHardFailure=0 ` +
+      `candidates=0 verified=0`
+    );
     return [];
   }
 
@@ -268,7 +277,8 @@ export async function getOpenPRsForIssue(
   // Per-PR errors are caught so one transient failure doesn't lose all results.
   const BATCH_SIZE = 5;
   const verified: PullRequest[] = [];
-  let failedCount = 0;
+  let verificationHardFailure = 0;
+  let staleCandidateSkipped = 0;
 
   for (let i = 0; i < candidates.length; i += BATCH_SIZE) {
     const batch = candidates.slice(i, i + BATCH_SIZE);
@@ -285,12 +295,13 @@ export async function getOpenPRsForIssue(
       } else if (result.status === "rejected") {
         const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
         if (isNotFoundPRVerificationError(result.reason)) {
+          staleCandidateSkipped++;
           logger.debug(
             `Skipping stale PR candidate during closing-syntax verification in ${owner}/${repo} ` +
             `(issue #${issueNumber}): ${reason}`
           );
         } else {
-          failedCount++;
+          verificationHardFailure++;
           logger.warn(
             `Failed to verify closing syntax for candidate PR in ${owner}/${repo} ` +
             `(issue #${issueNumber}): ${reason}`
@@ -300,13 +311,21 @@ export async function getOpenPRsForIssue(
     }
   }
 
+  logger.debug(
+    `PR reconciliation stats for ${owner}/${repo}#${issueNumber}: ` +
+    `crossRepoCandidateSkipped=${crossRepoCandidateSkipped} ` +
+    `staleCandidateSkipped=${staleCandidateSkipped} ` +
+    `verificationHardFailure=${verificationHardFailure} ` +
+    `candidates=${candidates.length} verified=${verified.length}`
+  );
+
   // If every verification failed, this is likely a systemic issue (rate limit,
   // auth failure, outage) — not a per-PR transient error. Throw so callers
   // (especially webhook handlers that don't retry) don't silently proceed
   // with an empty result that looks like "no PRs close this issue."
-  if (failedCount > 0 && verified.length === 0) {
+  if (verificationHardFailure > 0 && verified.length === 0) {
     throw new Error(
-      `All ${failedCount} PR closing-syntax verification(s) failed for ` +
+      `All ${verificationHardFailure} PR closing-syntax verification(s) failed for ` +
       `${owner}/${repo}#${issueNumber}. Cannot determine linked PRs.`
     );
   }
@@ -323,9 +342,10 @@ async function getCrossReferencedOpenPRs(
   owner: string,
   repo: string,
   issueNumber: number
-): Promise<PullRequest[]> {
+): Promise<{ prs: PullRequest[]; crossRepoCandidateSkipped: number }> {
   // Use Map for deduplication - same PR can appear in multiple cross-reference events
   const prMap = new Map<number, PullRequest>();
+  let crossRepoCandidateSkipped = 0;
   let cursor: string | null = null;
   let hasNextPage = true;
   let eventsScanned = 0;
@@ -338,7 +358,7 @@ async function getCrossReferencedOpenPRs(
 
     const issue = response.repository.issue;
     if (!issue) {
-      return [];
+      return { prs: [], crossRepoCandidateSkipped };
     }
 
     const timelineItems = issue.timelineItems.nodes;
@@ -355,7 +375,11 @@ async function getCrossReferencedOpenPRs(
         if (!sourceOwner || !sourceRepo) {
           return true;
         }
-        return sourceOwner === owner.toLowerCase() && sourceRepo === repo.toLowerCase();
+        const sameRepo = sourceOwner === owner.toLowerCase() && sourceRepo === repo.toLowerCase();
+        if (!sameRepo) {
+          crossRepoCandidateSkipped++;
+        }
+        return sameRepo;
       })
       .map((source) => ({
         number: source.number,
@@ -386,5 +410,5 @@ async function getCrossReferencedOpenPRs(
     }
   }
 
-  return Array.from(prMap.values());
+  return { prs: Array.from(prMap.values()), crossRepoCandidateSkipped };
 }

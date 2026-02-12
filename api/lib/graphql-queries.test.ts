@@ -4,6 +4,7 @@ import {
   getOpenPRsForIssue,
   type GraphQLClient,
 } from "./graphql-queries.js";
+import { logger } from "./logger.js";
 
 /**
  * Tests for GraphQL Queries
@@ -265,6 +266,8 @@ describe("getOpenPRsForIssue", () => {
   });
 
   it("should ignore cross-repo candidates before local verification", async () => {
+    const debugSpy = vi.spyOn(logger, "debug").mockImplementation(() => {});
+
     vi.mocked(mockClient.graphql).mockImplementation(async (query: string, variables?: Record<string, unknown>) => {
       if (query.includes("getOpenPRsForIssue")) {
         return {
@@ -323,6 +326,9 @@ describe("getOpenPRsForIssue", () => {
     );
     expect(linkedIssuesCalls).toHaveLength(1);
     expect(linkedIssuesCalls[0]?.[1]).toMatchObject({ pr: 2 });
+    expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining("crossRepoCandidateSkipped=1"));
+    expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining("staleCandidateSkipped=0"));
+    expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining("verificationHardFailure=0"));
   });
 
   it("should filter out events without PR number", async () => {
@@ -949,6 +955,8 @@ describe("getOpenPRsForIssue", () => {
   });
 
   it("should skip stale candidate errors when at least one PR verifies", async () => {
+    const debugSpy = vi.spyOn(logger, "debug").mockImplementation(() => {});
+
     vi.mocked(mockClient.graphql).mockImplementation(async (query: string, variables?: Record<string, unknown>) => {
       if (query.includes("getOpenPRsForIssue")) {
         return {
@@ -1002,6 +1010,8 @@ describe("getOpenPRsForIssue", () => {
 
     expect(result).toHaveLength(1);
     expect(result[0]?.number).toBe(2);
+    expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining("staleCandidateSkipped=1"));
+    expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining("verificationHardFailure=0"));
   });
 
   it("should return empty array when all candidates are stale references", async () => {
@@ -1039,6 +1049,8 @@ describe("getOpenPRsForIssue", () => {
   });
 
   it("should throw when all verifications fail (total failure)", async () => {
+    const debugSpy = vi.spyOn(logger, "debug").mockImplementation(() => {});
+
     vi.mocked(mockClient.graphql).mockImplementation(async (query: string) => {
       if (query.includes("getOpenPRsForIssue")) {
         return {
@@ -1064,6 +1076,8 @@ describe("getOpenPRsForIssue", () => {
     await expect(
       getOpenPRsForIssue(mockClient, "owner", "repo", 123)
     ).rejects.toThrow("All 2 PR closing-syntax verification(s) failed");
+    expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining("verificationHardFailure=2"));
+    expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining("staleCandidateSkipped=0"));
   });
 
   it("should return empty when candidates exist but none close the issue", async () => {

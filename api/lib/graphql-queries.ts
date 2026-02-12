@@ -148,6 +148,12 @@ const GET_OPEN_PRS_FOR_ISSUE_QUERY = `
                   author {
                     login
                   }
+                  repository {
+                    name
+                    owner {
+                      login
+                    }
+                  }
                 }
               }
             }
@@ -165,6 +171,12 @@ interface CrossReferencedEvent {
     state?: "OPEN" | "CLOSED" | "MERGED";
     author?: {
       login: string;
+    };
+    repository?: {
+      name?: string;
+      owner?: {
+        login?: string;
+      };
     };
   } | null;
 }
@@ -191,6 +203,7 @@ interface OpenPRsForIssueResponse {
  * In practice, governance limits PRs per issue, so this is a safety net.
  */
 const MAX_PRS_TO_FETCH = 100;
+const STALE_PR_NOT_FOUND_ERROR = /Could not resolve to a PullRequest with the number of/i;
 
 /**
  * Type guard for valid open PR sources from cross-referenced events.
@@ -204,12 +217,43 @@ function isValidOpenPRSource(
   title?: string;
   state: "OPEN";
   author?: { login: string };
+  repository?: {
+    name?: string;
+    owner?: {
+      login?: string;
+    };
+  };
 } {
   return (
     source !== null &&
     typeof source.number === "number" &&
     source.state === "OPEN"
   );
+}
+
+function isSameRepositorySource(
+  source: {
+    repository?: {
+      name?: string;
+      owner?: {
+        login?: string;
+      };
+    };
+  },
+  owner: string,
+  repo: string
+): boolean {
+  const sourceOwner = source.repository?.owner?.login?.toLowerCase();
+  const sourceRepo = source.repository?.name?.toLowerCase();
+  if (!sourceOwner || !sourceRepo) {
+    return true;
+  }
+  return sourceOwner === owner.toLowerCase() && sourceRepo === repo.toLowerCase();
+}
+
+function isStalePRNotFoundError(reason: unknown): boolean {
+  const message = reason instanceof Error ? reason.message : String(reason);
+  return STALE_PR_NOT_FOUND_ERROR.test(message);
 }
 
 /**
@@ -243,7 +287,8 @@ export async function getOpenPRsForIssue(
   // Per-PR errors are caught so one transient failure doesn't lose all results.
   const BATCH_SIZE = 5;
   const verified: PullRequest[] = [];
-  let failedCount = 0;
+  let hardFailureCount = 0;
+  let staleCandidateCount = 0;
 
   for (let i = 0; i < candidates.length; i += BATCH_SIZE) {
     const batch = candidates.slice(i, i + BATCH_SIZE);
@@ -258,23 +303,38 @@ export async function getOpenPRsForIssue(
       if (result.status === "fulfilled" && result.value !== null) {
         verified.push(result.value);
       } else if (result.status === "rejected") {
-        failedCount++;
         const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
-        logger.warn(
-          `Failed to verify closing syntax for candidate PR in ${owner}/${repo} ` +
-          `(issue #${issueNumber}): ${reason}`
-        );
+        if (isStalePRNotFoundError(result.reason)) {
+          staleCandidateCount++;
+          logger.debug(
+            `Skipping stale PR cross-reference candidate in ${owner}/${repo} ` +
+            `(issue #${issueNumber}): ${reason}`
+          );
+        } else {
+          hardFailureCount++;
+          logger.warn(
+            `Failed to verify closing syntax for candidate PR in ${owner}/${repo} ` +
+            `(issue #${issueNumber}): ${reason}`
+          );
+        }
       }
     }
+  }
+
+  if (staleCandidateCount > 0) {
+    logger.debug(
+      `Skipped ${staleCandidateCount} stale PR candidate(s) while reconciling ` +
+      `${owner}/${repo}#${issueNumber}`
+    );
   }
 
   // If every verification failed, this is likely a systemic issue (rate limit,
   // auth failure, outage) — not a per-PR transient error. Throw so callers
   // (especially webhook handlers that don't retry) don't silently proceed
   // with an empty result that looks like "no PRs close this issue."
-  if (failedCount > 0 && verified.length === 0) {
+  if (hardFailureCount > 0 && verified.length === 0) {
     throw new Error(
-      `All ${failedCount} PR closing-syntax verification(s) failed for ` +
+      `All ${hardFailureCount} PR closing-syntax verification(s) failed for ` +
       `${owner}/${repo}#${issueNumber}. Cannot determine linked PRs.`
     );
   }
@@ -297,6 +357,7 @@ async function getCrossReferencedOpenPRs(
   let cursor: string | null = null;
   let hasNextPage = true;
   let eventsScanned = 0;
+  let crossRepoSkipped = 0;
 
   while (hasNextPage && prMap.size < MAX_PRS_TO_FETCH && eventsScanned < MAX_PRS_TO_FETCH) {
     const response: OpenPRsForIssueResponse = await client.graphql<OpenPRsForIssueResponse>(
@@ -317,6 +378,13 @@ async function getCrossReferencedOpenPRs(
     const openPRs = timelineItems
       .map((event: CrossReferencedEvent) => event.source)
       .filter(isValidOpenPRSource)
+      .filter((source) => {
+        const sameRepo = isSameRepositorySource(source, owner, repo);
+        if (!sameRepo) {
+          crossRepoSkipped++;
+        }
+        return sameRepo;
+      })
       .map((source) => ({
         number: source.number,
         title: source.title ?? "",
@@ -344,6 +412,13 @@ async function getCrossReferencedOpenPRs(
     if (hasNextPage && cursor === null) {
       break;
     }
+  }
+
+  if (crossRepoSkipped > 0) {
+    logger.debug(
+      `Skipped ${crossRepoSkipped} cross-repo PR candidate(s) while reconciling ` +
+      `${owner}/${repo}#${issueNumber}`
+    );
   }
 
   return Array.from(prMap.values());

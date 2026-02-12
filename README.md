@@ -151,8 +151,7 @@ npm run typecheck
 npm run build
 ```
 
-For contribution workflows (including no-write fork-based PRs), see
-[CONTRIBUTING.md](CONTRIBUTING.md).
+For contribution workflows, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Useful scripts:
 

@@ -18,7 +18,9 @@ import {
   getLinkedIssues,
 } from "../../lib/graphql-queries.js";
 import { filterByLabel } from "../../lib/types.js";
+import type { LinkedIssue } from "../../lib/types.js";
 import { validateEnv, getAppId } from "../../lib/env-validation.js";
+import { hasClosingKeywordForRepo } from "../../lib/closing-keywords.js";
 import {
   processImplementationIntake,
   recalculateLeaderboardForPR,
@@ -40,6 +42,14 @@ import {
 const REVIEW_STATE = {
   APPROVED: "approved",
 } as const;
+
+/**
+ * Delay (ms) before retrying closingIssuesReferences when the initial
+ * query returns empty but the PR body contains closing keywords.
+ * 2 seconds is sufficient for GitHub's eventual-consistency indexing
+ * in the vast majority of cases.
+ */
+const LINKED_ISSUES_RETRY_DELAY_MS = 2000;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -270,14 +280,53 @@ export function app(probotApp: Probot): void {
       const issues = createIssueOperations(context.octokit, { appId });
       const prs = createPROperations(context.octokit, { appId });
 
-      const [linkedIssues, repoConfig] = await Promise.all([
+      const [initialLinkedIssues, repoConfig] = await Promise.all([
         getLinkedIssues(context.octokit, owner, repo, number),
         loadRepositoryConfig(context.octokit, owner, repo),
       ]);
 
-      // Unlinked PRs get a warning; linked PRs are handled by processImplementationIntake
+      // Resolve linked issues with retry when closingIssuesReferences lags.
+      // GitHub's closingIssuesReferences field is eventually consistent:
+      // freshly opened PRs can briefly return an empty array even when the
+      // body contains valid closing keywords. Retrying once after a short
+      // delay gives the index time to catch up and ensures identical PRs
+      // get consistent outcomes. (See issue #21.)
+      let linkedIssues: LinkedIssue[] = initialLinkedIssues;
+      let resolutionSource: "graphql" | "graphql-retry" = "graphql";
+
       if (linkedIssues.length === 0) {
-        await issues.comment({ owner, repo, issueNumber: number }, MESSAGES.PR_NO_LINKED_ISSUE);
+        const bodyText = context.payload.pull_request.body;
+        const hasClosingKeyword = hasClosingKeywordForRepo(bodyText, owner, repo);
+
+        if (hasClosingKeyword) {
+          context.log.info(
+            { pr: number, repo: fullName },
+            "closingIssuesReferences empty but PR body has closing keywords; retrying after delay"
+          );
+          await new Promise((resolve) => setTimeout(resolve, LINKED_ISSUES_RETRY_DELAY_MS));
+          linkedIssues = await getLinkedIssues(context.octokit, owner, repo, number);
+          resolutionSource = "graphql-retry";
+        }
+
+        if (linkedIssues.length === 0) {
+          context.log.info(
+            { pr: number, repo: fullName, resolutionSource, hasClosingKeyword },
+            "No linked issues resolved for PR"
+          );
+          if (!hasClosingKeyword) {
+            await issues.comment({ owner, repo, issueNumber: number }, MESSAGES.PR_NO_LINKED_ISSUE);
+          } else {
+            context.log.warn(
+              { pr: number, repo: fullName },
+              "Suppressing no-linked warning: closing keywords present but GraphQL still empty after retry"
+            );
+          }
+        } else {
+          context.log.info(
+            { pr: number, repo: fullName, resolutionSource, issueCount: linkedIssues.length },
+            "Linked issues resolved after retry"
+          );
+        }
       }
 
       await processImplementationIntake({

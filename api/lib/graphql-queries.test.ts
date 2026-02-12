@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   getLinkedIssues,
+  getPRBodyLastEditedAt,
   getOpenPRsForIssue,
   type GraphQLClient,
 } from "./graphql-queries.js";
+import { logger } from "./logger.js";
 
 /**
  * Tests for GraphQL Queries
@@ -136,6 +138,94 @@ describe("getLinkedIssues", () => {
     const result = await getLinkedIssues(mockClient, "owner", "repo", 42);
 
     expect(result[0].labels.nodes).toHaveLength(3);
+  });
+});
+
+describe("getPRBodyLastEditedAt", () => {
+  let mockClient: GraphQLClient;
+
+  beforeEach(() => {
+    mockClient = {
+      graphql: vi.fn(),
+    };
+    vi.restoreAllMocks();
+  });
+
+  it("should parse and return a valid lastEditedAt timestamp", async () => {
+    vi.mocked(mockClient.graphql).mockResolvedValue({
+      repository: {
+        pullRequest: {
+          lastEditedAt: "2026-02-12T08:00:00Z",
+        },
+      },
+    });
+
+    const result = await getPRBodyLastEditedAt(mockClient, "owner", "repo", 42);
+
+    expect(result).toBeInstanceOf(Date);
+    expect(result?.toISOString()).toBe("2026-02-12T08:00:00.000Z");
+  });
+
+  it("should return null when PR is not found", async () => {
+    vi.mocked(mockClient.graphql).mockResolvedValue({
+      repository: {
+        pullRequest: null,
+      },
+    });
+
+    const result = await getPRBodyLastEditedAt(mockClient, "owner", "repo", 9999);
+
+    expect(result).toBeNull();
+  });
+
+  it("should return null when lastEditedAt is null", async () => {
+    vi.mocked(mockClient.graphql).mockResolvedValue({
+      repository: {
+        pullRequest: {
+          lastEditedAt: null,
+        },
+      },
+    });
+
+    const result = await getPRBodyLastEditedAt(mockClient, "owner", "repo", 42);
+
+    expect(result).toBeNull();
+  });
+
+  it("should return null and warn when lastEditedAt is invalid", async () => {
+    const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+
+    vi.mocked(mockClient.graphql).mockResolvedValue({
+      repository: {
+        pullRequest: {
+          lastEditedAt: "not-a-date",
+        },
+      },
+    });
+
+    const result = await getPRBodyLastEditedAt(mockClient, "owner", "repo", 42);
+
+    expect(result).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(
+      'Invalid lastEditedAt timestamp from GitHub GraphQL: "not-a-date"'
+    );
+  });
+
+  it("should pass correct query variables", async () => {
+    vi.mocked(mockClient.graphql).mockResolvedValue({
+      repository: {
+        pullRequest: {
+          lastEditedAt: null,
+        },
+      },
+    });
+
+    await getPRBodyLastEditedAt(mockClient, "test-owner", "test-repo", 123);
+
+    expect(mockClient.graphql).toHaveBeenCalledWith(
+      expect.stringContaining("getPRBodyLastEdited"),
+      { owner: "test-owner", repo: "test-repo", pr: 123 }
+    );
   });
 });
 

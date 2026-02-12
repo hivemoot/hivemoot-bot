@@ -328,6 +328,41 @@ describe("close-discussions script", () => {
 
       expect(mockCreateIssueOperations).toHaveBeenCalled();
     });
+
+    it("should continue with phase transitions when reconciliation fails", async () => {
+      const mockGovernance = { postVotingComment: vi.fn() } as any;
+      mockCreateGovernanceService.mockReturnValue(mockGovernance);
+
+      // First call (reconciliation) throws; subsequent calls (phase iteration) succeed
+      const mockIterator = vi.fn()
+        .mockImplementationOnce(() => {
+          throw new Error("Paginator exploded");
+        })
+        .mockReturnValue(emptyIterator());
+
+      const fakeOctokit = {
+        rest: {
+          issues: {
+            listForRepo: vi.fn(),
+          },
+        },
+        paginate: {
+          iterator: mockIterator,
+        },
+      } as any;
+      mockLoadRepositoryConfig.mockResolvedValue(makeRepoConfig("auto"));
+
+      const result = await processRepository(fakeOctokit, repo, appId);
+
+      // Reconciliation failure was caught and logged
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining("Reconciliation failed"),
+      );
+      // Phase transitions still ran (paginate.iterator called for phase issues)
+      expect(mockIterator.mock.calls.length).toBeGreaterThan(1);
+      // No skipped or access issues from the empty iterator
+      expect(result).toEqual({ skippedIssues: [], accessIssues: [] });
+    });
   });
 
   describe("processIssuePhase", () => {

@@ -44,7 +44,8 @@ import type { GovernanceService } from "../api/lib/governance.js";
 
 /**
  * Represents an issue that was skipped due to missing voting comment.
- * Human intervention has been requested for these issues.
+ * The system may have self-healed by posting the voting comment, or
+ * flagged it for human intervention.
  */
 interface SkippedIssue {
   repo: string;
@@ -675,10 +676,16 @@ export async function processRepository(
     const governance = createGovernanceService(issues);
 
     // ── Reconciliation (always runs, even for manual-only repos) ──
-    // Ensures phase:voting issues that were labeled manually have voting comments.
-    const reconciled = await reconcileMissingVotingComments(octokit, owner, repoName, governance);
-    if (reconciled > 0) {
-      logger.info(`[${repo.full_name}] Reconciled ${reconciled} missing voting comment(s)`);
+    // Best-effort: do not let reconciliation failures block phase transitions.
+    try {
+      const reconciled = await reconcileMissingVotingComments(octokit, owner, repoName, governance);
+      if (reconciled > 0) {
+        logger.info(`[${repo.full_name}] Reconciled ${reconciled} missing voting comment(s)`);
+      }
+    } catch (error) {
+      logger.warn(
+        `[${repo.full_name}] Reconciliation failed: ${(error as Error).message}. Continuing with phase transitions.`,
+      );
     }
 
     // ── Automatic transitions (only for repos with auto exits) ──

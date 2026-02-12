@@ -187,7 +187,8 @@ export class GovernanceService {
   }
 
   /**
-   * Build the complete voting comment body with metadata and LLM summary.
+   * Build the complete voting comment body with metadata.
+   * Includes an LLM-generated discussion summary when available.
    */
   private async buildVotingCommentBody(ref: IssueRef): Promise<string> {
     const cycle = await this.calculateVotingCycle(ref);
@@ -269,9 +270,9 @@ export class GovernanceService {
    * End voting and apply the outcome.
    * Votes are counted from the bot's voting comment reactions.
    *
-   * If the voting comment is not found, posts a human help request
-   * and returns "skipped" to allow the script to continue processing
-   * other issues.
+   * If the voting comment is not found, attempts to self-heal by posting
+   * the voting comment. Falls back to a human help request if self-healing
+   * fails. Returns "skipped" in either case.
    *
    * @param options.earlyDecision - When true, prepend early decision note to outcome message
    * @param options.votingConfig - When provided, enforce requiredVoters/minVoters (missing → inconclusive)
@@ -373,8 +374,9 @@ export class GovernanceService {
    * - needs-more-discussion → return to discussion (open, unlocked)
    * - Still tied → final inconclusive (closed, locked)
    *
-   * If the voting comment is not found, posts a human help request
-   * and returns "skipped" to allow the script to continue processing.
+   * If the voting comment is not found, attempts to self-heal by posting
+   * the voting comment. Falls back to a human help request if self-healing
+   * fails. Returns "skipped" in either case.
    *
    * @param options.votingConfig - When provided, enforce requiredVoters/minVoters (missing → inconclusive)
    * @param options.validatedVotes - Pre-fetched validated votes (avoids redundant API call)
@@ -489,8 +491,11 @@ export class GovernanceService {
   /**
    * Handle missing voting comment by attempting to self-heal first.
    *
-   * Tries to post the actual voting comment (idempotent). Falls back to
-   * the human help request only if self-healing fails.
+   * Three possible outcomes:
+   * - "posted": voting comment was successfully created (self-healed)
+   * - "skipped": voting comment appeared between the caller's check and ours
+   *   (race with webhook handler or cron reconciliation — healthy state)
+   * - exception: self-heal failed, falls back to human help request
    */
   private async handleMissingVotingComment(ref: IssueRef): Promise<void> {
     // Attempt self-heal: post the missing voting comment
@@ -500,8 +505,14 @@ export class GovernanceService {
         this.logger.info(
           `Self-healed missing voting comment for issue #${ref.issueNumber}`,
         );
-        return;
+      } else {
+        // "skipped" = comment appeared between the caller's check and ours
+        // (race with webhook handler or cron reconciliation). Healthy state.
+        this.logger.info(
+          `Voting comment already present for issue #${ref.issueNumber} (concurrent post)`,
+        );
       }
+      return;
     } catch (error) {
       this.logger.warn(
         `Self-heal failed for issue #${ref.issueNumber}: ${(error as Error).message}. Falling back to human help.`,

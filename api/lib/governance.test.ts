@@ -335,6 +335,55 @@ describe("GovernanceService", () => {
       expect(outcome).toBe("skipped");
       expect(mockIssues.addLabels).toHaveBeenCalledWith(testRef, [LABELS.NEEDS_HUMAN]);
     });
+
+    it("should not post human help when race condition causes skipped result", async () => {
+      // endVoting sees null (no voting comment), but by the time postVotingComment
+      // checks, the comment appeared (race with webhook handler or cron)
+      vi.mocked(mockIssues.findVotingCommentId)
+        .mockResolvedValueOnce(null)    // endVoting check
+        .mockResolvedValueOnce(99999);  // postVotingComment check (comment appeared)
+
+      const outcome = await governance.endVoting(testRef);
+
+      expect(outcome).toBe("skipped");
+      // No voting comment posted (it already exists)
+      expect(mockIssues.comment).not.toHaveBeenCalled();
+      // Human help path should NOT be reached
+      expect(mockIssues.hasHumanHelpComment).not.toHaveBeenCalled();
+      expect(mockIssues.addLabels).not.toHaveBeenCalledWith(testRef, [LABELS.NEEDS_HUMAN]);
+    });
+
+    it("should fall back to human help when findVotingCommentId throws in postVotingComment", async () => {
+      vi.mocked(mockIssues.findVotingCommentId)
+        .mockResolvedValueOnce(null)                     // endVoting check
+        .mockRejectedValueOnce(new Error("API timeout")); // postVotingComment check throws
+      vi.mocked(mockIssues.hasHumanHelpComment).mockResolvedValue(false);
+      vi.mocked(mockIssues.comment).mockResolvedValue(undefined);
+
+      const outcome = await governance.endVoting(testRef);
+
+      expect(outcome).toBe("skipped");
+      // Self-heal threw, so we should see human help
+      expect(mockIssues.hasHumanHelpComment).toHaveBeenCalledWith(testRef, ERROR_CODES.VOTING_COMMENT_NOT_FOUND);
+      expect(mockIssues.addLabels).toHaveBeenCalledWith(testRef, [LABELS.NEEDS_HUMAN]);
+    });
+
+    it("should fall back to human help when comment() throws in postVotingComment", async () => {
+      // findVotingCommentId returns null both times (no race), but comment() throws
+      vi.mocked(mockIssues.findVotingCommentId).mockResolvedValue(null);
+      vi.mocked(mockIssues.hasHumanHelpComment).mockResolvedValue(false);
+      vi.mocked(mockIssues.comment)
+        .mockRejectedValueOnce(new Error("Comment creation failed"))  // postVotingComment
+        .mockResolvedValueOnce(undefined);                            // human help comment
+
+      const outcome = await governance.endVoting(testRef);
+
+      expect(outcome).toBe("skipped");
+      expect(mockIssues.hasHumanHelpComment).toHaveBeenCalledWith(testRef, ERROR_CODES.VOTING_COMMENT_NOT_FOUND);
+      // Two calls: failed voting comment + successful human help comment
+      expect(mockIssues.comment).toHaveBeenCalledTimes(2);
+      expect(mockIssues.addLabels).toHaveBeenCalledWith(testRef, [LABELS.NEEDS_HUMAN]);
+    });
   });
 
   describe("endVoting", () => {

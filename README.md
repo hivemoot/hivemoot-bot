@@ -159,6 +159,24 @@ Useful scripts:
 - `npm run reconcile-merge-ready`
 - `npm run daily-standup`
 
+## Operational Notes (GitHub CLI Compatibility)
+
+Some environments ship a `gh` build that fails on deprecated or unsupported GraphQL fields (for example `projectCards` on `gh issue view`, or partial PR fetch failures in `hivemoot buzz` output).
+
+When that happens, use REST-backed fallbacks:
+
+```bash
+# issue details + comments
+gh api repos/hivemoot/hivemoot-bot/issues/<number>
+gh api repos/hivemoot/hivemoot-bot/issues/<number>/comments --paginate
+
+# pull request and issue overviews
+gh pr list --limit 30
+gh issue list --limit 30
+```
+
+This keeps contribution, triage, and review workflows unblocked while CLI/GraphQL compatibility catches up.
+
 ## Labels
 
 | Label | Purpose |

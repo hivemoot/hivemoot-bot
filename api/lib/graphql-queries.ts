@@ -55,6 +55,147 @@ interface LinkedIssuesResponse {
   };
 }
 
+const GET_PR_BODY_QUERY = `
+  query getPRBody($owner: String!, $repo: String!, $pr: Int!) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $pr) {
+        body
+      }
+    }
+  }
+`;
+
+interface PRBodyResponse {
+  repository: {
+    pullRequest: {
+      body: string | null;
+    } | null;
+  };
+}
+
+const GET_ISSUE_DETAILS_QUERY = `
+  query getIssueDetails($owner: String!, $repo: String!, $issue: Int!) {
+    repository(owner: $owner, name: $repo) {
+      issue(number: $issue) {
+        number
+        title
+        state
+        labels(first: 20) {
+          nodes {
+            name
+          }
+        }
+      }
+    }
+  }
+`;
+
+interface IssueDetailsResponse {
+  repository: {
+    issue: LinkedIssue | null;
+  };
+}
+
+function isClosingIssuesReferencesUnsupported(error: unknown): boolean {
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  return (
+    message.includes("closingissuesreferences") &&
+    (
+      message.includes("unknown json field") ||
+      message.includes("doesn't exist on type") ||
+      message.includes("cannot query field")
+    )
+  );
+}
+
+function extractClosingIssueNumbersFromBody(body: string, owner: string, repo: string): number[] {
+  const numbers = new Set<number>();
+  const ownerLower = owner.toLowerCase();
+  const repoLower = repo.toLowerCase();
+  const keywordClauseRegex = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b([^\n\r]*)/gi;
+
+  for (const clauseMatch of body.matchAll(keywordClauseRegex)) {
+    const clause = clauseMatch[1] ?? "";
+
+    const shortRefRegex = /(^|[\s,(])#(\d+)\b/g;
+    for (const match of clause.matchAll(shortRefRegex)) {
+      numbers.add(Number.parseInt(match[2], 10));
+    }
+
+    const fullRefRegex = /\b([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)#(\d+)\b/g;
+    for (const match of clause.matchAll(fullRefRegex)) {
+      if (
+        match[1].toLowerCase() === ownerLower &&
+        match[2].toLowerCase() === repoLower
+      ) {
+        numbers.add(Number.parseInt(match[3], 10));
+      }
+    }
+
+    const issueUrlRegex = /https:\/\/github\.com\/([^/\s]+)\/([^/\s#]+)\/issues\/(\d+)\b/gi;
+    for (const match of clause.matchAll(issueUrlRegex)) {
+      if (
+        match[1].toLowerCase() === ownerLower &&
+        match[2].toLowerCase() === repoLower
+      ) {
+        numbers.add(Number.parseInt(match[3], 10));
+      }
+    }
+  }
+
+  return Array.from(numbers.values());
+}
+
+async function getLinkedIssuesFallbackFromBody(
+  client: GraphQLClient,
+  owner: string,
+  repo: string,
+  prNumber: number
+): Promise<LinkedIssue[]> {
+  const prBodyResponse = await client.graphql<PRBodyResponse>(GET_PR_BODY_QUERY, {
+    owner,
+    repo,
+    pr: prNumber,
+  });
+  const body = prBodyResponse.repository.pullRequest?.body ?? "";
+  if (!body) return [];
+
+  const referencedIssueNumbers = extractClosingIssueNumbersFromBody(body, owner, repo);
+  if (referencedIssueNumbers.length === 0) return [];
+
+  const results = await Promise.allSettled(
+    referencedIssueNumbers.slice(0, 10).map((issueNumber) =>
+      client.graphql<IssueDetailsResponse>(GET_ISSUE_DETAILS_QUERY, {
+        owner,
+        repo,
+        issue: issueNumber,
+      })
+    )
+  );
+
+  const linkedIssues: LinkedIssue[] = [];
+  let failed = 0;
+
+  for (const result of results) {
+    if (result.status === "fulfilled") {
+      const issue = result.value.repository.issue;
+      if (issue) linkedIssues.push(issue);
+    } else {
+      failed++;
+    }
+  }
+
+  // Fail closed to avoid false negatives from partial fallback results.
+  if (failed > 0) {
+    throw new Error(
+      `Failed to resolve ${failed} referenced issue(s) from PR body fallback for ` +
+      `${owner}/${repo}#${prNumber}`
+    );
+  }
+
+  return linkedIssues;
+}
+
 /**
  * Get issues that will be closed when a PR is merged.
  * Uses GitHub's closingIssuesReferences which parses "fixes #123" etc.
@@ -65,12 +206,23 @@ export async function getLinkedIssues(
   repo: string,
   prNumber: number
 ): Promise<LinkedIssue[]> {
-  const response = await client.graphql<LinkedIssuesResponse>(
-    GET_LINKED_ISSUES_QUERY,
-    { owner, repo, pr: prNumber }
-  );
+  try {
+    const response = await client.graphql<LinkedIssuesResponse>(
+      GET_LINKED_ISSUES_QUERY,
+      { owner, repo, pr: prNumber }
+    );
 
-  return response.repository.pullRequest?.closingIssuesReferences.nodes ?? [];
+    return response.repository.pullRequest?.closingIssuesReferences.nodes ?? [];
+  } catch (error) {
+    if (!isClosingIssuesReferencesUnsupported(error)) {
+      throw error;
+    }
+
+    logger.warn(
+      `closingIssuesReferences unavailable for ${owner}/${repo}#${prNumber}; falling back to PR body parsing`
+    );
+    return getLinkedIssuesFallbackFromBody(client, owner, repo, prNumber);
+  }
 }
 
 // ───────────────────────────────────────────────────────────────────────────────

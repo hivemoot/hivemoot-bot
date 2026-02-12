@@ -139,6 +139,8 @@ Events:
 
 - Issues
 - Issue comments
+- Installation
+- Installation repositories
 - Pull requests
 - Pull request reviews
 
@@ -172,6 +174,10 @@ Useful scripts:
 | `implementation` | PR implements a ready issue |
 | `stale` | PR has no recent activity |
 | `implemented` | Issue was implemented by a merged PR |
+| `needs:human` | Human maintainer intervention is required |
+| `merge-ready` | Implementation PR satisfies merge-readiness checks |
+
+All labels above are automatically bootstrapped when the app is installed (or when repositories are added to an existing installation), with predefined colors and descriptions.
 
 ## License
 

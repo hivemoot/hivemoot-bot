@@ -8,6 +8,7 @@ import {
 import {
   createIssueOperations,
   createPROperations,
+  createRepositoryLabelService,
   createGovernanceService,
   loadRepositoryConfig,
   getOpenPRsForIssue,
@@ -51,21 +52,93 @@ interface RepoContext {
   fullName: string;
 }
 
+interface LabelBootstrapContext {
+  octokit: unknown;
+  log: {
+    info: (...args: unknown[]) => void;
+    error: (...args: unknown[]) => void;
+  };
+}
+
+interface InstallationRepoPayload {
+  owner?: { login?: string } | null;
+  name: string;
+  full_name: string;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper Functions
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Extract repository context from webhook payload */
-function getRepoContext(repository: { owner: { login: string }; name: string; full_name: string }): RepoContext {
+function getRepoContext(repository: InstallationRepoPayload): RepoContext {
+  const ownerFromFullName = repository.full_name.split("/")[0];
+  const owner = repository.owner?.login ?? ownerFromFullName;
+  if (!owner) {
+    throw new Error(`Unable to determine repository owner from '${repository.full_name}'`);
+  }
   return {
-    owner: repository.owner.login,
+    owner,
     repo: repository.name,
     fullName: repository.full_name,
   };
 }
 
+async function ensureLabelsForRepositories(
+  context: LabelBootstrapContext,
+  repositories: readonly InstallationRepoPayload[],
+  eventName: string
+): Promise<void> {
+  if (repositories.length === 0) {
+    context.log.info(`[${eventName}] No repositories in payload; skipping label bootstrap`);
+    return;
+  }
+
+  const labelService = createRepositoryLabelService(context.octokit);
+  const errors: Error[] = [];
+
+  for (const repository of repositories) {
+    const { owner, repo, fullName } = getRepoContext(repository);
+    try {
+      const result = await labelService.ensureRequiredLabels(owner, repo);
+      context.log.info(
+        `[${eventName}] Ensured labels in ${fullName}: created=${result.created}, skipped=${result.skipped}`
+      );
+    } catch (error) {
+      context.log.error({ err: error, repo: fullName }, `[${eventName}] Failed to ensure required labels`);
+      errors.push(error as Error);
+    }
+  }
+
+  if (errors.length > 0) {
+    throw new AggregateError(errors, `${errors.length} repository label bootstrap operation(s) failed`);
+  }
+}
+
 function app(probotApp: Probot): void {
   probotApp.log.info("Queen bot initialized");
+
+  /**
+   * Bootstrap required labels when the app is first installed.
+   */
+  probotApp.on("installation.created", async (context) => {
+    await ensureLabelsForRepositories(
+      context,
+      context.payload.repositories ?? [],
+      "installation.created"
+    );
+  });
+
+  /**
+   * Bootstrap required labels for repositories added to an existing installation.
+   */
+  probotApp.on("installation_repositories.added", async (context) => {
+    await ensureLabelsForRepositories(
+      context,
+      context.payload.repositories_added ?? [],
+      "installation_repositories.added"
+    );
+  });
 
   probotApp.on("issues.opened", async (context) => {
     const { number } = context.payload.issue;

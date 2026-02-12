@@ -60,6 +60,13 @@ interface LabelBootstrapContext {
   };
 }
 
+interface LabelBootstrapSummary {
+  reposProcessed: number;
+  reposFailed: number;
+  labelsCreated: number;
+  labelsSkipped: number;
+}
+
 interface InstallationRepoPayload {
   owner?: { login?: string } | null;
   name: string;
@@ -165,24 +172,40 @@ async function ensureLabelsForRepositories(
 
   if (targetRepositories.length === 0) {
     context.log.info(`[${eventName}] No installation repositories available; skipping label bootstrap`);
+    context.log.info(
+      `[${eventName}] Label bootstrap summary: reposProcessed=0, reposFailed=0, labelsCreated=0, labelsSkipped=0`
+    );
     return;
   }
 
   const labelService = createRepositoryLabelService(context.octokit);
   const errors: Error[] = [];
+  const summary: LabelBootstrapSummary = {
+    reposProcessed: targetRepositories.length,
+    reposFailed: 0,
+    labelsCreated: 0,
+    labelsSkipped: 0,
+  };
 
   for (const repository of targetRepositories) {
     const { owner, repo, fullName } = getRepoContext(repository);
     try {
       const result = await labelService.ensureRequiredLabels(owner, repo);
+      summary.labelsCreated += result.created;
+      summary.labelsSkipped += result.skipped;
       context.log.info(
         `[${eventName}] Ensured labels in ${fullName}: created=${result.created}, skipped=${result.skipped}`
       );
     } catch (error) {
+      summary.reposFailed += 1;
       context.log.error({ err: error, repo: fullName }, `[${eventName}] Failed to ensure required labels`);
       errors.push(error as Error);
     }
   }
+
+  context.log.info(
+    `[${eventName}] Label bootstrap summary: reposProcessed=${summary.reposProcessed}, reposFailed=${summary.reposFailed}, labelsCreated=${summary.labelsCreated}, labelsSkipped=${summary.labelsSkipped}`
+  );
 
   if (errors.length > 0) {
     throw new AggregateError(errors, `${errors.length} repository label bootstrap operation(s) failed`);

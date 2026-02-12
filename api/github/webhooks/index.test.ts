@@ -66,14 +66,22 @@ function createWebhookHarness() {
 function createInstallationOctokit(options?: {
   existingLabels?: Array<{ name: string }>;
   fallbackRepositories?: Array<{ name: string; full_name: string; owner?: { login?: string } | null }>;
+  createLabelImpl?: (params: {
+    owner: string;
+    repo: string;
+    name: string;
+    color: string;
+    description?: string;
+  }) => Promise<unknown>;
 }) {
   const existingLabels = options?.existingLabels ?? [];
   const fallbackRepositories = options?.fallbackRepositories ?? [];
+  const createLabelImpl = options?.createLabelImpl ?? (async () => ({}));
 
   const rest = {
     issues: {
       listLabelsForRepo: vi.fn(),
-      createLabel: vi.fn().mockResolvedValue({}),
+      createLabel: vi.fn().mockImplementation(createLabelImpl),
     },
     apps: {
       listReposAccessibleToInstallation: vi.fn().mockResolvedValue({
@@ -105,12 +113,13 @@ describe("Queen Bot", () => {
       expect(handler).toBeDefined();
 
       const octokit = createInstallationOctokit();
+      const log = {
+        info: vi.fn(),
+        error: vi.fn(),
+      };
       await handler!({
         octokit,
-        log: {
-          info: vi.fn(),
-          error: vi.fn(),
-        },
+        log,
         payload: {
           repositories: [
             {
@@ -130,6 +139,9 @@ describe("Queen Bot", () => {
           repo: "repo-a",
         })
       );
+      expect(log.info).toHaveBeenCalledWith(
+        `[installation.created] Label bootstrap summary: reposProcessed=1, reposFailed=0, labelsCreated=${REQUIRED_REPOSITORY_LABELS.length}, labelsSkipped=0`
+      );
     });
 
     it("should bootstrap labels from installation_repositories.added payload repositories", async () => {
@@ -138,12 +150,13 @@ describe("Queen Bot", () => {
       expect(handler).toBeDefined();
 
       const octokit = createInstallationOctokit();
+      const log = {
+        info: vi.fn(),
+        error: vi.fn(),
+      };
       await handler!({
         octokit,
-        log: {
-          info: vi.fn(),
-          error: vi.fn(),
-        },
+        log,
         payload: {
           repositories_added: [
             {
@@ -162,6 +175,9 @@ describe("Queen Bot", () => {
           repo: "repo-b",
         })
       );
+      expect(log.info).toHaveBeenCalledWith(
+        `[installation_repositories.added] Label bootstrap summary: reposProcessed=1, reposFailed=0, labelsCreated=${REQUIRED_REPOSITORY_LABELS.length}, labelsSkipped=0`
+      );
     });
 
     it("should fetch installation repositories when installation.created payload omits repositories", async () => {
@@ -174,13 +190,14 @@ describe("Queen Bot", () => {
         { name: "repo-d", full_name: "hivemoot/repo-d" },
       ];
       const octokit = createInstallationOctokit({ fallbackRepositories });
+      const log = {
+        info: vi.fn(),
+        error: vi.fn(),
+      };
 
       await handler!({
         octokit,
-        log: {
-          info: vi.fn(),
-          error: vi.fn(),
-        },
+        log,
         payload: {},
       });
 
@@ -197,6 +214,9 @@ describe("Queen Bot", () => {
       expect(octokit.rest.issues.createLabel).toHaveBeenCalledWith(
         expect.objectContaining({ repo: "repo-d" })
       );
+      expect(log.info).toHaveBeenCalledWith(
+        `[installation.created] Label bootstrap summary: reposProcessed=2, reposFailed=0, labelsCreated=${REQUIRED_REPOSITORY_LABELS.length * fallbackRepositories.length}, labelsSkipped=0`
+      );
     });
 
     it("should fetch installation repositories when installation_repositories.added payload is empty", async () => {
@@ -206,13 +226,14 @@ describe("Queen Bot", () => {
 
       const fallbackRepositories = [{ name: "repo-e", full_name: "hivemoot/repo-e" }];
       const octokit = createInstallationOctokit({ fallbackRepositories });
+      const log = {
+        info: vi.fn(),
+        error: vi.fn(),
+      };
 
       await handler!({
         octokit,
-        log: {
-          info: vi.fn(),
-          error: vi.fn(),
-        },
+        log,
         payload: {
           repositories_added: [],
         },
@@ -227,6 +248,47 @@ describe("Queen Bot", () => {
       );
       expect(octokit.rest.issues.createLabel).toHaveBeenCalledWith(
         expect.objectContaining({ repo: "repo-e" })
+      );
+      expect(log.info).toHaveBeenCalledWith(
+        `[installation_repositories.added] Label bootstrap summary: reposProcessed=1, reposFailed=0, labelsCreated=${REQUIRED_REPOSITORY_LABELS.length}, labelsSkipped=0`
+      );
+    });
+
+    it("should log summary counters and fail when one repository bootstrap fails", async () => {
+      const { handlers } = createWebhookHarness();
+      const handler = handlers.get("installation.created");
+      expect(handler).toBeDefined();
+
+      const repositories = [
+        { name: "repo-ok", full_name: "hivemoot/repo-ok" },
+        { name: "repo-fail", full_name: "hivemoot/repo-fail" },
+      ];
+      const octokit = createInstallationOctokit({
+        createLabelImpl: async (params) => {
+          if (params.repo === "repo-fail") {
+            throw new Error("boom");
+          }
+          return {};
+        },
+      });
+      const log = {
+        info: vi.fn(),
+        error: vi.fn(),
+      };
+
+      await expect(
+        handler!({
+          octokit,
+          log,
+          payload: {
+            repositories,
+          },
+        })
+      ).rejects.toThrow("1 repository label bootstrap operation(s) failed");
+
+      expect(log.error).toHaveBeenCalledTimes(1);
+      expect(log.info).toHaveBeenCalledWith(
+        `[installation.created] Label bootstrap summary: reposProcessed=2, reposFailed=1, labelsCreated=${REQUIRED_REPOSITORY_LABELS.length}, labelsSkipped=0`
       );
     });
   });

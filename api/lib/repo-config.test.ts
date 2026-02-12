@@ -193,31 +193,6 @@ governance:
         });
       });
 
-      it("should ignore deprecated proposals.decision when provided", async () => {
-        const configYaml = `
-governance:
-  proposals:
-    decision:
-      method: invalid
-    voting:
-      exits:
-        - type: auto
-          afterMinutes: 60
-`;
-        const octokit = createMockOctokit({
-          data: {
-            type: "file",
-            content: encodeBase64(configYaml),
-            encoding: "base64",
-          },
-        });
-
-        const config = await loadRepositoryConfig(octokit, "owner", "repo");
-
-        expect(config.governance.proposals.voting.exits).toHaveLength(1);
-        expect(getAutoVotingExit(config.governance.proposals.voting.exits[0]).afterMs).toBe(60 * MS);
-      });
-
       it("should convert mode: any to minCount: 1 (backward compat)", async () => {
         const configYaml = `
 governance:

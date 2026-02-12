@@ -775,7 +775,7 @@ export async function processRepository(
 async function main(): Promise<void> {
   await runForAllRepositories<{ skippedIssues: SkippedIssue[]; accessIssues: AccessIssue[] }>({
     scriptName: "scheduled discussion/voting phase closer",
-    startMessage: "Per-repo config loaded from .github/hivemoot.yml (defaults: 24h discussion, 24h voting)",
+    startMessage: "Per-repo config loaded from .github/hivemoot.yml (processing phases with auto exits; manual-only phases are skipped)",
     processRepository,
     afterAll: ({ results }) => {
       const allSkippedIssues = results.flatMap((r) => r.result.skippedIssues);

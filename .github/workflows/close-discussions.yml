@@ -41,4 +41,4 @@ jobs:
           LLM_PROVIDER: ${{ vars.LLM_PROVIDER }}
           LLM_MODEL: ${{ vars.LLM_MODEL }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          # Per-repo config in .github/hivemoot.yml (defaults: 24h discussion, 24h voting)
+          # Per-repo config in .github/hivemoot.yml (only phases with auto exits are transitioned)

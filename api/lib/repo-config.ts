@@ -964,12 +964,6 @@ function deriveVotingDurationMs(exits: VotingExit[]): number {
  */
 function parseRepoConfig(raw: unknown, repoFullName: string): EffectiveConfig {
   const config = raw as RepoConfigFile | undefined;
-  if (config?.governance?.proposals && "decision" in config.governance.proposals) {
-    logger.warn(
-      `[${repoFullName}] governance.proposals.decision is no longer supported and is ignored. ` +
-      `Use exits with type: manual|auto per phase.`
-    );
-  }
 
   // Discussion exits
   const discussionExitsRaw = config?.governance?.proposals?.discussion?.exits;

@@ -183,6 +183,20 @@ describe("reconcile-pr-notifications", () => {
       expect(result).toBe(false);
     });
 
+    it("should not treat prefix-matching issue numbers as equal in fallback", async () => {
+      mockHasNotificationCommentInComments.mockReturnValue(false);
+      mockListCommentsWithBody.mockResolvedValue([
+        {
+          id: 1,
+          body: "# 🐝 Issue #10 Ready to Implement ✅\n\nIssue #10 passed voting and is ready for implementation!",
+        },
+      ]);
+
+      const result = await hasVotingPassedNotification(mockPRs, ref, 1);
+
+      expect(result).toBe(false);
+    });
+
     it("should return false when comment body is unrelated", async () => {
       mockHasNotificationCommentInComments.mockReturnValue(false);
       mockListCommentsWithBody.mockResolvedValue([

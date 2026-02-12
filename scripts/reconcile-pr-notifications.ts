@@ -67,11 +67,13 @@ export async function hasVotingPassedNotification(
   // Tier 2: Fallback for pre-metadata comments from the live trigger.
   // These contain the legacy signature + "Issue #N".
   // We scan comment bodies to detect them without requiring metadata.
+  // Match exact issue number so "Issue #1" does not match "Issue #10".
+  const exactIssuePattern = new RegExp(`Issue #${issueNumber}(?!\\d)`);
   for (const comment of comments) {
     if (
       comment.body &&
       comment.body.includes(VOTING_PASSED_LEGACY_SIGNATURE) &&
-      comment.body.includes(`Issue #${issueNumber}`)
+      exactIssuePattern.test(comment.body)
     ) {
       return true;
     }

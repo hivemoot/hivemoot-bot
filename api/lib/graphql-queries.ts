@@ -49,7 +49,7 @@ interface LinkedIssuesResponse {
   repository: {
     pullRequest: {
       closingIssuesReferences: {
-        nodes: LinkedIssue[];
+        nodes: Array<LinkedIssue | null>;
       };
     } | null;
   };
@@ -70,7 +70,11 @@ export async function getLinkedIssues(
     { owner, repo, pr: prNumber }
   );
 
-  return response.repository.pullRequest?.closingIssuesReferences.nodes ?? [];
+  return (
+    response.repository.pullRequest?.closingIssuesReferences.nodes.filter(
+      (node): node is LinkedIssue => node !== null
+    ) ?? []
+  );
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -177,7 +181,7 @@ interface OpenPRsForIssueResponse {
           hasNextPage: boolean;
           endCursor: string | null;
         };
-        nodes: CrossReferencedEvent[];
+        nodes: Array<CrossReferencedEvent | null>;
       };
     } | null;
   };
@@ -315,7 +319,7 @@ async function getCrossReferencedOpenPRs(
     // Filter to PRs that are open and have the expected structure
     // Uses "ghost" for deleted authors (matching GitHub's web UI convention)
     const openPRs = timelineItems
-      .map((event: CrossReferencedEvent) => event.source)
+      .map((event) => event?.source ?? null)
       .filter(isValidOpenPRSource)
       .map((source) => ({
         number: source.number,

@@ -94,6 +94,37 @@ describe("getLinkedIssues", () => {
     expect(result).toEqual([]);
   });
 
+  it("should filter null nodes from closingIssuesReferences", async () => {
+    vi.mocked(mockClient.graphql).mockResolvedValue({
+      repository: {
+        pullRequest: {
+          closingIssuesReferences: {
+            nodes: [
+              null,
+              {
+                number: 123,
+                title: "Fix bug",
+                state: "OPEN",
+                labels: { nodes: [{ name: "bug" }] },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    const result = await getLinkedIssues(mockClient, "owner", "repo", 42);
+
+    expect(result).toEqual([
+      {
+        number: 123,
+        title: "Fix bug",
+        state: "OPEN",
+        labels: { nodes: [{ name: "bug" }] },
+      },
+    ]);
+  });
+
   it("should pass correct query variables", async () => {
     vi.mocked(mockClient.graphql).mockResolvedValue({
       repository: {
@@ -366,6 +397,42 @@ describe("getOpenPRsForIssue", () => {
                   { source: { number: 1, title: "PR 1", state: "OPEN", author: { login: "user1" } } },
                   { source: { title: "No number", state: "OPEN", author: { login: "user2" } } },
                   { source: { number: undefined, title: "Undefined", state: "OPEN", author: { login: "user3" } } },
+                ],
+              },
+            },
+          },
+        };
+      } else if (query.includes("getLinkedIssues")) {
+        return {
+          repository: {
+            pullRequest: {
+              closingIssuesReferences: {
+                nodes: [{ number: 123, title: "Issue", state: "OPEN", labels: { nodes: [] } }],
+              },
+            },
+          },
+        };
+      }
+      throw new Error(`Unexpected GraphQL query in test mock: ${query.slice(0, 80)}`);
+    });
+
+    const result = await getOpenPRsForIssue(mockClient, "owner", "repo", 123);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].number).toBe(1);
+  });
+
+  it("should skip null timeline nodes safely", async () => {
+    vi.mocked(mockClient.graphql).mockImplementation(async (query: string) => {
+      if (query.includes("getOpenPRsForIssue")) {
+        return {
+          repository: {
+            issue: {
+              timelineItems: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [
+                  null,
+                  { source: { number: 1, title: "PR 1", state: "OPEN", author: { login: "user1" } } },
                 ],
               },
             },

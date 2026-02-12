@@ -127,7 +127,7 @@ export interface LinkedIssue {
   title: string;
   state: "OPEN" | "CLOSED";
   labels: {
-    nodes: Array<{ name: string }>;
+    nodes: Array<{ name: string } | null>;
   };
 }
 
@@ -136,7 +136,7 @@ export interface LinkedIssue {
  * Useful for filtering phase:ready-to-implement/rejected issues in webhook handlers.
  */
 export function hasLabel(issue: LinkedIssue, labelName: string): boolean {
-  return issue.labels.nodes.some((l) => l.name === labelName);
+  return issue.labels.nodes.some((l) => l !== null && l.name === labelName);
 }
 
 /**

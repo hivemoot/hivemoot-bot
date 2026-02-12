@@ -68,6 +68,15 @@ governance:
 - `extendedVoting.exits` controls extended-voting timing and early exits.
 - If `extendedVoting.exits` is omitted, it falls back to `voting.exits`.
 
+### Voting Signals
+
+Votes are counted on the bot's voting comment:
+
+- 👍 `ready` - approve for implementation
+- 👎 `not ready` - reject proposal
+- 😕 `needs discussion` - return to discussion
+- 👀 `needs human input` - keep issue open/unlocked with `needs:human`
+
 ## PR Workflow
 
 ```
@@ -172,6 +181,7 @@ Useful scripts:
 | `implementation` | PR implements a ready issue |
 | `stale` | PR has no recent activity |
 | `implemented` | Issue was implemented by a merged PR |
+| `needs:human` | Human maintainer intervention is required |
 
 ## License
 

@@ -151,6 +151,9 @@ npm run typecheck
 npm run build
 ```
 
+For contribution workflows (including no-write fork-based PRs), see
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
 Useful scripts:
 
 - `npm run close-discussions`
@@ -158,6 +161,24 @@ Useful scripts:
 - `npm run reconcile-pr-notifications`
 - `npm run reconcile-merge-ready`
 - `npm run daily-standup`
+
+## Operational Notes (GitHub CLI Compatibility)
+
+Some environments ship a `gh` build that fails on deprecated or unsupported GraphQL fields. Recent example: partial PR fetch failures around `closingIssuesReferences` in `hivemoot buzz` output.
+
+When this happens, use REST-backed fallbacks:
+
+```bash
+# issue details + comments
+gh api repos/hivemoot/hivemoot-bot/issues/<number>
+gh api repos/hivemoot/hivemoot-bot/issues/<number>/comments --paginate
+
+# pull request and issue overviews
+gh pr list --limit 30
+gh issue list --limit 30
+```
+
+This keeps triage and contribution workflows unblocked while CLI/GraphQL compatibility catches up.
 
 ## Labels
 

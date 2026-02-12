@@ -135,6 +135,18 @@ describe("config", () => {
       expect(config.LABELS.READY_TO_IMPLEMENT).toBe("phase:ready-to-implement");
       expect((config.LABELS as Record<string, string>).ACCEPTED).toBeUndefined();
     });
+
+    it("should define metadata for all required repository labels", async () => {
+      const config = await import("./config.js");
+
+      const labelNames = new Set(config.REQUIRED_REPOSITORY_LABELS.map((label) => label.name));
+      expect(labelNames).toEqual(new Set(Object.values(config.LABELS)));
+
+      for (const label of config.REQUIRED_REPOSITORY_LABELS) {
+        expect(label.color).toMatch(/^[0-9a-f]{6}$/);
+        expect(label.description.length).toBeGreaterThan(0);
+      }
+    });
   });
 
   describe("PR_MESSAGES", () => {

@@ -38,6 +38,8 @@ vi.mock("../api/lib/index.js", () => ({
   })),
   createGovernanceService: vi.fn(),
   getOpenPRsForIssue: vi.fn().mockResolvedValue([]),
+  isAutoDiscussionExit: (exit: { type?: string }) => exit.type === "auto",
+  isAutoVotingExit: (exit: { type?: string }) => exit.type === "auto",
   loadRepositoryConfig: vi.fn(),
   logger: {
     info: vi.fn(),
@@ -56,35 +58,58 @@ vi.mock("../api/lib/env-validation.js", () => ({
 }));
 
 // Import after all mocks are in place
-import { notifyPendingPRs, isRetryableError, withRetry, makeEarlyDecisionCheck, makeDiscussionEarlyCheck, processIssuePhase, isVotingAutomationEnabled, processRepository } from "./close-discussions.js";
+import {
+  notifyPendingPRs,
+  isRetryableError,
+  withRetry,
+  makeEarlyDecisionCheck,
+  makeDiscussionEarlyCheck,
+  processIssuePhase,
+  hasAutoExits,
+  hasAutomaticGovernancePhases,
+  processRepository,
+} from "./close-discussions.js";
 import type { EarlyDecisionDeps, DiscussionEarlyCheckDeps } from "./close-discussions.js";
 import { getOpenPRsForIssue, logger, loadRepositoryConfig, createIssueOperations } from "../api/lib/index.js";
 import { PR_MESSAGES } from "../api/config.js";
-import type { VotingOutcome, IssueRef, ValidatedVoteResult, DiscussionExit } from "../api/lib/index.js";
-import type { VotingExit } from "../api/lib/repo-config.js";
+import type {
+  VotingOutcome,
+  IssueRef,
+  ValidatedVoteResult,
+  DiscussionAutoExit,
+  VotingAutoExit,
+} from "../api/lib/index.js";
 
 const mockGetOpenPRsForIssue = vi.mocked(getOpenPRsForIssue);
 const mockLoadRepositoryConfig = vi.mocked(loadRepositoryConfig);
 const mockCreateIssueOperations = vi.mocked(createIssueOperations);
 
 describe("close-discussions script", () => {
-  function makeRepoConfig(method: "manual" | "hivemoot_vote") {
+  function makeRepoConfig(mode: "manual" | "auto") {
+    const discussionExits =
+      mode === "auto"
+        ? [{ type: "auto", afterMs: 60_000, minReady: 0, requiredReady: { minCount: 0, users: [] } }]
+        : [{ type: "manual" }];
+    const votingExits =
+      mode === "auto"
+        ? [{ type: "auto", afterMs: 60_000, requires: "majority", minVoters: 0, requiredVoters: { minCount: 0, voters: [] } }]
+        : [{ type: "manual" }];
+
     return {
       version: 1,
       governance: {
         proposals: {
-          decision: { method },
           discussion: {
-            durationMs: 60_000,
-            exits: [{ afterMs: 60_000, minReady: 0, requiredReady: { minCount: 0, users: [] } }],
+            durationMs: mode === "auto" ? 60_000 : 0,
+            exits: discussionExits,
           },
           voting: {
-            durationMs: 60_000,
-            exits: [{ afterMs: 60_000, requires: "majority", minVoters: 0, requiredVoters: { minCount: 0, voters: [] } }],
+            durationMs: mode === "auto" ? 60_000 : 0,
+            exits: votingExits,
           },
           extendedVoting: {
-            durationMs: 60_000,
-            exits: [{ afterMs: 60_000, requires: "majority", minVoters: 0, requiredVoters: { minCount: 0, voters: [] } }],
+            durationMs: mode === "auto" ? 60_000 : 0,
+            exits: votingExits,
           },
         },
         pr: {
@@ -99,21 +124,23 @@ describe("close-discussions script", () => {
     } as any;
   }
 
-  describe("isVotingAutomationEnabled", () => {
-    it("should return true for hivemoot_vote method", () => {
-      const config = {
-        governance: { proposals: { decision: { method: "hivemoot_vote" } } },
-      } as any;
-
-      expect(isVotingAutomationEnabled(config)).toBe(true);
+  describe("hasAutoExits", () => {
+    it("should return true when at least one auto exit exists", () => {
+      expect(hasAutoExits([{ type: "manual" }, { type: "auto" }])).toBe(true);
     });
 
-    it("should return false for manual method", () => {
-      const config = {
-        governance: { proposals: { decision: { method: "manual" } } },
-      } as any;
+    it("should return false when all exits are manual", () => {
+      expect(hasAutoExits([{ type: "manual" }])).toBe(false);
+    });
+  });
 
-      expect(isVotingAutomationEnabled(config)).toBe(false);
+  describe("hasAutomaticGovernancePhases", () => {
+    it("should return false when all phases are manual", () => {
+      expect(hasAutomaticGovernancePhases(makeRepoConfig("manual"))).toBe(false);
+    });
+
+    it("should return true when any phase has auto exits", () => {
+      expect(hasAutomaticGovernancePhases(makeRepoConfig("auto"))).toBe(true);
     });
   });
 
@@ -128,7 +155,7 @@ describe("close-discussions script", () => {
       // No issues in any phase
     };
 
-    it("should skip discussion/voting automation when decision method is manual", async () => {
+    it("should skip scheduled transitions when all exits are manual", async () => {
       const fakeOctokit = {
         rest: {
           issues: {
@@ -146,11 +173,11 @@ describe("close-discussions script", () => {
       expect(result).toEqual({ skippedIssues: [], accessIssues: [] });
       expect(mockCreateIssueOperations).not.toHaveBeenCalled();
       expect(logger.info).toHaveBeenCalledWith(
-        expect.stringContaining("skipping discussion/voting automation")
+        expect.stringContaining("all proposal exits are manual")
       );
     });
 
-    it("should continue processing when decision method is hivemoot_vote", async () => {
+    it("should continue processing when at least one phase is auto", async () => {
       const fakeOctokit = {
         rest: {
           issues: {
@@ -161,7 +188,7 @@ describe("close-discussions script", () => {
           iterator: vi.fn().mockReturnValue(emptyIterator()),
         },
       } as any;
-      mockLoadRepositoryConfig.mockResolvedValue(makeRepoConfig("hivemoot_vote"));
+      mockLoadRepositoryConfig.mockResolvedValue(makeRepoConfig("auto"));
 
       await processRepository(fakeOctokit, repo, appId);
 
@@ -626,6 +653,7 @@ describe("close-discussions script", () => {
     const createMockDeps = (overrides: Partial<EarlyDecisionDeps> = {}): EarlyDecisionDeps => ({
       earlyExits: [
         {
+          type: "auto",
           afterMs: 15 * 60 * 1000, // 15 minutes
           minVoters: 2,
           requiredVoters: { minCount: 2, voters: ["agent-a", "agent-b"] },
@@ -790,7 +818,7 @@ describe("close-discussions script", () => {
     function createDiscussionDeps(overrides?: Partial<DiscussionEarlyCheckDeps>): DiscussionEarlyCheckDeps {
       return {
         earlyExits: [
-          { afterMs: 30 * MS, minReady: 3, requiredReady: { minCount: 2, users: ["alice", "bob"] } },
+          { type: "auto", afterMs: 30 * MS, minReady: 3, requiredReady: { minCount: 2, users: ["alice", "bob"] } },
         ],
         getDiscussionReadiness: vi.fn().mockResolvedValue(new Set(["alice", "bob", "charlie"])),
         ...overrides,
@@ -856,9 +884,9 @@ describe("close-discussions script", () => {
       const deps = createDiscussionDeps({
         earlyExits: [
           // First exit: strict requirements (will fail)
-          { afterMs: 15 * MS, minReady: 5, requiredReady: { minCount: 0, users: [] } },
+          { type: "auto", afterMs: 15 * MS, minReady: 5, requiredReady: { minCount: 0, users: [] } },
           // Second exit: relaxed requirements (will pass)
-          { afterMs: 30 * MS, minReady: 2, requiredReady: { minCount: 0, users: [] } },
+          { type: "auto", afterMs: 30 * MS, minReady: 2, requiredReady: { minCount: 0, users: [] } },
         ],
         getDiscussionReadiness: vi.fn().mockResolvedValue(new Set(["alice", "bob", "charlie"])),
       });
@@ -874,7 +902,7 @@ describe("close-discussions script", () => {
     it("should work with minCount: 1 for requiredReady", async () => {
       const deps = createDiscussionDeps({
         earlyExits: [
-          { afterMs: 30 * MS, minReady: 0, requiredReady: { minCount: 1, users: ["alice", "bob"] } },
+          { type: "auto", afterMs: 30 * MS, minReady: 0, requiredReady: { minCount: 1, users: ["alice", "bob"] } },
         ],
         getDiscussionReadiness: vi.fn().mockResolvedValue(new Set(["bob"])),
       });

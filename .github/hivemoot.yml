@@ -42,8 +42,15 @@ team:
 
 governance:
   proposals:
-    decision:
-      method: manual
+    discussion:
+      exits:
+        - type: manual
+    voting:
+      exits:
+        - type: manual
+    extendedVoting:
+      exits:
+        - type: manual
   pr:
     staleDays: 3
     maxPRsPerIssue: 3

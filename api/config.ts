@@ -317,6 +317,74 @@ export const LABELS = {
   MERGE_READY: "merge-ready",
 } as const;
 
+export interface RepositoryLabelDefinition {
+  name: string;
+  color: string;
+  description: string;
+}
+
+/**
+ * Labels that must exist in each repository where the app is installed.
+ * Colors are GitHub hex codes without `#`.
+ */
+export const REQUIRED_REPOSITORY_LABELS: readonly RepositoryLabelDefinition[] = [
+  {
+    name: LABELS.DISCUSSION,
+    color: "1d76db",
+    description: "Issue is in discussion phase.",
+  },
+  {
+    name: LABELS.VOTING,
+    color: "5319e7",
+    description: "Issue is in voting phase.",
+  },
+  {
+    name: LABELS.READY_TO_IMPLEMENT,
+    color: "0e8a16",
+    description: "Proposal passed and is ready for implementation.",
+  },
+  {
+    name: LABELS.REJECTED,
+    color: "d73a4a",
+    description: "Proposal was rejected by voting.",
+  },
+  {
+    name: LABELS.EXTENDED_VOTING,
+    color: "fbca04",
+    description: "Extended voting round is active.",
+  },
+  {
+    name: LABELS.INCONCLUSIVE,
+    color: "6e7781",
+    description: "Voting ended without consensus.",
+  },
+  {
+    name: LABELS.IMPLEMENTATION,
+    color: "0e8a92",
+    description: "PR is an active implementation candidate.",
+  },
+  {
+    name: LABELS.STALE,
+    color: "c5d0d8",
+    description: "PR has been inactive and may be auto-closed.",
+  },
+  {
+    name: LABELS.IMPLEMENTED,
+    color: "1f883d",
+    description: "Issue was implemented by a merged PR.",
+  },
+  {
+    name: LABELS.NEEDS_HUMAN,
+    color: "e99695",
+    description: "Human maintainer intervention is required.",
+  },
+  {
+    name: LABELS.MERGE_READY,
+    color: "2ea043",
+    description: "Implementation PR meets merge-readiness checks.",
+  },
+] as const;
+
 // ───────────────────────────────────────────────────────────────────────────────
 // PR Configuration
 // ───────────────────────────────────────────────────────────────────────────────

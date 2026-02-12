@@ -64,6 +64,10 @@ export type { IntakeTrigger, LeaderboardRecalcClient } from "./implementation-in
 export { evaluateMergeReadiness } from "./merge-readiness.js";
 export type { MergeReadinessParams, MergeReadinessResult } from "./merge-readiness.js";
 
+// Repository label bootstrap
+export { RepositoryLabelService, createRepositoryLabelService } from "./repository-labels.js";
+export type { RepositoryLabelClient, EnsureLabelsResult } from "./repository-labels.js";
+
 // Repository configuration
 export { loadRepositoryConfig, getDefaultConfig } from "./repo-config.js";
 export type {
@@ -73,10 +77,15 @@ export type {
   RequiredVotersConfig,
   RequiredReadyConfig,
   VotingExit,
+  VotingAutoExit,
+  VotingManualExit,
   DiscussionExit,
+  DiscussionAutoExit,
+  DiscussionManualExit,
   ExitRequires,
-  ProposalDecisionMethod,
+  ExitType,
   IntakeMethod,
   MergeReadyConfig,
   StandupConfig,
 } from "./repo-config.js";
+export { isAutoVotingExit, isAutoDiscussionExit } from "./repo-config.js";

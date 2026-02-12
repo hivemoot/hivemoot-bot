@@ -816,6 +816,30 @@ governance:
         expect(config.governance.proposals.voting.exits).toEqual([{ type: "manual" }]);
         expect(config.governance.proposals.voting.durationMs).toBe(0);
       });
+
+      it("should resolve mixed manual and auto voting exits to manual", async () => {
+        const configYaml = `
+governance:
+  proposals:
+    voting:
+      exits:
+        - type: manual
+        - type: auto
+          afterMinutes: 60
+`;
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(configYaml),
+            encoding: "base64",
+          },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
+        expect(config.governance.proposals.voting.exits).toEqual([{ type: "manual" }]);
+        expect(config.governance.proposals.voting.durationMs).toBe(0);
+      });
     });
 
     describe("discussion exits parsing", () => {
@@ -884,6 +908,26 @@ governance:
   proposals:
     discussion:
       exits: []
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
+        expect(config.governance.proposals.discussion.exits).toEqual([{ type: "manual" }]);
+        expect(config.governance.proposals.discussion.durationMs).toBe(0);
+      });
+
+      it("should resolve mixed manual and auto discussion exits to manual", async () => {
+        const configYaml = `
+governance:
+  proposals:
+    discussion:
+      exits:
+        - type: auto
+          afterMinutes: 30
+        - type: manual
 `;
         const octokit = createMockOctokit({
           data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },

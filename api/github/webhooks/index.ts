@@ -19,6 +19,7 @@ import {
 import { filterByLabel } from "../../lib/types.js";
 import type { LinkedIssue } from "../../lib/types.js";
 import { validateEnv, getAppId } from "../../lib/env-validation.js";
+import { hasClosingKeywordForRepo } from "../../lib/closing-keywords.js";
 import {
   processImplementationIntake,
   recalculateLeaderboardForPR,
@@ -105,8 +106,13 @@ function app(probotApp: Probot): void {
         loadRepositoryConfig(context.octokit, owner, repo),
       ]);
 
-      // Unlinked PRs get a warning; linked PRs are handled by processImplementationIntake
-      if (linkedIssues.length === 0) {
+      // Guard against short GraphQL consistency lag on fresh PRs: if the body
+      // already includes a closing keyword for this repo, skip the "No Linked
+      // Issue" warning and let later webhook/script passes process intake.
+      if (
+        linkedIssues.length === 0 &&
+        !hasClosingKeywordForRepo(context.payload.pull_request.body, owner, repo)
+      ) {
         await issues.comment({ owner, repo, issueNumber: number }, MESSAGES.PR_NO_LINKED_ISSUE);
       }
 

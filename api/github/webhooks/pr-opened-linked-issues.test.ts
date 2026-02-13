@@ -210,4 +210,48 @@ describe("pull_request.opened linked issue resolution", () => {
       })
     );
   });
+
+  it("treats equivalent closing-keyword body variants consistently", async () => {
+    vi.useFakeTimers();
+    const { handlers } = createWebhookHarness();
+    const handler = handlers.get("pull_request.opened");
+    expect(handler).toBeDefined();
+
+    const linkedIssue = {
+      number: 21,
+      title: "Issue",
+      state: "OPEN",
+      labels: { nodes: [] },
+    };
+
+    const equivalentBodies = ["Fixes #21", "This implements the fix.\n\nFixes #21"];
+    for (const body of equivalentBodies) {
+      mocks.getLinkedIssues.mockReset();
+      mocks.issuesOps.comment.mockReset();
+      mocks.processImplementationIntake.mockReset();
+
+      mocks.getLinkedIssues
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([linkedIssue]);
+
+      const context = createContext(body);
+      const handlerPromise = handler!(context);
+      await vi.advanceTimersByTimeAsync(2000);
+      await handlerPromise;
+
+      expect(mocks.getLinkedIssues).toHaveBeenCalledTimes(2);
+      expect(mocks.issuesOps.comment).not.toHaveBeenCalled();
+      expect(context.log.info).toHaveBeenCalledWith(
+        expect.objectContaining({ pr: 49, resolutionSource: "retry" }),
+        expect.stringContaining("Resolved linked issues")
+      );
+      expect(mocks.processImplementationIntake).toHaveBeenCalledWith(
+        expect.objectContaining({
+          linkedIssues: [linkedIssue],
+        })
+      );
+    }
+
+    vi.useRealTimers();
+  });
 });

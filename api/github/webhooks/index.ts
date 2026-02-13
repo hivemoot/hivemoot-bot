@@ -17,6 +17,7 @@ import {
 import {
   getLinkedIssues,
 } from "../../lib/graphql-queries.js";
+import { hasSameRepoClosingKeywordRef } from "../../lib/closing-keywords.js";
 import { filterByLabel } from "../../lib/types.js";
 import { validateEnv, getAppId } from "../../lib/env-validation.js";
 import {
@@ -89,6 +90,7 @@ interface InstallationRepoListClient {
 }
 
 const INSTALLATION_REPO_PAGE_SIZE = 100;
+const PR_OPENED_LINK_RETRY_DELAY_MS = 2000;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper Functions
@@ -269,15 +271,48 @@ export function app(probotApp: Probot): void {
       const appId = getAppId();
       const issues = createIssueOperations(context.octokit, { appId });
       const prs = createPROperations(context.octokit, { appId });
+      const repoConfig = await loadRepositoryConfig(context.octokit, owner, repo);
 
-      const [linkedIssues, repoConfig] = await Promise.all([
-        getLinkedIssues(context.octokit, owner, repo, number),
-        loadRepositoryConfig(context.octokit, owner, repo),
-      ]);
+      let linkedIssues = await getLinkedIssues(context.octokit, owner, repo, number);
+      const hasBodyClosingKeyword = hasSameRepoClosingKeywordRef(
+        context.payload.pull_request.body,
+        { owner, repo }
+      );
+
+      if (linkedIssues.length === 0 && hasBodyClosingKeyword) {
+        context.log.info(
+          {
+            owner,
+            repo,
+            pr: number,
+            retryDelayMs: PR_OPENED_LINK_RETRY_DELAY_MS,
+          },
+          "PR opened with closing keywords but no linked issues; retrying lookup"
+        );
+        await delay(PR_OPENED_LINK_RETRY_DELAY_MS);
+        linkedIssues = await getLinkedIssues(context.octokit, owner, repo, number);
+      }
 
       // Unlinked PRs get a warning; linked PRs are handled by processImplementationIntake
       if (linkedIssues.length === 0) {
-        await issues.comment({ owner, repo, issueNumber: number }, MESSAGES.PR_NO_LINKED_ISSUE);
+        if (hasBodyClosingKeyword) {
+          context.log.warn(
+            { owner, repo, pr: number, resolutionSource: "heuristic-suppressed" },
+            "PR opened with closing keywords but linked issues remained empty after retry; suppressing warning"
+          );
+        } else {
+          await issues.comment({ owner, repo, issueNumber: number }, MESSAGES.PR_NO_LINKED_ISSUE);
+          context.log.info(
+            { owner, repo, pr: number, resolutionSource: "none" },
+            "PR opened with no linked issues and no closing keywords; posted warning"
+          );
+        }
+      } else {
+        const resolutionSource = hasBodyClosingKeyword ? "retry" : "initial";
+        context.log.info(
+          { owner, repo, pr: number, linkedIssueCount: linkedIssues.length, resolutionSource },
+          "Resolved linked issues for opened PR"
+        );
       }
 
       await processImplementationIntake({
@@ -795,6 +830,10 @@ export function app(probotApp: Probot): void {
       throw error;
     }
   });
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 const probot = createProbot();

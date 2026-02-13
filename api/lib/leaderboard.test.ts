@@ -355,6 +355,52 @@ describe("LeaderboardService", () => {
       expect(commentId).toBeNull();
     });
 
+    it("should match hivemoot bot leaderboard when app ID drifts", async () => {
+      const DIFFERENT_APP_ID = 99999;
+      mockClient.paginate.iterator = vi.fn().mockReturnValue({
+        async *[Symbol.asyncIterator]() {
+          yield {
+            data: [
+              {
+                id: 100,
+                body: makeLeaderboardBody("| PR | Author |"),
+                performed_via_github_app: { id: DIFFERENT_APP_ID },
+                user: { login: "hivemoot[bot]" },
+                created_at: "2024-01-15T10:00:00Z",
+              },
+            ],
+          };
+        },
+      });
+
+      const commentId = await service.findLeaderboardCommentId(testRef);
+
+      expect(commentId).toBe(100);
+    });
+
+    it("should not trust non-hivemoot bot when app ID mismatches", async () => {
+      const DIFFERENT_APP_ID = 99999;
+      mockClient.paginate.iterator = vi.fn().mockReturnValue({
+        async *[Symbol.asyncIterator]() {
+          yield {
+            data: [
+              {
+                id: 100,
+                body: makeLeaderboardBody("| PR | Author |"),
+                performed_via_github_app: { id: DIFFERENT_APP_ID },
+                user: { login: "other-bot[bot]" },
+                created_at: "2024-01-15T10:00:00Z",
+              },
+            ],
+          };
+        },
+      });
+
+      const commentId = await service.findLeaderboardCommentId(testRef);
+
+      expect(commentId).toBeNull();
+    });
+
     it("should find legitimate comment even when spoofed comment exists", async () => {
       const DIFFERENT_APP_ID = 99999;
       mockClient.paginate.iterator = vi.fn().mockReturnValue({

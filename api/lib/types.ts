@@ -169,4 +169,5 @@ export interface IssueComment {
   body?: string;
   created_at?: string;
   performed_via_github_app?: { id: number } | null;
+  user?: { login?: string } | null;
 }

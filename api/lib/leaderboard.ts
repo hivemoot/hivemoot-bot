@@ -6,7 +6,7 @@
  */
 
 import { SIGNATURE } from "../config.js";
-import { SIGNATURES, isLeaderboardComment, buildLeaderboardComment } from "./bot-comments.js";
+import { SIGNATURES, isLeaderboardComment, buildLeaderboardComment, parseMetadata } from "./bot-comments.js";
 import type { IssueRef, PRWithApprovals, IssueComment } from "./types.js";
 import {
   validateClient,
@@ -142,6 +142,23 @@ export class LeaderboardService {
   ) {}
 
   /**
+   * Fallback for app-id drift: accept leaderboard comments authored by the
+   * hivemoot app bot account when metadata is valid.
+   */
+  private isCanonicalLeaderboardComment(comment: IssueComment): boolean {
+    if (isLeaderboardComment(comment.body, this.appId, comment.performed_via_github_app?.id)) {
+      return true;
+    }
+
+    const metadata = parseMetadata(comment.body);
+    if (metadata?.type !== "leaderboard") {
+      return false;
+    }
+
+    return comment.user?.login === "hivemoot[bot]";
+  }
+
+  /**
    * Find the existing leaderboard comment on an issue.
    * Verifies the comment was created by our GitHub App (prevents spoofing).
    *
@@ -171,7 +188,7 @@ export class LeaderboardService {
 
     for await (const { data: comments } of iterator) {
       for (const comment of comments) {
-        if (isLeaderboardComment(comment.body, this.appId, comment.performed_via_github_app?.id)) {
+        if (this.isCanonicalLeaderboardComment(comment)) {
           leaderboardComments.push({
             id: comment.id,
             createdAt: comment.created_at ?? "",

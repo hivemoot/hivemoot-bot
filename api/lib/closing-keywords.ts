@@ -1,4 +1,13 @@
 /**
+ * Strip fenced code blocks and inline code from markdown text.
+ * GitHub ignores closing keywords inside code, so we must too.
+ */
+function stripMarkdownCode(text: string): string {
+  // Strip fenced code blocks (``` ... ```) first, then inline code (` ... `)
+  return text.replace(/```[\s\S]*?```/g, "").replace(/`[^`]*`/g, "");
+}
+
+/**
  * Detect whether PR body text contains a closing-keyword reference
  * for the current repository (or an unqualified local #N reference).
  *
@@ -14,13 +23,15 @@ export function hasClosingKeywordForRepo(
     return false;
   }
 
+  const stripped = stripMarkdownCode(body);
+
   const matchClosingReference =
     /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b\s*:?\s+(?:(?:https?:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/issues\/(\d+))|(?:([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)#(\d+))|(?:#(\d+)))/gi;
 
   const normalizedOwner = owner.toLowerCase();
   const normalizedRepo = repo.toLowerCase();
 
-  for (const match of body.matchAll(matchClosingReference)) {
+  for (const match of stripped.matchAll(matchClosingReference)) {
     const localIssueNumber = match[7];
     if (localIssueNumber) {
       return true;

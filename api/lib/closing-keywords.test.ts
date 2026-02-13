@@ -53,6 +53,26 @@ describe("hasClosingKeywordForRepo", () => {
     expect(hasClosingKeywordForRepo("", owner, repo)).toBe(false);
   });
 
+  it("ignores closing keywords inside fenced code blocks", () => {
+    const body = "```md\nFixes #21\n```\nThis PR updates docs only.";
+    expect(hasClosingKeywordForRepo(body, owner, repo)).toBe(false);
+  });
+
+  it("ignores closing keywords inside inline code", () => {
+    const body = "Use `Fixes #21` syntax to link PRs.";
+    expect(hasClosingKeywordForRepo(body, owner, repo)).toBe(false);
+  });
+
+  it("matches closing keywords outside code when code also present", () => {
+    const body = "```\nFixes #99\n```\nFixes #21";
+    expect(hasClosingKeywordForRepo(body, owner, repo)).toBe(true);
+  });
+
+  it("ignores closing keywords inside multi-line fenced code blocks", () => {
+    const body = "```yaml\nversion: 1\n# Fixes #21\ngovernance: {}\n```\nNo linked issue here.";
+    expect(hasClosingKeywordForRepo(body, owner, repo)).toBe(false);
+  });
+
   it("matches all closing keyword variants", () => {
     expect(hasClosingKeywordForRepo("close #1", owner, repo)).toBe(true);
     expect(hasClosingKeywordForRepo("closed #1", owner, repo)).toBe(true);

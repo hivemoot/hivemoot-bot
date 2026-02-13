@@ -254,4 +254,56 @@ describe("pull_request.opened linked issue resolution", () => {
 
     vi.useRealTimers();
   });
+
+  it("treats immediate and retry resolution paths consistently for equivalent bodies", async () => {
+    vi.useFakeTimers();
+    const { handlers } = createWebhookHarness();
+    const handler = handlers.get("pull_request.opened");
+    expect(handler).toBeDefined();
+
+    const linkedIssue = {
+      number: 21,
+      title: "Issue",
+      state: "OPEN",
+      labels: { nodes: [] },
+    };
+
+    const equivalentBodies = ["Fixes #21", "This implements #21.\n\nFixes #21"];
+
+    for (const [index, body] of equivalentBodies.entries()) {
+      mocks.getLinkedIssues.mockReset();
+      mocks.issuesOps.comment.mockReset();
+      mocks.processImplementationIntake.mockClear();
+
+      if (index === 0) {
+        mocks.getLinkedIssues.mockResolvedValueOnce([linkedIssue]);
+      } else {
+        mocks.getLinkedIssues
+          .mockResolvedValueOnce([])
+          .mockResolvedValueOnce([linkedIssue]);
+      }
+
+      const context = createContext(body);
+      const handlerPromise = handler!(context);
+      await vi.advanceTimersByTimeAsync(2000);
+      await handlerPromise;
+
+      const expectedCalls = index === 0 ? 1 : 2;
+      const expectedSource = index === 0 ? "initial" : "retry";
+
+      expect(mocks.getLinkedIssues).toHaveBeenCalledTimes(expectedCalls);
+      expect(mocks.issuesOps.comment).not.toHaveBeenCalled();
+      expect(context.log.info).toHaveBeenCalledWith(
+        expect.objectContaining({ pr: 49, resolutionSource: expectedSource }),
+        expect.stringContaining("Resolved linked issues")
+      );
+      expect(mocks.processImplementationIntake).toHaveBeenCalledWith(
+        expect.objectContaining({
+          linkedIssues: [linkedIssue],
+        })
+      );
+    }
+
+    vi.useRealTimers();
+  });
 });

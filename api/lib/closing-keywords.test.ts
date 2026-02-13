@@ -3,11 +3,23 @@ import { hasSameRepoClosingKeywordRef } from "./closing-keywords.js";
 
 describe("hasSameRepoClosingKeywordRef", () => {
   const repository = { owner: "hivemoot", repo: "hivemoot-bot" };
+  const allClosingKeywords = [
+    "close",
+    "closed",
+    "closes",
+    "fix",
+    "fixed",
+    "fixes",
+    "resolve",
+    "resolved",
+    "resolves",
+  ] as const;
 
-  it("matches local issue references", () => {
-    expect(hasSameRepoClosingKeywordRef("Fixes #21", repository)).toBe(true);
-    expect(hasSameRepoClosingKeywordRef("closes #9.", repository)).toBe(true);
-    expect(hasSameRepoClosingKeywordRef("resolves: #12", repository)).toBe(true);
+  it("matches all GitHub closing keyword variants for local issue references", () => {
+    for (const keyword of allClosingKeywords) {
+      expect(hasSameRepoClosingKeywordRef(`${keyword} #21`, repository)).toBe(true);
+      expect(hasSameRepoClosingKeywordRef(`${keyword}: #21`, repository)).toBe(true);
+    }
   });
 
   it("matches fully-qualified same-repo references", () => {

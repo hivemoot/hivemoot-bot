@@ -276,10 +276,9 @@ export function app(probotApp: Probot): void {
         loadRepositoryConfig(context.octokit, owner, repo),
       ]);
       let linkedIssues = initialLinkedIssues;
-      const hasBodyClosingKeyword = hasSameRepoClosingKeywordRef(
-        context.payload.pull_request.body,
-        { owner, repo }
-      );
+      const hasBodyClosingKeyword = linkedIssues.length === 0
+        ? hasSameRepoClosingKeywordRef(context.payload.pull_request.body, { owner, repo })
+        : false;
       let didRetry = false;
 
       if (linkedIssues.length === 0 && hasBodyClosingKeyword) {

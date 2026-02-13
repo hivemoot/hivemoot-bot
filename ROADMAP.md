@@ -25,7 +25,7 @@ Goal: make discussion/voting lifecycle behavior deterministic across edge cases.
 Scope:
 1. Strengthen handling for missing voting comments and tie/inconclusive flows.
 2. Improve voter requirement diagnostics (min voters, required voters, cycles).
-3. Keep decision methods (`manual`, `hivemoot_vote`) explicit in docs and config.
+3. Keep phase exit modes (`manual`, `auto`) explicit in docs and config.
 
 Exit Criteria:
 1. Voting outcomes are reproducible from issue history and bot comments.

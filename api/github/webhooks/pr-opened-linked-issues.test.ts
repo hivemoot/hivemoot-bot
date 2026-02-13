@@ -175,4 +175,39 @@ describe("pull_request.opened linked issue resolution", () => {
     );
     expect(mocks.processImplementationIntake).toHaveBeenCalledTimes(1);
   });
+
+  it("retries when closing keyword uses colon syntax", async () => {
+    vi.useFakeTimers();
+    const { handlers } = createWebhookHarness();
+    const handler = handlers.get("pull_request.opened");
+    expect(handler).toBeDefined();
+
+    const linkedIssue = {
+      number: 21,
+      title: "Issue",
+      state: "OPEN",
+      labels: { nodes: [] },
+    };
+    mocks.getLinkedIssues
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([linkedIssue]);
+
+    const context = createContext("Closes: #21");
+    const handlerPromise = handler!(context);
+    await vi.advanceTimersByTimeAsync(2000);
+    await handlerPromise;
+    vi.useRealTimers();
+
+    expect(mocks.getLinkedIssues).toHaveBeenCalledTimes(2);
+    expect(mocks.issuesOps.comment).not.toHaveBeenCalled();
+    expect(context.log.info).toHaveBeenCalledWith(
+      expect.objectContaining({ pr: 49, resolutionSource: "retry" }),
+      expect.stringContaining("Resolved linked issues")
+    );
+    expect(mocks.processImplementationIntake).toHaveBeenCalledWith(
+      expect.objectContaining({
+        linkedIssues: [linkedIssue],
+      })
+    );
+  });
 });

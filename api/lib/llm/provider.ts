@@ -26,6 +26,20 @@ import { LLM_DEFAULTS } from "./types.js";
 
 const VALID_PROVIDERS: readonly LLMProvider[] = ["openai", "anthropic", "google", "mistral"];
 
+function parseMaxTokens(rawValue: string | undefined): number {
+  const value = rawValue?.trim();
+  if (!value || !/^\d+$/.test(value)) {
+    return LLM_DEFAULTS.maxTokens;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    return LLM_DEFAULTS.maxTokens;
+  }
+
+  return parsed;
+}
+
 /**
  * Check if LLM is configured (provider and model set).
  */
@@ -51,12 +65,10 @@ export function getLLMConfig(): LLMConfig | null {
     return null;
   }
 
-  const maxTokens = parseInt(process.env.LLM_MAX_TOKENS ?? "", 10);
-
   return {
     provider,
     model,
-    maxTokens: Number.isFinite(maxTokens) ? maxTokens : LLM_DEFAULTS.maxTokens,
+    maxTokens: parseMaxTokens(process.env.LLM_MAX_TOKENS),
   };
 }
 

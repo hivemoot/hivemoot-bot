@@ -106,6 +106,8 @@ phase:ready-to-implement issue
 
 ## Configuration
 
+See [docs/CONFIG.md](docs/CONFIG.md) for the full configuration reference, including all supported fields, validation boundaries, and examples.
+
 ### Per-Repo Config (`.github/hivemoot.yml`)
 
 ```yaml

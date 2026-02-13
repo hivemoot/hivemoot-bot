@@ -33,6 +33,7 @@ export interface RunnerConfig<TResult = void> {
   afterAll?: (context: {
     results: Array<{ repo: string; result: TResult }>;
     failedRepos: string[];
+    failedInstallations: number[];
   }) => void;
 }
 
@@ -72,6 +73,7 @@ export async function runForAllRepositories<TResult = void>(
 
   let hasErrors = false;
   const failedRepos: string[] = [];
+  const failedInstallations: number[] = [];
   const results: Array<{ repo: string; result: TResult }> = [];
 
   for (const installation of installations) {
@@ -97,6 +99,7 @@ export async function runForAllRepositories<TResult = void>(
       }
     } catch (error) {
       hasErrors = true;
+      failedInstallations.push(installation.id);
       logger.error(
         `Failed to process installation ${installation.id}`,
         error as Error
@@ -107,12 +110,19 @@ export async function runForAllRepositories<TResult = void>(
   }
 
   // Aggregate reporting before error handling
-  config.afterAll?.({ results, failedRepos });
+  config.afterAll?.({ results, failedRepos, failedInstallations });
 
   if (hasErrors) {
+    const failures: string[] = [];
+    if (failedRepos.length > 0) {
+      failures.push(`repositories: ${failedRepos.join(", ")}`);
+    }
+    if (failedInstallations.length > 0) {
+      failures.push(`installations: ${failedInstallations.join(", ")}`);
+    }
     const message =
-      failedRepos.length > 0
-        ? `Failed to process: ${failedRepos.join(", ")}`
+      failures.length > 0
+        ? `Failed to process ${failures.join("; ")}`
         : "Some installations failed to process";
     core.setFailed(message);
     process.exit(1);

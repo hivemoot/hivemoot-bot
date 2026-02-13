@@ -39,4 +39,19 @@ describe("hasSameRepoClosingKeywordRef", () => {
   it("does not match plain mentions without closing keywords", () => {
     expect(hasSameRepoClosingKeywordRef("Related to #21", repository)).toBe(false);
   });
+
+  it("ignores closing keywords inside inline code", () => {
+    expect(
+      hasSameRepoClosingKeywordRef("Template example: `Fixes #21`", repository)
+    ).toBe(false);
+  });
+
+  it("ignores closing keywords inside fenced code blocks", () => {
+    expect(
+      hasSameRepoClosingKeywordRef(
+        "```md\nFixes #21\n```\nThis PR updates docs only.",
+        repository
+      )
+    ).toBe(false);
+  });
 });

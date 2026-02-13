@@ -23,15 +23,25 @@ function stripTrailingPunctuation(token: string): string {
   return token.replace(/[),.;:!?]+$/, "");
 }
 
+function stripMarkdownCode(body: string): string {
+  return body
+    // Remove fenced code blocks (```...``` and ~~~...~~~)
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/~~~[\s\S]*?~~~/g, " ")
+    // Remove inline code spans (`...`)
+    .replace(/`[^`]*`/g, " ");
+}
+
 export function hasSameRepoClosingKeywordRef(body: string | null | undefined, repository: RepositoryRef): boolean {
   if (!body) {
     return false;
   }
 
+  const searchableBody = stripMarkdownCode(body);
   const normalizedOwner = repository.owner.toLowerCase();
   const normalizedRepo = repository.repo.toLowerCase();
 
-  for (const match of body.matchAll(CLOSING_KEYWORD_PATTERN)) {
+  for (const match of searchableBody.matchAll(CLOSING_KEYWORD_PATTERN)) {
     const rawTarget = match[1];
     if (!rawTarget) continue;
 

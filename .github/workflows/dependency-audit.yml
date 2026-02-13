@@ -11,12 +11,15 @@ on:
 permissions:
   contents: read
 
+env:
+  TRUSTED_FORK_OWNERS_JSON: '["hivemoot","hivemoot-worker","hivemoot-builder","hivemoot-polisher","hivemoot-scout"]'
+
 jobs:
   dependency_audit:
     name: Dependency Audit
     if: >
       github.event_name != 'pull_request_target' ||
-      contains(fromJSON('["hivemoot","hivemoot-worker","hivemoot-builder","hivemoot-polisher","hivemoot-scout"]'), github.event.pull_request.head.repo.owner.login)
+      contains(fromJSON(env.TRUSTED_FORK_OWNERS_JSON), github.event.pull_request.head.repo.owner.login)
     runs-on: ubuntu-latest
 
     steps:

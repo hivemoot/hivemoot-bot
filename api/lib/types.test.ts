@@ -43,6 +43,20 @@ describe("types utilities", () => {
       const issue = createLinkedIssue(1, ["phase:ready-to-implement"]);
       expect(hasLabel(issue, "phase:ready-to-implement")).toBe(true);
     });
+
+    it("should ignore null label nodes", () => {
+      const issue: LinkedIssue = {
+        number: 1,
+        title: "Issue #1",
+        state: "OPEN",
+        labels: {
+          nodes: [null, { name: "bug" }],
+        },
+      };
+
+      expect(hasLabel(issue, "bug")).toBe(true);
+      expect(hasLabel(issue, "enhancement")).toBe(false);
+    });
   });
 
   describe("filterByLabel", () => {

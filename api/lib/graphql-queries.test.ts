@@ -94,6 +94,37 @@ describe("getLinkedIssues", () => {
     expect(result).toEqual([]);
   });
 
+  it("should filter out null linked issue nodes", async () => {
+    vi.mocked(mockClient.graphql).mockResolvedValue({
+      repository: {
+        pullRequest: {
+          closingIssuesReferences: {
+            nodes: [
+              null,
+              {
+                number: 123,
+                title: "Fix bug",
+                state: "OPEN",
+                labels: { nodes: [{ name: "bug" }] },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    const result = await getLinkedIssues(mockClient, "owner", "repo", 42);
+
+    expect(result).toEqual([
+      {
+        number: 123,
+        title: "Fix bug",
+        state: "OPEN",
+        labels: { nodes: [{ name: "bug" }] },
+      },
+    ]);
+  });
+
   it("should pass correct query variables", async () => {
     vi.mocked(mockClient.graphql).mockResolvedValue({
       repository: {

@@ -63,7 +63,7 @@ interface RepoDiscussionInfoResponse {
     createdAt: string;
     hasDiscussionsEnabled: boolean;
     discussionCategories: {
-      nodes: DiscussionCategory[];
+      nodes: Array<DiscussionCategory | null>;
     };
   };
 }
@@ -91,7 +91,7 @@ interface FindColonyJournalResponse {
         number: number;
         title: string;
         locked: boolean;
-      }>;
+      } | null>;
     };
   };
 }
@@ -170,7 +170,7 @@ interface LastDiscussionCommentsResponse {
         nodes: Array<{
           body: string;
           createdAt: string;
-        }>;
+        } | null>;
       };
     } | null;
   };
@@ -215,7 +215,9 @@ export async function getRepoDiscussionInfo(
     repoId: response.repository.id,
     repoCreatedAt: response.repository.createdAt,
     hasDiscussions: response.repository.hasDiscussionsEnabled,
-    categories: response.repository.discussionCategories.nodes,
+    categories: response.repository.discussionCategories.nodes.filter(
+      (category): category is DiscussionCategory => category !== null
+    ),
   };
 }
 
@@ -238,9 +240,11 @@ export async function findOrCreateColonyJournal(
     { owner, repo, categoryId }
   );
 
-  const existing = searchResponse.repository.discussions.nodes.find(
+  const existing = searchResponse.repository.discussions.nodes
+    .filter((discussion): discussion is NonNullable<typeof discussion> => discussion !== null)
+    .find(
     (d) => d.title.includes(COLONY_JOURNAL_TITLE)
-  );
+    );
 
   if (existing) {
     // Lock if somehow unlocked (idempotent safety)
@@ -339,7 +343,9 @@ export async function getLastStandupDate(
     { owner, repo, number: discussionNumber }
   );
 
-  const comments = response.repository.discussion?.comments.nodes;
+  const comments = response.repository.discussion?.comments.nodes.filter(
+    (comment): comment is { body: string; createdAt: string } => comment !== null
+  );
   if (!comments || comments.length === 0) {
     return null;
   }

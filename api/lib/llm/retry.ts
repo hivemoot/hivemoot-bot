@@ -33,6 +33,16 @@ export const LLM_RETRY_DEFAULTS: LLMRetryConfig = {
   defaultRetryDelayMs: 5_000,
 };
 
+function toNonNegativeInteger(value: number, fallback: number): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.max(0, Math.floor(value));
+}
+
+function toPositiveInteger(value: number, fallback: number): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.max(1, Math.ceil(value));
+}
+
 // ───────────────────────────────────────────────────────────────────────────────
 // Error Detection
 // ───────────────────────────────────────────────────────────────────────────────
@@ -101,10 +111,19 @@ export async function withLLMRetry<T>(
   config?: Partial<LLMRetryConfig>,
   logger?: Logger
 ): Promise<T> {
-  const { maxRetries, maxRetryDelayMs, defaultRetryDelayMs } = {
+  const mergedConfig = {
     ...LLM_RETRY_DEFAULTS,
     ...config,
   };
+  const maxRetries = toNonNegativeInteger(mergedConfig.maxRetries, LLM_RETRY_DEFAULTS.maxRetries);
+  const maxRetryDelayMs = toPositiveInteger(
+    mergedConfig.maxRetryDelayMs,
+    LLM_RETRY_DEFAULTS.maxRetryDelayMs
+  );
+  const defaultRetryDelayMs = toPositiveInteger(
+    mergedConfig.defaultRetryDelayMs,
+    LLM_RETRY_DEFAULTS.defaultRetryDelayMs
+  );
 
   let lastError: unknown;
 

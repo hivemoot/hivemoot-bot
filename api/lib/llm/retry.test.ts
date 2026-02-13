@@ -232,4 +232,35 @@ describe("withLLMRetry", () => {
     await expect(withLLMRetry(fn, { maxRetries: 0 })).rejects.toThrow();
     expect(fn).toHaveBeenCalledTimes(1);
   });
+
+  it("clamps negative maxRetries to zero", async () => {
+    const rateLimitError = makeAPICallError(429);
+    const fn = vi.fn().mockRejectedValue(rateLimitError);
+
+    await expect(withLLMRetry(fn, { maxRetries: -1 })).rejects.toThrow();
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it("normalizes invalid delay config values to safe integers", async () => {
+    const rateLimitError = makeAPICallError(429, { message: "rate limited" });
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(rateLimitError)
+      .mockResolvedValueOnce("ok");
+
+    const promise = withLLMRetry(
+      fn,
+      {
+        defaultRetryDelayMs: -1000 as unknown as number,
+        maxRetryDelayMs: Number.NaN as unknown as number,
+      },
+      mockLogger()
+    );
+
+    // defaultRetryDelayMs is normalized to 1ms and maxRetryDelayMs falls back to default 60_000ms
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(promise).resolves.toBe("ok");
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
 });

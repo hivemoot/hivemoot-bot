@@ -271,13 +271,16 @@ export function app(probotApp: Probot): void {
       const appId = getAppId();
       const issues = createIssueOperations(context.octokit, { appId });
       const prs = createPROperations(context.octokit, { appId });
-      const repoConfig = await loadRepositoryConfig(context.octokit, owner, repo);
-
-      let linkedIssues = await getLinkedIssues(context.octokit, owner, repo, number);
+      const [initialLinkedIssues, repoConfig] = await Promise.all([
+        getLinkedIssues(context.octokit, owner, repo, number),
+        loadRepositoryConfig(context.octokit, owner, repo),
+      ]);
+      let linkedIssues = initialLinkedIssues;
       const hasBodyClosingKeyword = hasSameRepoClosingKeywordRef(
         context.payload.pull_request.body,
         { owner, repo }
       );
+      let didRetry = false;
 
       if (linkedIssues.length === 0 && hasBodyClosingKeyword) {
         context.log.info(
@@ -291,6 +294,7 @@ export function app(probotApp: Probot): void {
         );
         await delay(PR_OPENED_LINK_RETRY_DELAY_MS);
         linkedIssues = await getLinkedIssues(context.octokit, owner, repo, number);
+        didRetry = true;
       }
 
       // Unlinked PRs get a warning; linked PRs are handled by processImplementationIntake
@@ -308,7 +312,7 @@ export function app(probotApp: Probot): void {
           );
         }
       } else {
-        const resolutionSource = hasBodyClosingKeyword ? "retry" : "initial";
+        const resolutionSource = didRetry ? "retry" : "initial";
         context.log.info(
           { owner, repo, pr: number, linkedIssueCount: linkedIssues.length, resolutionSource },
           "Resolved linked issues for opened PR"

@@ -7,6 +7,7 @@ describe("hasSameRepoClosingKeywordRef", () => {
   it("matches local issue references", () => {
     expect(hasSameRepoClosingKeywordRef("Fixes #21", repository)).toBe(true);
     expect(hasSameRepoClosingKeywordRef("closes #9.", repository)).toBe(true);
+    expect(hasSameRepoClosingKeywordRef("resolves: #12", repository)).toBe(true);
   });
 
   it("matches fully-qualified same-repo references", () => {

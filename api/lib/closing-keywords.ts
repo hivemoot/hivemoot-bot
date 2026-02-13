@@ -13,7 +13,7 @@ interface RepositoryRef {
 }
 
 const CLOSING_KEYWORD_PATTERN =
-  /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b\s+([^\s]+)/gi;
+  /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b\s*:?\s+([^\s]+)/gi;
 
 const ISSUE_NUMBER_PATTERN = /^#\d+$/;
 const QUALIFIED_REFERENCE_PATTERN = /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)#\d+$/;

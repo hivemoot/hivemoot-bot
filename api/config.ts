@@ -345,6 +345,20 @@ export function isLabelMatch(name: string | undefined, label: string): boolean {
   return name === label || LEGACY_LABEL_MAP[name] === label;
 }
 
+/**
+ * Return label aliases for query-time compatibility.
+ * The first entry is always the canonical label, followed by legacy aliases.
+ */
+export function getLabelQueryAliases(label: string): string[] {
+  const aliases = [label];
+  for (const [legacyName, canonicalName] of Object.entries(LEGACY_LABEL_MAP)) {
+    if (canonicalName === label) {
+      aliases.push(legacyName);
+    }
+  }
+  return aliases;
+}
+
 export interface RepositoryLabelDefinition {
   name: string;
   color: string;

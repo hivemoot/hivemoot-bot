@@ -488,7 +488,7 @@ describe("PROperations", () => {
         ],
       });
 
-      const result = await prOps.findPRsWithLabel("test-org", "test-repo", "hivemoot:candidate");
+      const result = await prOps.findPRsWithLabel("test-org", "test-repo", "my-label");
 
       expect(result).toHaveLength(2);
       expect(result.map((pr) => pr.number)).toEqual([1, 3]);
@@ -507,7 +507,7 @@ describe("PROperations", () => {
         ],
       });
 
-      const result = await prOps.findPRsWithLabel("test-org", "test-repo", "hivemoot:candidate");
+      const result = await prOps.findPRsWithLabel("test-org", "test-repo", "my-label");
 
       expect(result).toEqual([
         {
@@ -522,9 +522,44 @@ describe("PROperations", () => {
     it("should return empty array when no matches", async () => {
       vi.mocked(mockClient.rest.issues.listForRepo).mockResolvedValue({ data: [] });
 
-      const result = await prOps.findPRsWithLabel("test-org", "test-repo", "hivemoot:candidate");
+      const result = await prOps.findPRsWithLabel("test-org", "test-repo", "my-label");
 
       expect(result).toEqual([]);
+    });
+
+    it("should query canonical and legacy aliases and de-duplicate PRs", async () => {
+      vi.mocked(mockClient.rest.issues.listForRepo)
+        .mockResolvedValueOnce({
+          data: [{
+            number: 42,
+            pull_request: {},
+            created_at: "2024-01-10T08:00:00Z",
+            updated_at: "2024-01-15T10:30:00Z",
+            labels: [{ name: "hivemoot:candidate" }],
+          }],
+        })
+        .mockResolvedValueOnce({ data: [] })
+        .mockResolvedValueOnce({
+          data: [{
+            number: 42,
+            pull_request: {},
+            created_at: "2024-01-10T08:00:00Z",
+            updated_at: "2024-01-15T10:30:00Z",
+            labels: [{ name: "implementation" }],
+          }],
+        })
+        .mockResolvedValueOnce({ data: [] });
+
+      const result = await prOps.findPRsWithLabel("test-org", "test-repo", LABELS.IMPLEMENTATION);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].number).toBe(42);
+      expect(mockClient.rest.issues.listForRepo).toHaveBeenCalledWith(
+        expect.objectContaining({ labels: LABELS.IMPLEMENTATION })
+      );
+      expect(mockClient.rest.issues.listForRepo).toHaveBeenCalledWith(
+        expect.objectContaining({ labels: "implementation" })
+      );
     });
 
     it("should call listForRepo with correct parameters including page", async () => {
@@ -564,7 +599,7 @@ describe("PROperations", () => {
         .mockResolvedValueOnce({ data: page1 })
         .mockResolvedValueOnce({ data: page2 });
 
-      const result = await prOps.findPRsWithLabel("test-org", "test-repo", "hivemoot:candidate");
+      const result = await prOps.findPRsWithLabel("test-org", "test-repo", "my-label");
 
       expect(result).toHaveLength(150);
       expect(result[0].number).toBe(1);
@@ -587,7 +622,7 @@ describe("PROperations", () => {
         .mockResolvedValueOnce({ data: page1 })
         .mockResolvedValueOnce({ data: [] });
 
-      const result = await prOps.findPRsWithLabel("test-org", "test-repo", "hivemoot:candidate");
+      const result = await prOps.findPRsWithLabel("test-org", "test-repo", "my-label");
 
       expect(result).toHaveLength(100);
       expect(mockClient.rest.issues.listForRepo).toHaveBeenCalledTimes(2);
@@ -606,7 +641,7 @@ describe("PROperations", () => {
       vi.mocked(mockClient.rest.issues.listForRepo)
         .mockResolvedValueOnce({ data: page1 })
 
-      const result = await prOps.findPRsWithLabel("test-org", "test-repo", "hivemoot:candidate");
+      const result = await prOps.findPRsWithLabel("test-org", "test-repo", "my-label");
 
       // Only PR items should be included
       expect(result).toHaveLength(1);

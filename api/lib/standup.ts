@@ -12,7 +12,7 @@
 import { z } from "zod";
 import { generateObject } from "ai";
 
-import { LABELS, SIGNATURE } from "../config.js";
+import { LABELS, SIGNATURE, getLabelQueryAliases } from "../config.js";
 import {
   createStandupMetadata,
   generateMetadataTag,
@@ -316,21 +316,31 @@ async function fetchIssuesByLabel(
   repo: string,
   label: string
 ): Promise<StandupIssueRef[]> {
-  const response = await octokit.rest.issues.listForRepo({
-    owner,
-    repo,
-    labels: label,
-    state: "open",
-    per_page: 100,
-  });
+  const aliases = getLabelQueryAliases(label);
+  const issuesByNumber = new Map<number, StandupIssueRef>();
 
-  // Filter out PRs (GitHub's issues API returns PRs with a pull_request field)
-  return response.data
-    .filter((issue) => !issue.pull_request)
-    .map((issue) => ({
-      number: issue.number,
-      title: issue.title,
-    }));
+  for (const alias of aliases) {
+    const response = await octokit.rest.issues.listForRepo({
+      owner,
+      repo,
+      labels: alias,
+      state: "open",
+      per_page: 100,
+    });
+
+    // Filter out PRs (GitHub's issues API returns PRs with a pull_request field)
+    for (const issue of response.data) {
+      if (issue.pull_request || issuesByNumber.has(issue.number)) {
+        continue;
+      }
+      issuesByNumber.set(issue.number, {
+        number: issue.number,
+        title: issue.title,
+      });
+    }
+  }
+
+  return [...issuesByNumber.values()];
 }
 
 /**

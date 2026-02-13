@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { SIGNATURES, parseMetadata, NOTIFICATION_TYPES, type NotificationMetadata } from "./lib/bot-comments.js";
-import { isLabelMatch, LEGACY_LABEL_MAP, LABELS } from "./config.js";
+import { isLabelMatch, LEGACY_LABEL_MAP, LABELS, getLabelQueryAliases } from "./config.js";
 
 /**
  * Tests for config.ts
@@ -187,6 +187,24 @@ describe("config", () => {
       // "phase:discussion" maps to LABELS.DISCUSSION, not LABELS.VOTING
       expect(isLabelMatch("phase:discussion", LABELS.VOTING)).toBe(false);
       expect(isLabelMatch("implementation", LABELS.STALE)).toBe(false);
+    });
+  });
+
+  describe("getLabelQueryAliases", () => {
+    it("should include canonical and mapped legacy label names", () => {
+      expect(getLabelQueryAliases(LABELS.DISCUSSION)).toEqual([
+        LABELS.DISCUSSION,
+        "phase:discussion",
+      ]);
+
+      expect(getLabelQueryAliases(LABELS.NEEDS_HUMAN)).toEqual([
+        LABELS.NEEDS_HUMAN,
+        "needs:human",
+      ]);
+    });
+
+    it("should return only canonical label when no legacy alias exists", () => {
+      expect(getLabelQueryAliases("custom:label")).toEqual(["custom:label"]);
     });
   });
 

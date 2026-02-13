@@ -489,13 +489,23 @@ describe("reconcile-pr-notifications", () => {
 
       expect(mockOctokit.paginate.iterator).toHaveBeenCalledWith(
         mockOctokit.rest.issues.listForRepo,
-        {
+        expect.objectContaining({
           owner,
           repo,
           state: "open",
           labels: LABELS.READY_TO_IMPLEMENT,
           per_page: 100,
-        }
+        })
+      );
+      expect(mockOctokit.paginate.iterator).toHaveBeenCalledWith(
+        mockOctokit.rest.issues.listForRepo,
+        expect.objectContaining({
+          owner,
+          repo,
+          state: "open",
+          labels: "phase:ready-to-implement",
+          per_page: 100,
+        })
       );
     });
 

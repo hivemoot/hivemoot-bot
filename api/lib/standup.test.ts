@@ -86,21 +86,25 @@ describe("collectStandupData", () => {
     const octokit = createMockOctokit();
     const prs = createMockPROperations();
 
-    // Set up different label results
-    octokit.rest.issues.listForRepo
-      .mockResolvedValueOnce({
-        data: [{ number: 1, title: "Add feature X", pull_request: undefined }],
-      })
-      .mockResolvedValueOnce({
-        data: [{ number: 2, title: "Improve Y" }],
-      })
-      .mockResolvedValueOnce({ data: [] })
-      .mockResolvedValueOnce({
-        data: [
-          { number: 3, title: "Build Z" },
-          { number: 4, title: "Build W" },
-        ],
-      });
+    // Support both canonical and legacy label queries.
+    octokit.rest.issues.listForRepo.mockImplementation(({ labels }) => {
+      switch (labels) {
+      case "hivemoot:discussion":
+      case "phase:discussion":
+        return Promise.resolve({ data: [{ number: 1, title: "Add feature X", pull_request: undefined }] });
+      case "hivemoot:voting":
+      case "phase:voting":
+        return Promise.resolve({ data: [{ number: 2, title: "Improve Y" }] });
+      case "hivemoot:extended-voting":
+      case "phase:extended-voting":
+        return Promise.resolve({ data: [] });
+      case "hivemoot:ready-to-implement":
+      case "phase:ready-to-implement":
+        return Promise.resolve({ data: [{ number: 3, title: "Build Z" }, { number: 4, title: "Build W" }] });
+      default:
+        return Promise.resolve({ data: [] });
+      }
+    });
 
     const result = await collectStandupData(
       octokit, prs, "hivemoot", "colony", "2026-02-06", 42

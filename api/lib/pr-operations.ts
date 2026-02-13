@@ -8,7 +8,7 @@
 import type { PRRef } from "./types.js";
 import { validateClient, PR_CLIENT_CHECKS } from "./client-validation.js";
 import { isNotificationComment } from "./bot-comments.js";
-import { LABELS, isLabelMatch } from "../config.js";
+import { LABELS, getLabelQueryAliases, isLabelMatch } from "../config.js";
 
 /**
  * Minimal GitHub client interface for PR operations.
@@ -362,24 +362,30 @@ export class PROperations {
       updatedAt: Date;
       labels: Array<{ name: string }>;
     }> = [];
-    let page = 1;
     const perPage = 100;
+    const seen = new Set<number>();
+    const labelsToQuery = getLabelQueryAliases(labelName);
 
-    while (true) {
-      const { data } = await this.client.rest.issues.listForRepo({
-        owner,
-        repo,
-        state: "open",
-        labels: labelName,
-        per_page: perPage,
-        page,
-      });
+    for (const queryLabel of labelsToQuery) {
+      let page = 1;
+      while (true) {
+        const { data } = await this.client.rest.issues.listForRepo({
+          owner,
+          repo,
+          state: "open",
+          labels: queryLabel,
+          per_page: perPage,
+          page,
+        });
 
-      if (data.length === 0) break;
+        if (data.length === 0) break;
 
-      // Filter to only PRs (issues with pull_request property)
-      for (const item of data) {
-        if (item.pull_request !== undefined) {
+        // Filter to only PRs (issues with pull_request property)
+        for (const item of data) {
+          if (item.pull_request === undefined || seen.has(item.number)) {
+            continue;
+          }
+          seen.add(item.number);
           allPRs.push({
             number: item.number,
             createdAt: new Date(item.created_at),
@@ -387,10 +393,10 @@ export class PROperations {
             labels: item.labels,
           });
         }
-      }
 
-      if (data.length < perPage) break;
-      page++;
+        if (data.length < perPage) break;
+        page++;
+      }
     }
 
     return allPRs;

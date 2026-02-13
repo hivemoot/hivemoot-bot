@@ -166,11 +166,14 @@ Events:
 ## Local Development
 
 ```bash
+nvm use
 npm install
 npm run test
 npm run typecheck
 npm run build
 ```
+
+The repository pins Node.js major version in `.nvmrc` (`20`) and enforces it in core npm scripts.
 
 For contribution workflows, see [CONTRIBUTING.md](CONTRIBUTING.md).
 

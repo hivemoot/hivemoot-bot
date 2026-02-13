@@ -173,7 +173,7 @@ npm run typecheck
 npm run build
 ```
 
-The repository pins Node.js major version in `.nvmrc` (`20`) and enforces it in core npm scripts.
+The repository pins Node.js major version in `.nvmrc` (`20`) and enforces it at install time via `.npmrc` (`engine-strict=true`).
 
 For contribution workflows, see [CONTRIBUTING.md](CONTRIBUTING.md).
 

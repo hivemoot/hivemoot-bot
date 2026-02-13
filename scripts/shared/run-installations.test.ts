@@ -28,6 +28,7 @@ vi.mock("../../api/lib/index.js", () => ({
 import { App } from "octokit";
 import * as core from "@actions/core";
 import { logger } from "../../api/lib/index.js";
+import { getAppConfig } from "../../api/lib/env-validation.js";
 import { runForAllRepositories, runIfMain } from "./run-installations.js";
 
 type MockInstallation = { id: number; account?: { login?: string } };
@@ -192,6 +193,22 @@ describe("run-installations shared runner", () => {
     });
     expect(core.setFailed).toHaveBeenCalledWith("Some installations failed to process");
   });
+
+  it("fails fast when app config loading throws", async () => {
+    vi.mocked(getAppConfig).mockImplementationOnce(() => {
+      throw new Error("Missing APP_ID");
+    });
+
+    await expect(
+      runForAllRepositories({
+        scriptName: "test-runner",
+        processRepository: vi.fn(),
+      })
+    ).rejects.toThrow("process.exit:1");
+
+    expect(core.setFailed).toHaveBeenCalledWith("Missing APP_ID");
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
 });
 
 describe("runIfMain", () => {
@@ -232,5 +249,18 @@ describe("runIfMain", () => {
     expect(main).not.toHaveBeenCalled();
     expect(core.setFailed).not.toHaveBeenCalled();
     expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it("marks workflow failed when main rejects", async () => {
+    process.argv[1] = "/tmp/scripts/example.ts";
+    exitSpy.mockImplementationOnce((() => undefined) as never);
+    const main = vi.fn().mockRejectedValue(new Error("boom"));
+
+    runIfMain("file:///tmp/scripts/example.ts", main);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(main).toHaveBeenCalledTimes(1);
+    expect(core.setFailed).toHaveBeenCalledWith("Fatal error: boom");
+    expect(exitSpy).toHaveBeenCalledWith(1);
   });
 });

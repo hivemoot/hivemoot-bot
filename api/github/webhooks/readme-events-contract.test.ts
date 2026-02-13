@@ -2,18 +2,6 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-const REQUIRED_WEBHOOK_EVENTS = [
-  "issues",
-  "issue_comment",
-  "installation",
-  "installation_repositories",
-  "pull_request",
-  "pull_request_review",
-  "check_suite",
-  "check_run",
-  "status",
-] as const;
-
 const EVENT_NAME_MAP: Record<string, string> = {
   issues: "issues",
   "issue comment": "issue_comment",
@@ -40,16 +28,40 @@ function normalizeEventName(name: string): string {
   return EVENT_NAME_MAP[normalized] ?? normalized;
 }
 
-function extractReadmeWebhookEvents(readmeContents: string): string[] {
-  const sectionMatch = readmeContents.match(
-    /## GitHub App Setup[\s\S]*?Events:\n\n([\s\S]*?)(?:\n## |\n$)/
-  );
+function extractRegisteredWebhookEvents(source: string): string[] {
+  const callMatches = source.matchAll(/probotApp\.on\(\s*(\[[\s\S]*?\]|["'][^"']+["'])/g);
+  const events = new Set<string>();
 
-  if (!sectionMatch) {
-    throw new Error("Could not find 'GitHub App Setup > Events' section in README.md");
+  for (const [, rawArg] of callMatches) {
+    const stringLiterals = rawArg.matchAll(/["']([^"']+)["']/g);
+    for (const [, event] of stringLiterals) {
+      events.add(event.split(".")[0]);
+    }
   }
 
-  return sectionMatch[1]
+  return [...events];
+}
+
+function extractReadmeWebhookEvents(readmeContents: string): string[] {
+  const setupHeading = "## GitHub App Setup";
+  const eventsHeading = "Events:";
+  const setupStart = readmeContents.indexOf(setupHeading);
+
+  if (setupStart === -1) {
+    throw new Error("Could not find '## GitHub App Setup' section in README.md");
+  }
+
+  const setupSection = readmeContents.slice(setupStart);
+  const eventsStart = setupSection.indexOf(eventsHeading);
+  if (eventsStart === -1) {
+    throw new Error("Could not find 'Events:' subsection under '## GitHub App Setup' in README.md");
+  }
+
+  const eventsSection = setupSection
+    .slice(eventsStart + eventsHeading.length)
+    .split(/\n##\s+/)[0];
+
+  return eventsSection
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.startsWith("- "))
@@ -59,10 +71,15 @@ function extractReadmeWebhookEvents(readmeContents: string): string[] {
 describe("README webhook event contract", () => {
   it("documents all required GitHub App webhook subscriptions", () => {
     const readmeContents = readFileSync(resolve(process.cwd(), "README.md"), "utf8");
+    const webhookSource = readFileSync(
+      resolve(process.cwd(), "api/github/webhooks/index.ts"),
+      "utf8",
+    );
     const documentedEvents = extractReadmeWebhookEvents(readmeContents);
+    const registeredEvents = extractRegisteredWebhookEvents(webhookSource);
 
-    for (const requiredEvent of REQUIRED_WEBHOOK_EVENTS) {
-      expect(documentedEvents).toContain(requiredEvent);
+    for (const registeredEvent of registeredEvents) {
+      expect(documentedEvents).toContain(registeredEvent);
     }
   });
 });

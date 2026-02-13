@@ -13,6 +13,8 @@ To align your environment with the repo requirement:
 nvm use
 ```
 
+This repository enforces `engines.node` during dependency install via `.npmrc` (`engine-strict=true`), so `npm install` fails fast if Node is not `20.x`.
+
 ## When to Open a PR
 
 **Do not start implementation work until the target issue has the `phase:ready-to-implement` label.** Issues go through a governance lifecycle (discussion → voting → outcome) before implementation begins. Opening a PR against an issue that hasn't reached `phase:ready-to-implement` will trigger a bot warning, and the PR will not be tracked on the implementation leaderboard.

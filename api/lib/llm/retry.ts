@@ -63,13 +63,22 @@ export function isLLMRateLimitError(error: unknown): boolean {
 export function extractRetryDelay(error: unknown): number | null {
   if (!APICallError.isInstance(error)) return null;
 
-  // Source 1: Standard retry-after header (value in seconds)
+  // Source 1: Standard retry-after header
+  // RFC 9110 allows either delta-seconds or an HTTP-date.
   const retryAfterHeader =
     error.responseHeaders?.["retry-after"] ?? error.responseHeaders?.["Retry-After"];
   if (retryAfterHeader) {
     const seconds = parseFloat(retryAfterHeader);
     if (!isNaN(seconds) && seconds > 0) {
       return Math.ceil(seconds * 1000);
+    }
+
+    const retryAt = Date.parse(retryAfterHeader);
+    if (!isNaN(retryAt)) {
+      const msUntilRetry = retryAt - Date.now();
+      if (msUntilRetry > 0) {
+        return Math.ceil(msUntilRetry);
+      }
     }
   }
 

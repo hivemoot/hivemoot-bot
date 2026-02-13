@@ -1184,6 +1184,42 @@ describe("getOpenPRsForIssue", () => {
     expect(result[0].number).toBe(1);
   });
 
+  it("should match same-repo candidates case-insensitively", async () => {
+    vi.mocked(mockClient.graphql).mockImplementation(async (query: string) => {
+      if (query.includes("getOpenPRsForIssue")) {
+        return {
+          repository: {
+            issue: {
+              timelineItems: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [
+                  // Mixed-case owner/repo — should still match
+                  { source: { number: 1, title: "PR 1", state: "OPEN", author: { login: "user1" }, repository: { owner: { login: "Owner" }, name: "Repo" } } },
+                ],
+              },
+            },
+          },
+        };
+      } else if (query.includes("getLinkedIssues")) {
+        return {
+          repository: {
+            pullRequest: {
+              closingIssuesReferences: {
+                nodes: [{ number: 123, title: "Issue", state: "OPEN", labels: { nodes: [] } }],
+              },
+            },
+          },
+        };
+      }
+      throw new Error(`Unexpected GraphQL query in test mock: ${query.slice(0, 80)}`);
+    });
+
+    const result = await getOpenPRsForIssue(mockClient, "owner", "repo", 123);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].number).toBe(1);
+  });
+
   // ─── Layer 4: Staleness classification (#25) ──────────────────────────────
 
   it("should classify stale PR errors as noise and return verified results", async () => {

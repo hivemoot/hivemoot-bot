@@ -357,7 +357,10 @@ async function getCrossReferencedOpenPRs(
         // local repo for non-existent PR numbers.
         const sourceRepo = event.source?.repository;
         if (sourceRepo) {
-          return sourceRepo.owner.login === owner && sourceRepo.name === repo;
+          return (
+            sourceRepo.owner.login.toLowerCase() === owner.toLowerCase() &&
+            sourceRepo.name.toLowerCase() === repo.toLowerCase()
+          );
         }
         // If repository field is missing (shouldn't happen with our query,
         // but defensive), allow through for verification step to handle.

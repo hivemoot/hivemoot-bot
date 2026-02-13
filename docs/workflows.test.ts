@@ -41,7 +41,14 @@ describe("doc-contract: voting signals", () => {
     });
 
     it("should state that only the four voting reactions are counted", () => {
-      expect(workflows).toMatch(/only\s+👍.+👎.+😕.+👀.+counted/i);
+      const countedSentence =
+        workflows.match(/only[^.\n]*counted/i)?.[0] ?? "";
+
+      expect(countedSentence).not.toBe("");
+
+      for (const emoji of VOTING_REACTIONS) {
+        expect(countedSentence).toContain(emoji);
+      }
     });
   });
 });

@@ -194,6 +194,43 @@ describe("run-installations shared runner", () => {
     expect(core.setFailed).toHaveBeenCalledWith("Some installations failed to process");
   });
 
+  it("prioritizes failed repo summary when both installation and repo failures occur", async () => {
+    setupAppMock({
+      installations: [
+        { id: 1, account: { login: "broken-org" } },
+        { id: 2, account: { login: "mixed-org" } },
+      ],
+      installationFailures: [1],
+      installationRepos: {
+        2: [
+          { full_name: "mixed-org/repo-a", owner: { login: "mixed-org" }, name: "repo-a" },
+          { full_name: "mixed-org/repo-b", owner: { login: "mixed-org" }, name: "repo-b" },
+        ],
+      },
+    });
+
+    const processRepository = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("repo failure"))
+      .mockResolvedValueOnce("ok");
+    const afterAll = vi.fn();
+
+    await expect(
+      runForAllRepositories({
+        scriptName: "test-runner",
+        processRepository,
+        afterAll,
+      })
+    ).rejects.toThrow("process.exit:1");
+
+    expect(processRepository).toHaveBeenCalledTimes(2);
+    expect(afterAll).toHaveBeenCalledWith({
+      results: [{ repo: "mixed-org/repo-b", result: "ok" }],
+      failedRepos: ["mixed-org/repo-a"],
+    });
+    expect(core.setFailed).toHaveBeenCalledWith("Failed to process: mixed-org/repo-a");
+  });
+
   it("fails fast when app config loading throws", async () => {
     vi.mocked(getAppConfig).mockImplementationOnce(() => {
       throw new Error("Missing APP_ID");

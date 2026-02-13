@@ -5,7 +5,7 @@ import {
   formatLeaderboard,
   type LeaderboardClient,
 } from "./leaderboard.js";
-import { SIGNATURE } from "../config.js";
+import { BOT_LOGIN, SIGNATURE } from "../config.js";
 import { SIGNATURES } from "./bot-comments.js";
 import type { IssueRef, PRWithApprovals } from "./types.js";
 
@@ -365,7 +365,7 @@ describe("LeaderboardService", () => {
                 id: 100,
                 body: makeLeaderboardBody("| PR | Author |"),
                 performed_via_github_app: { id: DIFFERENT_APP_ID },
-                user: { login: "hivemoot[bot]" },
+                user: { login: BOT_LOGIN },
                 created_at: "2024-01-15T10:00:00Z",
               },
             ],

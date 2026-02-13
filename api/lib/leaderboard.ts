@@ -5,7 +5,7 @@
  * ranked by approval count. Updated when reviews are submitted.
  */
 
-import { SIGNATURE } from "../config.js";
+import { BOT_LOGIN, SIGNATURE } from "../config.js";
 import { SIGNATURES, isLeaderboardComment, buildLeaderboardComment, parseMetadata } from "./bot-comments.js";
 import type { IssueRef, PRWithApprovals, IssueComment } from "./types.js";
 import {
@@ -143,7 +143,7 @@ export class LeaderboardService {
 
   /**
    * Fallback for app-id drift: accept leaderboard comments authored by the
-   * hivemoot app bot account when metadata is valid.
+   * configured app bot account when metadata is valid.
    */
   private isCanonicalLeaderboardComment(comment: IssueComment): boolean {
     if (isLeaderboardComment(comment.body, this.appId, comment.performed_via_github_app?.id)) {
@@ -155,7 +155,7 @@ export class LeaderboardService {
       return false;
     }
 
-    return comment.user?.login === "hivemoot[bot]";
+    return comment.user?.login === BOT_LOGIN;
   }
 
   /**

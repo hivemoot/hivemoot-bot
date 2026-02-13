@@ -92,6 +92,7 @@ export const VOTING_DURATION_MS = parseMinutesToMs(
 // ───────────────────────────────────────────────────────────────────────────────
 
 export const SIGNATURE = "\n\n---\nbuzz buzz 🐝 Hivemoot Queen";
+export const BOT_LOGIN = "hivemoot[bot]";
 
 // ───────────────────────────────────────────────────────────────────────────────
 // Message Templates

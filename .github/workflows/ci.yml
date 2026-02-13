@@ -13,11 +13,34 @@ env:
   TRUSTED_FORK_OWNERS_JSON: '["hivemoot","hivemoot-worker","hivemoot-builder","hivemoot-polisher","hivemoot-scout"]'
 
 jobs:
+  trust_check:
+    name: Evaluate trusted fork owner
+    runs-on: ubuntu-latest
+    outputs:
+      run_pr_jobs: ${{ steps.decision.outputs.run_pr_jobs }}
+    steps:
+      - id: decision
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_OWNER: ${{ github.event.pull_request.head.repo.owner.login }}
+          TRUSTED_FORK_OWNERS_JSON: ${{ env.TRUSTED_FORK_OWNERS_JSON }}
+        run: |
+          if [ "$EVENT_NAME" != "pull_request_target" ]; then
+            echo "run_pr_jobs=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if node -e "const owners = JSON.parse(process.env.TRUSTED_FORK_OWNERS_JSON); process.exit(owners.includes(process.env.PR_OWNER) ? 0 : 1)"; then
+            echo "run_pr_jobs=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run_pr_jobs=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping fork PR workflows for untrusted owner: $PR_OWNER"
+          fi
+
   build:
     name: Build
-    if: >
-      github.event_name != 'pull_request_target' ||
-      contains(fromJSON(env.TRUSTED_FORK_OWNERS_JSON), github.event.pull_request.head.repo.owner.login)
+    needs: trust_check
+    if: needs.trust_check.outputs.run_pr_jobs == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -48,9 +71,8 @@ jobs:
 
   lint:
     name: Lint
-    if: >
-      github.event_name != 'pull_request_target' ||
-      contains(fromJSON(env.TRUSTED_FORK_OWNERS_JSON), github.event.pull_request.head.repo.owner.login)
+    needs: trust_check
+    if: needs.trust_check.outputs.run_pr_jobs == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -81,9 +103,8 @@ jobs:
 
   test_typecheck:
     name: Test & Type Check
-    if: >
-      github.event_name != 'pull_request_target' ||
-      contains(fromJSON(env.TRUSTED_FORK_OWNERS_JSON), github.event.pull_request.head.repo.owner.login)
+    needs: trust_check
+    if: needs.trust_check.outputs.run_pr_jobs == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -117,9 +138,8 @@ jobs:
 
   coverage_gate:
     name: Coverage Gate
-    if: >
-      github.event_name != 'pull_request_target' ||
-      contains(fromJSON(env.TRUSTED_FORK_OWNERS_JSON), github.event.pull_request.head.repo.owner.login)
+    needs: trust_check
+    if: needs.trust_check.outputs.run_pr_jobs == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -158,7 +178,7 @@ jobs:
 
   deploy:
     name: Deploy to Vercel
-    needs: [build, lint, test_typecheck, coverage_gate]
+    needs: [trust_check, build, lint, test_typecheck, coverage_gate]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     env:

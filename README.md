@@ -162,6 +162,9 @@ Events:
 - Installation repositories
 - Pull requests
 - Pull request reviews
+- Check suites
+- Check runs
+- Commit statuses
 
 ## Local Development
 

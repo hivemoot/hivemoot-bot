@@ -166,6 +166,7 @@ Events:
 ## Local Development
 
 ```bash
+nvm use
 npm install
 npm run test
 npm run typecheck

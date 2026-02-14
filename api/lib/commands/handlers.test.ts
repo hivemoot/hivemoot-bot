@@ -21,6 +21,7 @@ function createMockOctokit(permission = "admin") {
       },
       reactions: {
         createForIssueComment: vi.fn().mockResolvedValue({}),
+        listForIssueComment: vi.fn().mockResolvedValue({ data: [] }),
       },
       issues: {
         createComment: vi.fn().mockResolvedValue({}),
@@ -418,6 +419,70 @@ describe("executeCommand", () => {
       });
       const result = await executeCommand(ctx);
       expect(result.status).toBe("executed");
+    });
+  });
+
+  describe("idempotency guard", () => {
+    it("should skip execution when bot already reacted with eyes", async () => {
+      const octokit = createMockOctokit();
+      octokit.rest.reactions.listForIssueComment.mockResolvedValue({
+        data: [{ user: { login: "hivemoot-bot[bot]" } }],
+      });
+
+      const ctx = createCtx({ octokit });
+      const result = await executeCommand(ctx);
+
+      expect(result).toEqual({ status: "ignored" });
+      expect(mockGovernance.transitionToVoting).not.toHaveBeenCalled();
+      expect(octokit.rest.reactions.createForIssueComment).not.toHaveBeenCalled();
+    });
+
+    it("should not skip when eyes reaction is from a non-bot user", async () => {
+      const octokit = createMockOctokit();
+      octokit.rest.reactions.listForIssueComment.mockResolvedValue({
+        data: [{ user: { login: "some-human" } }],
+      });
+
+      const ctx = createCtx({ octokit });
+      const result = await executeCommand(ctx);
+
+      expect(result.status).toBe("executed");
+    });
+
+    it("should proceed when reaction check fails", async () => {
+      const octokit = createMockOctokit();
+      octokit.rest.reactions.listForIssueComment.mockRejectedValue(
+        new Error("API error"),
+      );
+
+      const ctx = createCtx({ octokit });
+      const result = await executeCommand(ctx);
+
+      expect(result.status).toBe("executed");
+    });
+
+    it("should proceed when no eyes reactions exist", async () => {
+      const octokit = createMockOctokit();
+      octokit.rest.reactions.listForIssueComment.mockResolvedValue({
+        data: [],
+      });
+
+      const ctx = createCtx({ octokit });
+      const result = await executeCommand(ctx);
+
+      expect(result.status).toBe("executed");
+    });
+  });
+
+  describe("reply signature", () => {
+    it("should append SIGNATURE to rejection replies", async () => {
+      const ctx = createCtx({
+        issueLabels: [{ name: LABELS.VOTING }],
+      });
+      await executeCommand(ctx);
+
+      const replyCall = ctx.octokit.rest.issues.createComment.mock.calls[0];
+      expect(replyCall[0].body).toContain("Hivemoot Queen");
     });
   });
 });

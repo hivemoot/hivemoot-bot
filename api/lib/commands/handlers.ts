@@ -30,6 +30,13 @@ export interface CommandOctokit {
         comment_id: number;
         content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
       }) => Promise<unknown>;
+      listForIssueComment: (params: {
+        owner: string;
+        repo: string;
+        comment_id: number;
+        content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+        per_page?: number;
+      }) => Promise<{ data: Array<{ user: { login: string } | null }> }>;
     };
     issues: {
       createComment: (params: {
@@ -127,7 +134,8 @@ async function react(
 }
 
 /**
- * Post a reply comment on the issue.
+ * Post a reply comment on the issue. SIGNATURE is always appended —
+ * callers should not include it in the body.
  * Failures are logged but do not propagate — the governance action may
  * have already completed, so crashing the handler is worse than a missing comment.
  */
@@ -137,13 +145,37 @@ async function reply(ctx: CommandContext, body: string): Promise<void> {
       owner: ctx.owner,
       repo: ctx.repo,
       issue_number: ctx.issueNumber,
-      body,
+      body: `${body}${SIGNATURE}`,
     });
   } catch (error) {
     ctx.log.error(
       { err: error, issue: ctx.issueNumber },
       `Failed to post reply comment on #${ctx.issueNumber} — continuing`,
     );
+  }
+}
+
+/**
+ * Check if the bot has already reacted with 👀 to this comment.
+ * Used as an idempotency guard against webhook retries — if we already
+ * processed a command (indicated by our eyes reaction), skip re-execution.
+ */
+async function alreadyProcessed(ctx: CommandContext): Promise<boolean> {
+  try {
+    const { data: reactions } = await ctx.octokit.rest.reactions.listForIssueComment({
+      owner: ctx.owner,
+      repo: ctx.repo,
+      comment_id: ctx.commentId,
+      content: "eyes",
+      per_page: 100,
+    });
+    // Check if any eyes reaction was created by our app's bot account.
+    // GitHub App bot usernames follow the pattern "<app-slug>[bot]".
+    return reactions.some((r) => r.user?.login.endsWith("[bot]"));
+  } catch {
+    // If we can't check reactions, proceed with execution to avoid
+    // silently dropping commands due to transient API failures.
+    return false;
   }
 }
 
@@ -281,6 +313,15 @@ export async function executeCommand(ctx: CommandContext): Promise<CommandResult
     return { status: "ignored" };
   }
 
+  // Idempotency guard: if we already reacted with 👀, this is a webhook
+  // retry and the command was already executed. Skip to prevent duplicates.
+  if (await alreadyProcessed(ctx)) {
+    ctx.log.info(
+      `Command /${ctx.verb} on comment ${ctx.commentId} already processed (eyes reaction found) — skipping retry`,
+    );
+    return { status: "ignored" };
+  }
+
   // Acknowledge receipt
   await react(ctx, "eyes");
 
@@ -295,7 +336,7 @@ export async function executeCommand(ctx: CommandContext): Promise<CommandResult
       await react(ctx, "+1");
     } else if (result.status === "rejected") {
       await react(ctx, "confused");
-      await reply(ctx, `${result.reason}${SIGNATURE}`);
+      await reply(ctx, result.reason);
     }
 
     return result;

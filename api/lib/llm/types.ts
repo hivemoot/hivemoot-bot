@@ -60,6 +60,48 @@ export const DiscussionSummarySchema = z.object({
 export type DiscussionSummary = z.infer<typeof DiscussionSummarySchema>;
 
 // ───────────────────────────────────────────────────────────────────────────────
+// Commit Message Schema
+// ───────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Schema for LLM-generated squash commit messages.
+ * Used by the /preflight command to propose a commit message.
+ */
+export const CommitMessageSchema = z.object({
+  subject: z.string().describe(
+    "Imperative subject line, max 72 characters. Examples: 'Add merge-readiness evaluation for PRs', 'Fix CI status check for legacy Status API'."
+  ),
+  body: z.string().describe(
+    "1-3 sentences explaining WHY this change was made and what problem it solves. Optionally include key implementation details if non-obvious. Do not repeat the subject line."
+  ),
+});
+
+export type CommitMessage = z.infer<typeof CommitMessageSchema>;
+
+// ───────────────────────────────────────────────────────────────────────────────
+// PR Context for Commit Message Generation
+// ───────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Context gathered from a PR for commit message generation.
+ */
+export interface PRContext {
+  prNumber: number;
+  title: string;
+  body: string;
+  /** Linked issue title and body (if any) */
+  linkedIssue?: {
+    number: number;
+    title: string;
+    body: string;
+  };
+  /** `git diff --stat` style summary: filenames + lines changed */
+  diffStat: string;
+  /** Individual commit messages on the PR */
+  commitMessages: string[];
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
 // LLM Configuration
 // ───────────────────────────────────────────────────────────────────────────────
 

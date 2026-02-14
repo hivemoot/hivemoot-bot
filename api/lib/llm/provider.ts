@@ -5,9 +5,11 @@
  * Supports multiple providers via environment configuration.
  *
  * Environment Variables:
- * - LLM_PROVIDER: openai | anthropic | google | mistral
+ * - LLM_PROVIDER: openai | anthropic | google | gemini | mistral
+ *     ("gemini" is accepted as an alias for "google")
  * - LLM_MODEL: Model name (e.g., claude-3-haiku-20240307, gpt-4o-mini)
  * - ANTHROPIC_API_KEY / OPENAI_API_KEY / etc: Provider-specific API keys
+ *     (Google accepts GOOGLE_API_KEY or GOOGLE_GENERATIVE_AI_API_KEY)
  * - LLM_MAX_TOKENS: Optional, defaults to 2000
  */
 
@@ -24,15 +26,52 @@ import { LLM_DEFAULTS } from "./types.js";
 // Environment Parsing
 // ───────────────────────────────────────────────────────────────────────────────
 
-const VALID_PROVIDERS: readonly LLMProvider[] = ["openai", "anthropic", "google", "mistral"];
+const PROVIDER_ALIASES: Readonly<Record<string, LLMProvider>> = {
+  openai: "openai",
+  anthropic: "anthropic",
+  google: "google",
+  gemini: "google",
+  mistral: "mistral",
+};
+
+function normalizeEnvString(value: string | undefined, name?: string): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  let normalized = value.trim();
+  if (normalized.length === 0) {
+    return undefined;
+  }
+
+  const hasMatchingQuotes =
+    (normalized.startsWith("\"") && normalized.endsWith("\"")) ||
+    (normalized.startsWith("'") && normalized.endsWith("'"));
+  if (hasMatchingQuotes) {
+    normalized = normalized.slice(1, -1).trim();
+  }
+
+  if (normalized !== value && name) {
+    console.warn(`[llm] env var ${name} was normalized (whitespace/quotes removed)`);
+  }
+
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeProvider(provider: string | undefined): LLMProvider | undefined {
+  const normalized = normalizeEnvString(provider, "LLM_PROVIDER")?.toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+
+  return PROVIDER_ALIASES[normalized];
+}
 
 /**
  * Check if LLM is configured (provider and model set).
  */
 export function isLLMConfigured(): boolean {
-  const provider = process.env.LLM_PROVIDER;
-  const model = process.env.LLM_MODEL;
-  return !!provider && !!model && VALID_PROVIDERS.includes(provider as LLMProvider);
+  return getLLMConfig() !== null;
 }
 
 /**
@@ -40,18 +79,14 @@ export function isLLMConfigured(): boolean {
  * Returns null if not configured.
  */
 export function getLLMConfig(): LLMConfig | null {
-  const provider = process.env.LLM_PROVIDER as LLMProvider | undefined;
-  const model = process.env.LLM_MODEL;
+  const provider = normalizeProvider(process.env.LLM_PROVIDER);
+  const model = normalizeEnvString(process.env.LLM_MODEL, "LLM_MODEL");
 
   if (!provider || !model) {
     return null;
   }
 
-  if (!VALID_PROVIDERS.includes(provider)) {
-    return null;
-  }
-
-  const maxTokens = parseInt(process.env.LLM_MAX_TOKENS ?? "", 10);
+  const maxTokens = parseInt(normalizeEnvString(process.env.LLM_MAX_TOKENS, "LLM_MAX_TOKENS") ?? "", 10);
 
   return {
     provider,
@@ -74,7 +109,7 @@ export function getLLMConfig(): LLMConfig | null {
 export function createModel(config: LLMConfig): LanguageModelV1 {
   switch (config.provider) {
     case "anthropic": {
-      const apiKey = process.env.ANTHROPIC_API_KEY;
+      const apiKey = normalizeEnvString(process.env.ANTHROPIC_API_KEY, "ANTHROPIC_API_KEY");
       if (!apiKey) {
         throw new Error("ANTHROPIC_API_KEY environment variable is not set");
       }
@@ -83,7 +118,7 @@ export function createModel(config: LLMConfig): LanguageModelV1 {
     }
 
     case "openai": {
-      const apiKey = process.env.OPENAI_API_KEY;
+      const apiKey = normalizeEnvString(process.env.OPENAI_API_KEY, "OPENAI_API_KEY");
       if (!apiKey) {
         throw new Error("OPENAI_API_KEY environment variable is not set");
       }
@@ -92,16 +127,21 @@ export function createModel(config: LLMConfig): LanguageModelV1 {
     }
 
     case "google": {
-      const apiKey = process.env.GOOGLE_API_KEY;
+      // GOOGLE_API_KEY takes priority for backward compat with existing deployments.
+      // GOOGLE_GENERATIVE_AI_API_KEY is the AI SDK default, accepted as fallback
+      // so users following Vercel AI SDK docs don't need a separate var.
+      const apiKey =
+        normalizeEnvString(process.env.GOOGLE_API_KEY, "GOOGLE_API_KEY") ??
+        normalizeEnvString(process.env.GOOGLE_GENERATIVE_AI_API_KEY, "GOOGLE_GENERATIVE_AI_API_KEY");
       if (!apiKey) {
-        throw new Error("GOOGLE_API_KEY environment variable is not set");
+        throw new Error("GOOGLE_API_KEY or GOOGLE_GENERATIVE_AI_API_KEY environment variable is not set");
       }
       const google = createGoogleGenerativeAI({ apiKey });
       return google(config.model);
     }
 
     case "mistral": {
-      const apiKey = process.env.MISTRAL_API_KEY;
+      const apiKey = normalizeEnvString(process.env.MISTRAL_API_KEY, "MISTRAL_API_KEY");
       if (!apiKey) {
         throw new Error("MISTRAL_API_KEY environment variable is not set");
       }

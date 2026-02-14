@@ -377,6 +377,7 @@ describe("executeCommand", () => {
     });
 
     it("should post a checklist and commit message when hard checks pass", async () => {
+      const { evaluateMergeReadinessSignals } = await import("../index.js");
       const ctx = createCtx({
         verb: "preflight",
         isPullRequest: true,
@@ -394,6 +395,9 @@ describe("executeCommand", () => {
       expect(commentBody).toContain("Proposed Commit Message");
       expect(commentBody).toContain("Improve merge readiness checks");
       expect(commentBody).toContain("PR: #42");
+      expect(evaluateMergeReadinessSignals).toHaveBeenCalledWith(expect.objectContaining({
+        shortCircuitCI: false,
+      }));
     });
 
     it("should skip commit message when hard checks fail", async () => {

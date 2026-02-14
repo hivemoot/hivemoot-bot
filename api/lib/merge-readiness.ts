@@ -43,6 +43,8 @@ export interface MergeReadinessSignalsParams {
   minApprovals: number;
   /** HEAD SHA to check CI against. Fetched from PR if not provided. */
   headSha?: string;
+  /** Whether merge conflicts should short-circuit CI evaluation. */
+  shortCircuitCI?: boolean;
 }
 
 export interface MergeReadinessSignals {
@@ -176,8 +178,10 @@ export async function evaluateMergeReadinessSignals(
     mergeable = pr.mergeable;
   }
 
-  // Preserve original short-circuit behavior: conflicts fail before CI calls.
-  const ciPassing = mergeable === false ? false : await isCIPassing(prs, ref, headSha);
+  const shortCircuitCI = params.shortCircuitCI ?? true;
+  const ciPassing = shortCircuitCI && mergeable === false
+    ? false
+    : await isCIPassing(prs, ref, headSha);
 
   return {
     trustedApprovalCount,

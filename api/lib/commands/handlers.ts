@@ -318,6 +318,7 @@ async function handlePreflight(ctx: CommandContext): Promise<CommandResult> {
     ref: prRef,
     trustedReviewers,
     minApprovals: requiredApprovals,
+    shortCircuitCI: false,
   });
 
   const isOpen = pr.state === "open";

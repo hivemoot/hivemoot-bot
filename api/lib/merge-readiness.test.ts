@@ -482,11 +482,13 @@ describe("evaluateMergeReadinessSignals", () => {
   });
 
   it("should mark conflicts when mergeable is false", async () => {
+    const getCheckRunsForRef = vi.fn().mockResolvedValue({ totalCount: 0, checkRuns: [] });
+    const getCombinedStatus = vi.fn().mockResolvedValue({ state: "pending", totalCount: 0 });
     const prs = createMockPrs({
       getApproverLogins: vi.fn().mockResolvedValue(new Set(["alice"])),
       get: vi.fn().mockResolvedValue({ headSha: "abc123", mergeable: false }),
-      getCheckRunsForRef: vi.fn().mockResolvedValue({ totalCount: 0, checkRuns: [] }),
-      getCombinedStatus: vi.fn().mockResolvedValue({ state: "pending", totalCount: 0 }),
+      getCheckRunsForRef,
+      getCombinedStatus,
     });
 
     const result = await evaluateMergeReadinessSignals(
@@ -494,6 +496,29 @@ describe("evaluateMergeReadinessSignals", () => {
     );
 
     expect(result.hasMergeConflicts).toBe(true);
+    expect(result.ciPassing).toBe(false);
+    expect(getCheckRunsForRef).not.toHaveBeenCalled();
+    expect(getCombinedStatus).not.toHaveBeenCalled();
+  });
+
+  it("should evaluate CI when shortCircuitCI is false even with conflicts", async () => {
+    const getCheckRunsForRef = vi.fn().mockResolvedValue({ totalCount: 0, checkRuns: [] });
+    const getCombinedStatus = vi.fn().mockResolvedValue({ state: "success", totalCount: 1 });
+    const prs = createMockPrs({
+      getApproverLogins: vi.fn().mockResolvedValue(new Set(["alice"])),
+      get: vi.fn().mockResolvedValue({ headSha: "abc123", mergeable: false }),
+      getCheckRunsForRef,
+      getCombinedStatus,
+    });
+
+    const result = await evaluateMergeReadinessSignals(
+      buildSignalsParams({ prs, shortCircuitCI: false })
+    );
+
+    expect(result.hasMergeConflicts).toBe(true);
+    expect(getCheckRunsForRef).toHaveBeenCalledWith("test-org", "test-repo", "abc123");
+    expect(getCombinedStatus).toHaveBeenCalledWith("test-org", "test-repo", "abc123");
+    expect(result.ciPassing).toBe(true);
   });
 
   it("should use pre-fetched head SHA without fetching PR", async () => {

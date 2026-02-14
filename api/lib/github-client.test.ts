@@ -1177,6 +1177,26 @@ describe("IssueOperations", () => {
       expect(result).toEqual(new Date(labeledDate));
     });
 
+    it("should match legacy label name when searching for canonical name", async () => {
+      const labeledDate = "2024-01-15T10:30:00Z";
+
+      mockClient.paginate.iterator = vi.fn().mockReturnValue({
+        async *[Symbol.asyncIterator]() {
+          yield {
+            data: [
+              { event: "opened", created_at: "2024-01-15T10:00:00Z" },
+              { event: "labeled", label: { name: "phase:discussion" }, created_at: labeledDate },
+            ],
+          };
+        },
+      });
+
+      // Search by canonical name, but timeline has legacy name
+      const result = await issueOps.getLabelAddedTime(testRef, "hivemoot:discussion");
+
+      expect(result).toEqual(new Date(labeledDate));
+    });
+
     it("should return null when label not found", async () => {
       mockClient.paginate.iterator = vi.fn().mockReturnValue({
         async *[Symbol.asyncIterator]() {

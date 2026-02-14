@@ -183,6 +183,48 @@ describe("reconcile-pr-notifications", () => {
       expect(result).toBe(false);
     });
 
+    it("should not false-positive on issue-number prefixes in fallback comments", async () => {
+      mockHasNotificationCommentInComments.mockReturnValue(false);
+      mockListCommentsWithBody.mockResolvedValue([
+        {
+          id: 1,
+          body: "# 🐝 Issue #10 Ready to Implement ✅\n\nIssue #10 passed voting and is ready for implementation!",
+        },
+      ]);
+
+      const result = await hasVotingPassedNotification(mockPRs, ref, 1);
+
+      expect(result).toBe(false);
+    });
+
+    it("should match exact issue number in fallback comments with multiple issue tokens", async () => {
+      mockHasNotificationCommentInComments.mockReturnValue(false);
+      mockListCommentsWithBody.mockResolvedValue([
+        {
+          id: 1,
+          body: "Issue #10 passed voting and is ready for implementation. Duplicate mention: Issue #1.",
+        },
+      ]);
+
+      const result = await hasVotingPassedNotification(mockPRs, ref, 1);
+
+      expect(result).toBe(true);
+    });
+
+    it("should not match fallback tokens with leading zeros", async () => {
+      mockHasNotificationCommentInComments.mockReturnValue(false);
+      mockListCommentsWithBody.mockResolvedValue([
+        {
+          id: 1,
+          body: "Issue #01 passed voting and is ready for implementation!",
+        },
+      ]);
+
+      const result = await hasVotingPassedNotification(mockPRs, ref, 1);
+
+      expect(result).toBe(false);
+    });
+
     it("should return false when comment body is unrelated", async () => {
       mockHasNotificationCommentInComments.mockReturnValue(false);
       mockListCommentsWithBody.mockResolvedValue([

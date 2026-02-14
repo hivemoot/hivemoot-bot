@@ -49,9 +49,44 @@ interface LinkedIssuesResponse {
   repository: {
     pullRequest: {
       closingIssuesReferences: {
-        nodes: LinkedIssue[];
+        nodes: RawLinkedIssueNode[] | null;
       };
     } | null;
+  };
+}
+
+type RawLinkedIssueNode = {
+  number?: number | null;
+  title?: string | null;
+  state?: "OPEN" | "CLOSED" | null;
+  labels?: {
+    nodes?: Array<{ name?: string | null } | null> | null;
+  } | null;
+} | null;
+
+function sanitizeLinkedIssue(
+  issue: RawLinkedIssueNode
+): LinkedIssue | null {
+  if (
+    !issue ||
+    typeof issue.number !== "number" ||
+    typeof issue.title !== "string" ||
+    (issue.state !== "OPEN" && issue.state !== "CLOSED")
+  ) {
+    return null;
+  }
+
+  const rawLabelNodes = issue.labels?.nodes ?? [];
+  const labels = rawLabelNodes
+    .map((label) => (label && typeof label.name === "string" ? label.name : null))
+    .filter((name): name is string => name !== null)
+    .map((name) => ({ name }));
+
+  return {
+    number: issue.number,
+    title: issue.title,
+    state: issue.state,
+    labels: { nodes: labels },
   };
 }
 
@@ -70,7 +105,10 @@ export async function getLinkedIssues(
     { owner, repo, pr: prNumber }
   );
 
-  return response.repository.pullRequest?.closingIssuesReferences.nodes ?? [];
+  const rawNodes = response.repository.pullRequest?.closingIssuesReferences.nodes ?? [];
+  return rawNodes
+    .map(sanitizeLinkedIssue)
+    .filter((issue): issue is LinkedIssue => issue !== null);
 }
 
 // ───────────────────────────────────────────────────────────────────────────────

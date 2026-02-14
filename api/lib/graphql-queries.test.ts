@@ -139,6 +139,92 @@ describe("getLinkedIssues", () => {
 
     expect(result[0].labels.nodes).toHaveLength(3);
   });
+
+  it("should ignore null or malformed issue nodes", async () => {
+    vi.mocked(mockClient.graphql).mockResolvedValue({
+      repository: {
+        pullRequest: {
+          closingIssuesReferences: {
+            nodes: [
+              null,
+              {
+                number: 123,
+                title: "Valid issue",
+                state: "OPEN",
+                labels: { nodes: [{ name: "bug" }] },
+              },
+              {
+                number: null,
+                title: "Missing number",
+                state: "OPEN",
+                labels: { nodes: [] },
+              },
+              {
+                number: 456,
+                title: null,
+                state: "OPEN",
+                labels: { nodes: [] },
+              },
+              {
+                number: 789,
+                title: "Bad state",
+                state: null,
+                labels: { nodes: [] },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    const result = await getLinkedIssues(mockClient, "owner", "repo", 42);
+
+    expect(result).toEqual([
+      {
+        number: 123,
+        title: "Valid issue",
+        state: "OPEN",
+        labels: { nodes: [{ name: "bug" }] },
+      },
+    ]);
+  });
+
+  it("should filter null label nodes and null label names", async () => {
+    vi.mocked(mockClient.graphql).mockResolvedValue({
+      repository: {
+        pullRequest: {
+          closingIssuesReferences: {
+            nodes: [
+              {
+                number: 123,
+                title: "Mixed labels",
+                state: "OPEN",
+                labels: {
+                  nodes: [
+                    { name: "bug" },
+                    null,
+                    { name: null },
+                    { name: "phase:ready-to-implement" },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    const result = await getLinkedIssues(mockClient, "owner", "repo", 42);
+
+    expect(result).toEqual([
+      {
+        number: 123,
+        title: "Mixed labels",
+        state: "OPEN",
+        labels: { nodes: [{ name: "bug" }, { name: "phase:ready-to-implement" }] },
+      },
+    ]);
+  });
 });
 
 describe("getPRBodyLastEditedAt", () => {

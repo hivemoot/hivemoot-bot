@@ -136,7 +136,9 @@ export interface LinkedIssue {
  * Useful for filtering phase:ready-to-implement/rejected issues in webhook handlers.
  */
 export function hasLabel(issue: LinkedIssue, labelName: string): boolean {
-  return issue.labels.nodes.some((l) => l.name === labelName);
+  return issue.labels.nodes.some(
+    (label) => label !== null && typeof label.name === "string" && label.name === labelName
+  );
 }
 
 /**

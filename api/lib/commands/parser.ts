@@ -39,6 +39,13 @@ const COMMAND_PATTERN = new RegExp(
   "i",
 );
 
+function stripQuotedLines(body: string): string {
+  return body
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith(">"))
+    .join("\n");
+}
+
 /**
  * Parse a comment body for a bot command.
  *
@@ -46,7 +53,7 @@ const COMMAND_PATTERN = new RegExp(
  * does not contain a recognized @mention + /command pattern.
  */
 export function parseCommand(body: string): ParsedCommand | null {
-  const match = body.match(COMMAND_PATTERN);
+  const match = stripQuotedLines(body).match(COMMAND_PATTERN);
   if (!match) {
     return null;
   }

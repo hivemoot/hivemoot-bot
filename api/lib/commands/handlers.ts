@@ -14,7 +14,7 @@ import type { IssueRef } from "../types.js";
  * Minimal interface for the octokit client needed by command handlers.
  * Uses the Probot context's octokit which has full REST API access.
  */
-interface CommandOctokit {
+export interface CommandOctokit {
   rest: {
     repos: {
       getCollaboratorPermissionLevel: (params: {
@@ -92,8 +92,12 @@ async function isAuthorized(ctx: CommandContext): Promise<boolean> {
       username: ctx.senderLogin,
     });
     return AUTHORIZED_PERMISSIONS.has(data.permission);
-  } catch {
+  } catch (error) {
     // If we can't check permissions (e.g., user is not a collaborator), deny
+    ctx.log.info(
+      { err: error, sender: ctx.senderLogin, issue: ctx.issueNumber },
+      "Command authorization check failed; treating sender as unauthorized",
+    );
     return false;
   }
 }
@@ -112,8 +116,12 @@ async function react(
       comment_id: ctx.commentId,
       content,
     });
-  } catch {
+  } catch (error) {
     // Reaction failure is non-critical — don't block command execution
+    ctx.log.info(
+      { err: error, reaction: content, issue: ctx.issueNumber, commentId: ctx.commentId },
+      "Failed to add command reaction",
+    );
   }
 }
 
@@ -181,7 +189,7 @@ async function handleVote(ctx: CommandContext): Promise<CommandResult> {
  *
  * This is a fast-track command that moves an issue directly to
  * ready-to-implement, bypassing or concluding voting early.
- * Only valid from discussion or voting phases.
+ * Valid from discussion, voting, extended-voting, and needs-human phases.
  */
 async function handleImplement(ctx: CommandContext): Promise<CommandResult> {
   if (ctx.isPullRequest) {
@@ -277,7 +285,15 @@ export async function executeCommand(ctx: CommandContext): Promise<CommandResult
       await react(ctx, "+1");
     } else if (result.status === "rejected") {
       await react(ctx, "confused");
-      await reply(ctx, `${result.reason}${SIGNATURE}`);
+      try {
+        await reply(ctx, `${result.reason}${SIGNATURE}`);
+      } catch (error) {
+        // Reply failures should not fail the command execution path.
+        ctx.log.error(
+          { err: error, verb: ctx.verb, issue: ctx.issueNumber },
+          "Failed to post command rejection reply",
+        );
+      }
     }
 
     return result;

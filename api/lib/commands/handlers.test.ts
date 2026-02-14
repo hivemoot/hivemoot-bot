@@ -125,8 +125,13 @@ describe("executeCommand", () => {
         new Error("Not found"),
       );
 
-      const result = await executeCommand(createCtx({ octokit }));
+      const ctx = createCtx({ octokit });
+      const result = await executeCommand(ctx);
       expect(result).toEqual({ status: "ignored" });
+      expect(ctx.log.info).toHaveBeenCalledWith(
+        expect.objectContaining({ sender: "maintainer", issue: 42 }),
+        expect.stringContaining("authorization check failed"),
+      );
     });
   });
 
@@ -348,6 +353,27 @@ describe("executeCommand", () => {
       // Should still execute successfully despite reaction failure
       const result = await executeCommand(ctx);
       expect(result.status).toBe("executed");
+      expect(ctx.log.info).toHaveBeenCalledWith(
+        expect.objectContaining({ reaction: "eyes", issue: 42, commentId: 100 }),
+        expect.stringContaining("Failed to add command reaction"),
+      );
+    });
+
+    it("should not fail command flow if rejection reply fails", async () => {
+      const octokit = createMockOctokit();
+      octokit.rest.issues.createComment.mockRejectedValue(new Error("comment failed"));
+      const ctx = createCtx({
+        octokit,
+        issueLabels: [{ name: LABELS.VOTING }],
+      });
+
+      const result = await executeCommand(ctx);
+
+      expect(result.status).toBe("rejected");
+      expect(ctx.log.error).toHaveBeenCalledWith(
+        expect.objectContaining({ verb: "vote", issue: 42 }),
+        expect.stringContaining("Failed to post command rejection reply"),
+      );
     });
   });
 

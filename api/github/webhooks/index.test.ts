@@ -5,6 +5,7 @@ import { LABELS, MESSAGES, REQUIRED_REPOSITORY_LABELS } from "../../config.js";
 import type { IssueRef } from "../../lib/types.js";
 import type { IncomingMessage, ServerResponse } from "http";
 import { app as registerWebhookApp } from "./index.js";
+import { executeCommand, parseCommand } from "../../lib/commands/index.js";
 
 // Mock probot to prevent actual initialization
 vi.mock("probot", () => ({
@@ -16,6 +17,11 @@ vi.mock("probot", () => ({
 vi.mock("../../lib/env-validation.js", () => ({
   validateEnv: vi.fn(() => ({ valid: true, missing: [] })),
   getAppId: vi.fn(() => 12345),
+}));
+
+vi.mock("../../lib/commands/index.js", () => ({
+  parseCommand: vi.fn(() => null),
+  executeCommand: vi.fn(async () => ({ status: "ignored" })),
 }));
 
 /**
@@ -621,6 +627,90 @@ describe("Queen Bot", () => {
         expect.objectContaining({ issue: 42 }),
         expect.stringContaining("Failed to post voting comment"),
       );
+    });
+  });
+
+  describe("issue_comment.created command routing", () => {
+    beforeEach(() => {
+      vi.mocked(parseCommand).mockReset();
+      vi.mocked(executeCommand).mockReset();
+      vi.mocked(parseCommand).mockReturnValue(null);
+      vi.mocked(executeCommand).mockResolvedValue({ status: "ignored" });
+    });
+
+    it("should execute parsed commands on issue comments before PR-only filtering", async () => {
+      const { handlers } = createWebhookHarness();
+      const handler = handlers.get("issue_comment.created");
+      expect(handler).toBeDefined();
+
+      vi.mocked(parseCommand).mockReturnValue({ verb: "vote", freeText: undefined });
+
+      const context = {
+        payload: {
+          issue: {
+            number: 81,
+            labels: [{ name: LABELS.DISCUSSION }],
+          },
+          comment: {
+            id: 1001,
+            body: "@queen /vote",
+            user: { login: "maintainer" },
+          },
+          repository: {
+            name: "hivemoot-bot",
+            full_name: "hivemoot/hivemoot-bot",
+            owner: { login: "hivemoot" },
+          },
+        },
+        octokit: {},
+        log: { info: vi.fn(), error: vi.fn() },
+      };
+
+      await handler!(context);
+
+      expect(parseCommand).toHaveBeenCalledWith("@queen /vote");
+      expect(executeCommand).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: "hivemoot",
+          repo: "hivemoot-bot",
+          issueNumber: 81,
+          commentId: 1001,
+          senderLogin: "maintainer",
+          verb: "vote",
+          freeText: undefined,
+          isPullRequest: false,
+        }),
+      );
+    });
+
+    it("should skip bot-authored comments", async () => {
+      const { handlers } = createWebhookHarness();
+      const handler = handlers.get("issue_comment.created");
+      expect(handler).toBeDefined();
+
+      const context = {
+        payload: {
+          issue: { number: 81, labels: [] },
+          comment: {
+            id: 1002,
+            body: "@queen /vote",
+            user: { login: "hivemoot" },
+            performed_via_github_app: { id: TEST_APP_ID },
+          },
+          repository: {
+            name: "hivemoot-bot",
+            full_name: "hivemoot/hivemoot-bot",
+            owner: { login: "hivemoot" },
+          },
+        },
+        octokit: {},
+        log: { info: vi.fn(), error: vi.fn() },
+      };
+
+      await handler!(context);
+
+      expect(parseCommand).not.toHaveBeenCalled();
+      expect(executeCommand).not.toHaveBeenCalled();
     });
   });
 

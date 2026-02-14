@@ -63,6 +63,16 @@ describe("parseCommand", () => {
       const result = parseCommand("This looks good to me. @hivemoot /implement");
       expect(result).toEqual({ verb: "implement", freeText: undefined });
     });
+
+    it("should ignore quoted command lines", () => {
+      const result = parseCommand("> @queen /vote\nI disagree with this command");
+      expect(result).toBeNull();
+    });
+
+    it("should parse non-quoted command when quote is present", () => {
+      const result = parseCommand("> @queen /vote\n\n@hivemoot /implement");
+      expect(result).toEqual({ verb: "implement", freeText: undefined });
+    });
   });
 
   describe("non-matching inputs", () => {

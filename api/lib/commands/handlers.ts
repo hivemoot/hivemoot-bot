@@ -6,8 +6,7 @@
  * and performs the corresponding governance action.
  */
 
-import { LABELS, MESSAGES, SIGNATURE } from "../../config.js";
-import { isLabelMatch } from "../../config.js";
+import { LABELS, SIGNATURE, isLabelMatch } from "../../config.js";
 import { createIssueOperations, createGovernanceService } from "../index.js";
 import type { IssueRef } from "../types.js";
 

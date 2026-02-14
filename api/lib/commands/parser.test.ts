@@ -53,14 +53,44 @@ describe("parseCommand", () => {
     });
   });
 
-  describe("command embedded in larger comment", () => {
-    it("should find command in middle of comment", () => {
+  describe("command on its own line in larger comment", () => {
+    it("should find command on its own line after other text", () => {
       const result = parseCommand("Hey team, I think we should proceed.\n\n@queen /vote");
       expect(result).toEqual({ verb: "vote", freeText: undefined });
     });
 
-    it("should find command after other text", () => {
-      const result = parseCommand("This looks good to me. @hivemoot /implement");
+    it("should find command on indented line", () => {
+      const result = parseCommand("Some context:\n  @queen /vote");
+      expect(result).toEqual({ verb: "vote", freeText: undefined });
+    });
+
+    it("should reject command embedded mid-sentence", () => {
+      expect(parseCommand("This looks good to me. @hivemoot /implement")).toBeNull();
+    });
+
+    it("should reject command embedded in prose", () => {
+      expect(parseCommand("Text before @hivemoot /implement")).toBeNull();
+    });
+  });
+
+  describe("code context handling", () => {
+    it("should ignore commands inside inline code", () => {
+      expect(parseCommand("Please run `@queen /vote` later")).toBeNull();
+    });
+
+    it("should ignore commands inside fenced code blocks", () => {
+      const body = "Example:\n```\n@queen /vote\n```\nThat's how you do it.";
+      expect(parseCommand(body)).toBeNull();
+    });
+
+    it("should ignore commands inside fenced code blocks with language", () => {
+      const body = "```bash\n@queen /vote\n```";
+      expect(parseCommand(body)).toBeNull();
+    });
+
+    it("should still match commands outside code contexts", () => {
+      const body = "Here is an example: `@queen /vote`\n@queen /implement";
+      const result = parseCommand(body);
       expect(result).toEqual({ verb: "implement", freeText: undefined });
     });
   });
@@ -127,7 +157,8 @@ describe("parseCommand", () => {
   });
 
   describe("multi-command comments", () => {
-    it("should only match the first command when multiple are present", () => {
+    it("should only match the first line-start command when multiple are on the same line", () => {
+      // Second command is not at line start, so only the first matches
       const body = "@queen /vote @queen /implement";
       const result = parseCommand(body);
       expect(result).toEqual({ verb: "vote", freeText: "@queen /implement" });
@@ -136,9 +167,6 @@ describe("parseCommand", () => {
     it("should match first command when multiple appear on separate lines", () => {
       const body = "@queen /vote\n@queen /implement";
       const result = parseCommand(body);
-      // First match wins; regex captures rest of first line as freeText (empty here
-      // since the second command is on a new line, but the regex's .+ is greedy
-      // within the line boundary set by the non-multiline mode)
       expect(result).not.toBeNull();
       expect(result!.verb).toBe("vote");
     });

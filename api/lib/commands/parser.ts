@@ -2,12 +2,12 @@
  * Command Parser
  *
  * Parses @mention + /command patterns from issue/PR comment bodies.
- * Supports hardcoded mention names: @queen and @hivemoot.
+ * Responds to @hivemoot mentions only.
  *
  * Examples:
- *   "@queen /vote"           → { verb: "vote", freeText: undefined }
- *   "@hivemoot /implement"   → { verb: "implement", freeText: undefined }
- *   "@queen /vote good idea" → { verb: "vote", freeText: "good idea" }
+ *   "@hivemoot /vote"                → { verb: "vote", freeText: undefined }
+ *   "@hivemoot /implement"           → { verb: "implement", freeText: undefined }
+ *   "@hivemoot /vote good idea"      → { verb: "vote", freeText: "good idea" }
  */
 
 /**
@@ -21,10 +21,10 @@ export interface ParsedCommand {
 }
 
 /**
- * Hardcoded mention names the bot responds to.
- * Per issue #81: "we will hardcode support to @queen and @hivemoot"
+ * Mention name the bot responds to.
+ * Limited to @hivemoot to avoid spamming the real @queen GitHub account.
  */
-const MENTION_NAMES = ["queen", "hivemoot"] as const;
+const MENTION_NAMES = ["hivemoot"] as const;
 
 /**
  * Line-anchored regex to match @mention + /command.
@@ -32,8 +32,7 @@ const MENTION_NAMES = ["queen", "hivemoot"] as const;
  * Only matches when the @mention is the first non-whitespace token on a line.
  * This prevents accidental triggers from prose, inline code, or mid-sentence mentions.
  *
- * Matches: @queen /verb [optional free text]
- *          @hivemoot /verb [optional free text]
+ * Matches: @hivemoot /verb [optional free text]
  *
  * The pattern is case-insensitive and allows whitespace between mention and command.
  * The `m` flag enables `^` to match the start of each line.
@@ -54,7 +53,7 @@ function stripNonCommandContent(body: string): string {
   let cleaned = body.replace(/```[\s\S]*?```/g, "");
 
   // Remove inline code spans that contain mention patterns
-  cleaned = cleaned.replace(/`[^`]*@(?:queen|hivemoot)[^`]*`/gi, "");
+  cleaned = cleaned.replace(/`[^`]*@hivemoot[^`]*`/gi, "");
 
   // Remove quoted lines
   return cleaned

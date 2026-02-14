@@ -680,7 +680,7 @@ describe("Queen Bot", () => {
           },
           comment: {
             id: 200,
-            body: "@queen /vote",
+            body: "@hivemoot /vote",
             user: { login: "maintainer" },
             performed_via_github_app: null,
           },
@@ -714,7 +714,7 @@ describe("Queen Bot", () => {
           },
           comment: {
             id: 200,
-            body: "@queen /vote",
+            body: "@hivemoot /vote",
             user: { login: "queen-bot[bot]" },
             performed_via_github_app: { id: TEST_APP_ID },
           },
@@ -747,7 +747,7 @@ describe("Queen Bot", () => {
           },
           comment: {
             id: 200,
-            body: "> @queen /vote\nI disagree",
+            body: "> @hivemoot /vote\nI disagree",
             user: { login: "maintainer" },
             performed_via_github_app: null,
           },
@@ -781,7 +781,7 @@ describe("Queen Bot", () => {
           },
           comment: {
             id: 200,
-            body: "@queen /implement",
+            body: "@hivemoot /implement",
             user: { login: "maintainer" },
             performed_via_github_app: null,
           },

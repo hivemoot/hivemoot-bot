@@ -624,6 +624,181 @@ describe("Queen Bot", () => {
     });
   });
 
+  describe("issue_comment.created command dispatch", () => {
+    const createCommandOctokit = (permission = "admin") => ({
+      rest: {
+        repos: {
+          getCollaboratorPermissionLevel: vi.fn().mockResolvedValue({
+            data: { permission },
+          }),
+        },
+        reactions: {
+          createForIssueComment: vi.fn().mockResolvedValue({}),
+          listForIssueComment: vi.fn().mockResolvedValue({ data: [] }),
+          listForIssue: vi.fn().mockResolvedValue({ data: [] }),
+        },
+        issues: {
+          get: vi.fn().mockResolvedValue({ data: { reactions: { "+1": 0, "-1": 0, confused: 0 } } }),
+          addLabels: vi.fn().mockResolvedValue({}),
+          removeLabel: vi.fn().mockResolvedValue({}),
+          createComment: vi.fn().mockResolvedValue({}),
+          update: vi.fn().mockResolvedValue({}),
+          lock: vi.fn().mockResolvedValue({}),
+          unlock: vi.fn().mockResolvedValue({}),
+          listComments: vi.fn().mockResolvedValue({ data: [] }),
+          listEventsForTimeline: vi.fn().mockResolvedValue({ data: [] }),
+        },
+        pulls: {
+          get: vi.fn().mockResolvedValue({ data: {} }),
+        },
+      },
+      paginate: {
+        iterator: vi.fn().mockImplementation(() => ({
+          async *[Symbol.asyncIterator]() {
+            yield { data: [] };
+          },
+        })),
+      },
+      graphql: vi.fn().mockResolvedValue({
+        resource: { closingIssuesReferences: { nodes: [] } },
+      }),
+    });
+
+    it("should dispatch recognized @mention + /command to executeCommand", async () => {
+      const { handlers } = createWebhookHarness();
+      const handler = handlers.get("issue_comment.created")!;
+      const octokit = createCommandOctokit();
+      const log = { info: vi.fn(), error: vi.fn(), warn: vi.fn() };
+
+      await handler({
+        octokit,
+        log,
+        payload: {
+          issue: {
+            number: 10,
+            labels: [{ name: LABELS.DISCUSSION }],
+          },
+          comment: {
+            id: 200,
+            body: "@hivemoot /vote",
+            user: { login: "maintainer" },
+            performed_via_github_app: null,
+          },
+          repository: {
+            name: "test-repo",
+            full_name: "hivemoot/test-repo",
+            owner: { login: "hivemoot" },
+          },
+        },
+      });
+
+      // Command was recognized and dispatched — eyes reaction is the first signal
+      expect(octokit.rest.reactions.createForIssueComment).toHaveBeenCalledWith(
+        expect.objectContaining({ content: "eyes" }),
+      );
+    });
+
+    it("should skip commands from bot's own comments", async () => {
+      const { handlers } = createWebhookHarness();
+      const handler = handlers.get("issue_comment.created")!;
+      const octokit = createCommandOctokit();
+      const log = { info: vi.fn(), error: vi.fn(), warn: vi.fn() };
+
+      await handler({
+        octokit,
+        log,
+        payload: {
+          issue: {
+            number: 10,
+            labels: [{ name: LABELS.DISCUSSION }],
+          },
+          comment: {
+            id: 200,
+            body: "@hivemoot /vote",
+            user: { login: "queen-bot[bot]" },
+            performed_via_github_app: { id: TEST_APP_ID },
+          },
+          repository: {
+            name: "test-repo",
+            full_name: "hivemoot/test-repo",
+            owner: { login: "hivemoot" },
+          },
+        },
+      });
+
+      // Bot's own comment should be skipped entirely
+      expect(octokit.rest.reactions.createForIssueComment).not.toHaveBeenCalled();
+      expect(octokit.rest.repos.getCollaboratorPermissionLevel).not.toHaveBeenCalled();
+    });
+
+    it("should ignore quoted commands in replies", async () => {
+      const { handlers } = createWebhookHarness();
+      const handler = handlers.get("issue_comment.created")!;
+      const octokit = createCommandOctokit();
+      const log = { info: vi.fn(), error: vi.fn(), warn: vi.fn() };
+
+      await handler({
+        octokit,
+        log,
+        payload: {
+          issue: {
+            number: 10,
+            labels: [{ name: LABELS.DISCUSSION }],
+          },
+          comment: {
+            id: 200,
+            body: "> @hivemoot /vote\nI disagree",
+            user: { login: "maintainer" },
+            performed_via_github_app: null,
+          },
+          repository: {
+            name: "test-repo",
+            full_name: "hivemoot/test-repo",
+            owner: { login: "hivemoot" },
+          },
+        },
+      });
+
+      // Quoted command should not trigger any reactions or permission checks
+      expect(octokit.rest.reactions.createForIssueComment).not.toHaveBeenCalled();
+      expect(octokit.rest.repos.getCollaboratorPermissionLevel).not.toHaveBeenCalled();
+    });
+
+    it("should return early after command dispatch without processing PR intake", async () => {
+      const { handlers } = createWebhookHarness();
+      const handler = handlers.get("issue_comment.created")!;
+      const octokit = createCommandOctokit();
+      const log = { info: vi.fn(), error: vi.fn(), warn: vi.fn() };
+
+      await handler({
+        octokit,
+        log,
+        payload: {
+          issue: {
+            number: 10,
+            labels: [{ name: LABELS.DISCUSSION }],
+            pull_request: { url: "https://api.github.com/repos/hivemoot/test-repo/pulls/10" },
+          },
+          comment: {
+            id: 200,
+            body: "@hivemoot /implement",
+            user: { login: "maintainer" },
+            performed_via_github_app: null,
+          },
+          repository: {
+            name: "test-repo",
+            full_name: "hivemoot/test-repo",
+            owner: { login: "hivemoot" },
+          },
+        },
+      });
+
+      // Command was dispatched — graphql (getLinkedIssues) should NOT have been called
+      // because the handler returns early after command execution
+      expect(octokit.graphql).not.toHaveBeenCalled();
+    });
+  });
+
   describe("Health Check Endpoint", () => {
     const originalEnv = process.env;
 

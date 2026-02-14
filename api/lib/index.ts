@@ -61,8 +61,13 @@ export { processImplementationIntake, recalculateLeaderboardForPR } from "./impl
 export type { IntakeTrigger, LeaderboardRecalcClient } from "./implementation-intake.js";
 
 // Merge readiness
-export { evaluateMergeReadiness } from "./merge-readiness.js";
-export type { MergeReadinessParams, MergeReadinessResult } from "./merge-readiness.js";
+export { evaluateMergeReadiness, evaluateMergeReadinessSignals } from "./merge-readiness.js";
+export type {
+  MergeReadinessParams,
+  MergeReadinessResult,
+  MergeReadinessSignalsParams,
+  MergeReadinessSignals,
+} from "./merge-readiness.js";
 
 // Repository label bootstrap
 export { RepositoryLabelService, createRepositoryLabelService } from "./repository-labels.js";

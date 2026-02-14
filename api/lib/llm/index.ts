@@ -21,6 +21,10 @@ export { isLLMConfigured, getLLMConfig, createModel, createModelFromEnv } from "
 export { DiscussionSummarizer, formatVotingMessage } from "./summarizer.js";
 export type { SummarizationResult, SummarizerConfig } from "./summarizer.js";
 
+// Commit message generation
+export { CommitMessageGenerator } from "./commit-message.js";
+export type { CommitMessageContext, CommitMessageResult } from "./commit-message.js";
+
 // Retry
 export { withLLMRetry, isLLMRateLimitError, extractRetryDelay, LLM_RETRY_DEFAULTS } from "./retry.js";
 export type { LLMRetryConfig } from "./retry.js";

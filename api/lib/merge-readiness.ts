@@ -36,6 +36,23 @@ export interface MergeReadinessParams {
   log?: { info: (msg: string) => void; debug?: (msg: string) => void };
 }
 
+export interface MergeReadinessSignalsParams {
+  prs: PROperations;
+  ref: PRRef;
+  trustedReviewers: string[];
+  minApprovals: number;
+  /** HEAD SHA to check CI against. Fetched from PR if not provided. */
+  headSha?: string;
+}
+
+export interface MergeReadinessSignals {
+  trustedApprovalCount: number;
+  requiredApprovals: number;
+  hasSufficientApprovals: boolean;
+  hasMergeConflicts: boolean;
+  ciPassing: boolean;
+}
+
 export type MergeReadinessResult =
   | { action: "skipped"; reason: string }
   | { action: "added" }
@@ -79,41 +96,31 @@ export async function evaluateMergeReadiness(
     return { action: "skipped", reason: "no implementation label" };
   }
 
-  // 3. Check trusted approvals (1 API call)
-  const approvers = await prs.getApproverLogins(ref);
-  const trustedApprovalCount = trustedReviewers.filter((reviewer) =>
-    approvers.has(reviewer)
-  ).length;
+  const signals = await evaluateMergeReadinessSignals({
+    prs,
+    ref,
+    trustedReviewers,
+    minApprovals: config.minApprovals,
+    headSha: params.headSha,
+  });
 
-  if (trustedApprovalCount < config.minApprovals) {
+  // 3. Check trusted approvals (1 API call)
+  if (!signals.hasSufficientApprovals) {
     if (hasMergeReady) {
       await prs.removeLabel(ref, LABELS.MERGE_READY);
       log?.info(
-        `[PR #${ref.prNumber}] Removed merge-ready: ${trustedApprovalCount}/${config.minApprovals} trusted approvals`
+        `[PR #${ref.prNumber}] Removed merge-ready: ${signals.trustedApprovalCount}/${config.minApprovals} trusted approvals`
       );
       return { action: "removed" };
     }
     return {
       action: "skipped",
-      reason: `insufficient approvals (${trustedApprovalCount}/${config.minApprovals})`,
+      reason: `insufficient approvals (${signals.trustedApprovalCount}/${config.minApprovals})`,
     };
   }
 
-  // 4. Get HEAD SHA + mergeable state (use pre-fetched or fetch from PR)
-  let headSha: string;
-  let mergeable: boolean | null;
-  if (params.headSha) {
-    headSha = params.headSha;
-    // When headSha is pre-fetched (webhook payload), we don't have mergeable — treat as unknown
-    mergeable = null;
-  } else {
-    const pr = await prs.get(ref);
-    headSha = pr.headSha;
-    mergeable = pr.mergeable;
-  }
-
-  // 5. Check mergeable state (null = not yet computed by GitHub, allow through)
-  if (mergeable === false) {
+  // 4. Check mergeable state (null = not yet computed by GitHub, allow through)
+  if (signals.hasMergeConflicts) {
     if (hasMergeReady) {
       await prs.removeLabel(ref, LABELS.MERGE_READY);
       log?.info(`[PR #${ref.prNumber}] Removed merge-ready: has merge conflicts`);
@@ -122,10 +129,8 @@ export async function evaluateMergeReadiness(
     return { action: "skipped", reason: "has merge conflicts" };
   }
 
-  // 6. Check CI status (2 API calls in parallel)
-  const ciPassing = await isCIPassing(prs, ref, headSha);
-
-  if (!ciPassing) {
+  // 5. Check CI status (2 API calls in parallel)
+  if (!signals.ciPassing) {
     if (hasMergeReady) {
       await prs.removeLabel(ref, LABELS.MERGE_READY);
       log?.info(`[PR #${ref.prNumber}] Removed merge-ready: CI not passing`);
@@ -142,6 +147,45 @@ export async function evaluateMergeReadiness(
   }
 
   return { action: "noop", labeled: true };
+}
+
+/**
+ * Evaluate merge-readiness technical signals without mutating labels.
+ *
+ * Shared by merge-ready label automation and `/preflight` command reporting.
+ */
+export async function evaluateMergeReadinessSignals(
+  params: MergeReadinessSignalsParams
+): Promise<MergeReadinessSignals> {
+  const { prs, ref, trustedReviewers, minApprovals } = params;
+
+  const approvers = await prs.getApproverLogins(ref);
+  const trustedApprovalCount = trustedReviewers.filter((reviewer) =>
+    approvers.has(reviewer)
+  ).length;
+
+  let headSha: string;
+  let mergeable: boolean | null;
+  if (params.headSha) {
+    headSha = params.headSha;
+    // When headSha is pre-fetched (webhook payload), mergeability may be absent.
+    mergeable = null;
+  } else {
+    const pr = await prs.get(ref);
+    headSha = pr.headSha;
+    mergeable = pr.mergeable;
+  }
+
+  // Preserve original short-circuit behavior: conflicts fail before CI calls.
+  const ciPassing = mergeable === false ? false : await isCIPassing(prs, ref, headSha);
+
+  return {
+    trustedApprovalCount,
+    requiredApprovals: minApprovals,
+    hasSufficientApprovals: trustedApprovalCount >= minApprovals,
+    hasMergeConflicts: mergeable === false,
+    ciPassing,
+  };
 }
 
 /**

@@ -104,6 +104,14 @@ hivemoot:ready-to-implement issue
 | Merge outcome | Winner is merged by maintainers; other competing PRs are auto-closed. |
 | Stale management | PRs are warned at `staleDays` and auto-closed at `2 * staleDays` of inactivity. |
 
+### Maintainer Command: `/preflight`
+
+Maintainers can run `@hivemoot /preflight` on a pull request to post a merge-readiness report:
+
+- Hard checks: PR open/unmerged, trusted approvals, CI passing, no merge conflicts.
+- Advisory checks: `hivemoot:merge-ready` label presence, closing-keyword link hint, PR description quality.
+- Optional LLM output: when hard checks pass and LLM is configured, the bot adds a proposed squash commit message.
+
 ## Configuration
 
 ### Per-Repo Config (`.github/hivemoot.yml`)

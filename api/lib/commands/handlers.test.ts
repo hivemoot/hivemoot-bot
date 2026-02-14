@@ -6,10 +6,29 @@ import { LABELS } from "../../config.js";
 vi.mock("../index.js", () => ({
   createIssueOperations: vi.fn(() => mockIssueOps),
   createGovernanceService: vi.fn(() => mockGovernance),
+  createPROperations: vi.fn(() => mockPrOps),
+  loadRepositoryConfig: vi.fn(() => ({
+    governance: { pr: { trustedReviewers: ["alice", "bob"], mergeReady: { minApprovals: 2 } } },
+  })),
+  evaluateMergeReadinessSignals: vi.fn(() => ({
+    trustedApprovalCount: 2,
+    requiredApprovals: 2,
+    hasSufficientApprovals: true,
+    hasMergeConflicts: false,
+    ciPassing: true,
+  })),
+}));
+
+let mockGenerateCommitMessage: ReturnType<typeof vi.fn>;
+vi.mock("../llm/index.js", () => ({
+  CommitMessageGenerator: vi.fn(() => ({
+    generate: mockGenerateCommitMessage,
+  })),
 }));
 
 let mockIssueOps: Record<string, ReturnType<typeof vi.fn>>;
 let mockGovernance: Record<string, ReturnType<typeof vi.fn>>;
+let mockPrOps: Record<string, ReturnType<typeof vi.fn>>;
 
 function createMockOctokit(permission = "admin") {
   return {
@@ -40,6 +59,8 @@ function createCtx(overrides: Partial<CommandContext> = {}): CommandContext {
     senderLogin: "maintainer",
     verb: "vote",
     freeText: undefined,
+    issueTitle: "Test issue title",
+    issueBody: "Test issue body",
     issueLabels: [{ name: LABELS.DISCUSSION }],
     isPullRequest: false,
     appId: 12345,
@@ -54,6 +75,13 @@ function createCtx(overrides: Partial<CommandContext> = {}): CommandContext {
 describe("executeCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGenerateCommitMessage = vi.fn().mockResolvedValue({
+      success: true,
+      suggestion: {
+        subject: "Improve merge readiness checks",
+        body: "Adds a preflight checklist and optional LLM commit message generation.",
+      },
+    });
     mockIssueOps = {
       addLabels: vi.fn().mockResolvedValue(undefined),
       removeLabel: vi.fn().mockResolvedValue(undefined),
@@ -68,6 +96,18 @@ describe("executeCommand", () => {
     };
     mockGovernance = {
       transitionToVoting: vi.fn().mockResolvedValue(undefined),
+    };
+    mockPrOps = {
+      get: vi.fn().mockResolvedValue({
+        number: 42,
+        state: "open",
+        merged: false,
+        createdAt: new Date("2026-02-14T00:00:00Z"),
+        updatedAt: new Date("2026-02-14T00:00:00Z"),
+        author: "author",
+        headSha: "abc123",
+        mergeable: true,
+      }),
     };
   });
 
@@ -325,6 +365,73 @@ describe("executeCommand", () => {
       const result = await executeCommand(ctx);
 
       expect(result.status).toBe("rejected");
+    });
+  });
+
+  describe("/preflight command", () => {
+    it("should reject /preflight on an issue", async () => {
+      const ctx = createCtx({ verb: "preflight", isPullRequest: false });
+      const result = await executeCommand(ctx);
+
+      expect(result.status).toBe("rejected");
+    });
+
+    it("should post a checklist and commit message when hard checks pass", async () => {
+      const ctx = createCtx({
+        verb: "preflight",
+        isPullRequest: true,
+        issueLabels: [{ name: LABELS.MERGE_READY }],
+        issueBody: "Fixes #42\n\nThis updates merge readiness behavior.",
+      });
+
+      const result = await executeCommand(ctx);
+
+      expect(result).toEqual({ status: "executed", message: "Posted preflight checklist." });
+      expect(ctx.octokit.rest.issues.createComment).toHaveBeenCalledTimes(1);
+      const commentBody = ctx.octokit.rest.issues.createComment.mock.calls[0][0].body as string;
+      expect(commentBody).toContain("Preflight Report");
+      expect(commentBody).toContain("Hard Checks");
+      expect(commentBody).toContain("Proposed Commit Message");
+      expect(commentBody).toContain("Improve merge readiness checks");
+      expect(commentBody).toContain("PR: #42");
+    });
+
+    it("should skip commit message when hard checks fail", async () => {
+      const { evaluateMergeReadinessSignals } = await import("../index.js");
+      vi.mocked(evaluateMergeReadinessSignals).mockResolvedValueOnce({
+        trustedApprovalCount: 1,
+        requiredApprovals: 2,
+        hasSufficientApprovals: false,
+        hasMergeConflicts: false,
+        ciPassing: true,
+      });
+      const ctx = createCtx({
+        verb: "preflight",
+        isPullRequest: true,
+      });
+
+      await executeCommand(ctx);
+
+      const commentBody = ctx.octokit.rest.issues.createComment.mock.calls[0][0].body as string;
+      expect(commentBody).toContain("Skipped because one or more hard checks failed.");
+      expect(mockGenerateCommitMessage).not.toHaveBeenCalled();
+    });
+
+    it("should include LLM unconfigured reason when generation is unavailable", async () => {
+      mockGenerateCommitMessage.mockResolvedValueOnce({
+        success: false,
+        reason: "LLM not configured",
+      });
+
+      const ctx = createCtx({
+        verb: "preflight",
+        isPullRequest: true,
+      });
+
+      await executeCommand(ctx);
+
+      const commentBody = ctx.octokit.rest.issues.createComment.mock.calls[0][0].body as string;
+      expect(commentBody).toContain("LLM commit message generation unavailable: LLM not configured.");
     });
   });
 

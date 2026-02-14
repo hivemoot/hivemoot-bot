@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { evaluateMergeReadiness } from "./merge-readiness.js";
-import type { MergeReadinessParams, MergeReadinessResult } from "./merge-readiness.js";
+import { evaluateMergeReadiness, evaluateMergeReadinessSignals } from "./merge-readiness.js";
+import type {
+  MergeReadinessParams,
+  MergeReadinessResult,
+  MergeReadinessSignalsParams,
+} from "./merge-readiness.js";
 import type { PROperations } from "./pr-operations.js";
 
 /**
@@ -40,6 +44,18 @@ function buildParams(overrides: Partial<MergeReadinessParams> = {}): MergeReadin
     ref: defaultRef,
     config: defaultConfig,
     trustedReviewers: defaultReviewers,
+    ...overrides,
+  };
+}
+
+function buildSignalsParams(
+  overrides: Partial<MergeReadinessSignalsParams> = {}
+): MergeReadinessSignalsParams {
+  return {
+    prs: createMockPrs(),
+    ref: defaultRef,
+    trustedReviewers: defaultReviewers,
+    minApprovals: 1,
     ...overrides,
   };
 }
@@ -437,5 +453,61 @@ describe("evaluateMergeReadiness", () => {
       expect(params.prs.addLabels).not.toHaveBeenCalled();
       expect(params.prs.removeLabel).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("evaluateMergeReadinessSignals", () => {
+  it("should return approvals, conflict, and CI signals", async () => {
+    const prs = createMockPrs({
+      getApproverLogins: vi.fn().mockResolvedValue(new Set(["alice"])),
+      get: vi.fn().mockResolvedValue({ headSha: "abc123", mergeable: true }),
+      getCheckRunsForRef: vi.fn().mockResolvedValue({
+        totalCount: 1,
+        checkRuns: [{ id: 1, status: "completed", conclusion: "success" }],
+      }),
+      getCombinedStatus: vi.fn().mockResolvedValue({ state: "success", totalCount: 1 }),
+    });
+
+    const result = await evaluateMergeReadinessSignals(
+      buildSignalsParams({ prs, minApprovals: 1 })
+    );
+
+    expect(result).toEqual({
+      trustedApprovalCount: 1,
+      requiredApprovals: 1,
+      hasSufficientApprovals: true,
+      hasMergeConflicts: false,
+      ciPassing: true,
+    });
+  });
+
+  it("should mark conflicts when mergeable is false", async () => {
+    const prs = createMockPrs({
+      getApproverLogins: vi.fn().mockResolvedValue(new Set(["alice"])),
+      get: vi.fn().mockResolvedValue({ headSha: "abc123", mergeable: false }),
+      getCheckRunsForRef: vi.fn().mockResolvedValue({ totalCount: 0, checkRuns: [] }),
+      getCombinedStatus: vi.fn().mockResolvedValue({ state: "pending", totalCount: 0 }),
+    });
+
+    const result = await evaluateMergeReadinessSignals(
+      buildSignalsParams({ prs })
+    );
+
+    expect(result.hasMergeConflicts).toBe(true);
+  });
+
+  it("should use pre-fetched head SHA without fetching PR", async () => {
+    const prs = createMockPrs({
+      getApproverLogins: vi.fn().mockResolvedValue(new Set(["alice"])),
+      getCheckRunsForRef: vi.fn().mockResolvedValue({ totalCount: 0, checkRuns: [] }),
+      getCombinedStatus: vi.fn().mockResolvedValue({ state: "pending", totalCount: 0 }),
+    });
+
+    await evaluateMergeReadinessSignals(
+      buildSignalsParams({ prs, headSha: "precomputed-sha" })
+    );
+
+    expect(prs.get).not.toHaveBeenCalled();
+    expect(prs.getCheckRunsForRef).toHaveBeenCalledWith("test-org", "test-repo", "precomputed-sha");
   });
 });

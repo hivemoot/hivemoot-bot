@@ -7,7 +7,15 @@
  */
 
 import { LABELS, SIGNATURE, isLabelMatch } from "../../config.js";
-import { createIssueOperations, createGovernanceService } from "../index.js";
+import { hasSameRepoClosingKeywordRef } from "../closing-keywords.js";
+import { CommitMessageGenerator } from "../llm/index.js";
+import {
+  createIssueOperations,
+  createGovernanceService,
+  createPROperations,
+  evaluateMergeReadinessSignals,
+  loadRepositoryConfig,
+} from "../index.js";
 import type { IssueRef } from "../types.js";
 
 /**
@@ -61,6 +69,8 @@ export interface CommandContext {
   senderLogin: string;
   verb: string;
   freeText: string | undefined;
+  issueTitle: string;
+  issueBody: string;
   /** Labels currently on the issue */
   issueLabels: Array<{ name: string }>;
   /** Whether this comment is on a PR (vs an issue) */
@@ -276,6 +286,147 @@ async function handleImplement(ctx: CommandContext): Promise<CommandResult> {
   return { status: "executed", message: "Fast-tracked to ready-to-implement." };
 }
 
+function checklistLine(checked: boolean, label: string, details: string): string {
+  return `- [${checked ? "x" : " "}] **${label}**: ${details}`;
+}
+
+/**
+ * Handle /preflight command: evaluate merge-readiness checklist for a PR.
+ */
+async function handlePreflight(ctx: CommandContext): Promise<CommandResult> {
+  if (!ctx.isPullRequest) {
+    return { status: "rejected", reason: "The `/preflight` command can only be used on pull requests." };
+  }
+
+  const prs = createPROperations(ctx.octokit, { appId: ctx.appId });
+  const repoConfig = await loadRepositoryConfig(
+    ctx.octokit as unknown as Parameters<typeof loadRepositoryConfig>[0],
+    ctx.owner,
+    ctx.repo,
+  );
+  const prRef = { owner: ctx.owner, repo: ctx.repo, prNumber: ctx.issueNumber };
+  const pr = await prs.get(prRef);
+
+  const trustedReviewers = repoConfig.governance.pr.trustedReviewers;
+  const requiredApprovals = Math.max(
+    1,
+    repoConfig.governance.pr.mergeReady?.minApprovals ?? 1,
+  );
+
+  const readiness = await evaluateMergeReadinessSignals({
+    prs,
+    ref: prRef,
+    trustedReviewers,
+    minApprovals: requiredApprovals,
+  });
+
+  const isOpen = pr.state === "open";
+  const notMerged = !pr.merged;
+  const hasDescription = ctx.issueBody.trim().length > 0;
+  const hasLinkedIssueKeyword = hasSameRepoClosingKeywordRef(ctx.issueBody, {
+    owner: ctx.owner,
+    repo: ctx.repo,
+  });
+  const mergeReadyLabelPresent = hasLabel(ctx, LABELS.MERGE_READY);
+
+  const hardChecks = {
+    openAndUnmerged: isOpen && notMerged,
+    approvals: readiness.hasSufficientApprovals,
+    ci: readiness.ciPassing,
+    conflicts: !readiness.hasMergeConflicts,
+  };
+  const allHardChecksPass = Object.values(hardChecks).every(Boolean);
+
+  const lines: string[] = [];
+  lines.push("# 🐝 Preflight Report");
+  lines.push("");
+  lines.push("## Hard Checks");
+  lines.push(
+    checklistLine(
+      hardChecks.openAndUnmerged,
+      "PR is open and unmerged",
+      hardChecks.openAndUnmerged ? "PR is open and not merged." : `state=${pr.state}, merged=${String(pr.merged)}.`,
+    ),
+  );
+  lines.push(
+    checklistLine(
+      hardChecks.approvals,
+      "Trusted approvals",
+      `${readiness.trustedApprovalCount}/${readiness.requiredApprovals} trusted approvals (${trustedReviewers.join(", ") || "none configured"}).`,
+    ),
+  );
+  lines.push(
+    checklistLine(
+      hardChecks.ci,
+      "CI status",
+      hardChecks.ci ? "All checks and commit statuses are passing." : "At least one check/status is failing or pending.",
+    ),
+  );
+  lines.push(
+    checklistLine(
+      hardChecks.conflicts,
+      "Merge conflicts",
+      hardChecks.conflicts ? "No merge conflicts detected." : "GitHub reports merge conflicts.",
+    ),
+  );
+  lines.push("");
+  lines.push("## Advisory Checks");
+  lines.push(
+    checklistLine(
+      mergeReadyLabelPresent,
+      "Merge-ready label",
+      mergeReadyLabelPresent ? "Present." : "Not present (advisory only).",
+    ),
+  );
+  lines.push(
+    checklistLine(
+      hasLinkedIssueKeyword,
+      "Linked issue keyword",
+      hasLinkedIssueKeyword
+        ? "Closing keyword detected in PR description."
+        : "No closing keyword found (e.g., `Fixes #123`).",
+    ),
+  );
+  lines.push(
+    checklistLine(
+      hasDescription,
+      "PR description",
+      hasDescription ? "Description is present." : "Description is empty.",
+    ),
+  );
+  lines.push("");
+
+  if (allHardChecksPass) {
+    const generator = new CommitMessageGenerator();
+    const commitMessage = await generator.generate({
+      prNumber: ctx.issueNumber,
+      prTitle: ctx.issueTitle,
+      prBody: ctx.issueBody,
+      linkedIssuesHint: hasLinkedIssueKeyword ? "closing keyword present" : "no closing keyword found",
+      commitHeadlines: [],
+    });
+
+    lines.push("## Proposed Commit Message");
+    if (commitMessage.success) {
+      lines.push("```");
+      lines.push(commitMessage.suggestion.subject);
+      lines.push("");
+      lines.push(commitMessage.suggestion.body);
+      lines.push("");
+      lines.push(`PR: #${ctx.issueNumber}`);
+      lines.push("```");
+    } else {
+      lines.push(`LLM commit message generation unavailable: ${commitMessage.reason}.`);
+    }
+  } else {
+    lines.push("## Proposed Commit Message");
+    lines.push("Skipped because one or more hard checks failed.");
+  }
+
+  await reply(ctx, lines.join("\n"));
+  return { status: "executed", message: "Posted preflight checklist." };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Command Router
 // ─────────────────────────────────────────────────────────────────────────────
@@ -284,6 +435,7 @@ async function handleImplement(ctx: CommandContext): Promise<CommandResult> {
 const COMMAND_HANDLERS: Record<string, (ctx: CommandContext) => Promise<CommandResult>> = {
   vote: handleVote,
   implement: handleImplement,
+  preflight: handlePreflight,
 };
 
 /**

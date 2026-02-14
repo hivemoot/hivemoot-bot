@@ -464,6 +464,8 @@ export function app(probotApp: Probot): void {
           senderLogin: comment.user.login,
           verb: parsed.verb,
           freeText: parsed.freeText,
+          issueTitle: issue.title,
+          issueBody: issue.body ?? "",
           issueLabels: issue.labels?.map((l) =>
             typeof l === "string" ? { name: l } : { name: l.name ?? "" },
           ) ?? [],

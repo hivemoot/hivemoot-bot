@@ -54,6 +54,20 @@ describe("LLM Provider", () => {
       expect(isLLMConfigured()).toBe(true);
     });
 
+    it("should normalize provider casing and whitespace", () => {
+      process.env.LLM_PROVIDER = "  Google ";
+      process.env.LLM_MODEL = " gemini-2.0-flash ";
+
+      expect(isLLMConfigured()).toBe(true);
+    });
+
+    it("should accept gemini alias as google provider", () => {
+      process.env.LLM_PROVIDER = "gemini";
+      process.env.LLM_MODEL = "gemini-2.0-flash";
+
+      expect(isLLMConfigured()).toBe(true);
+    });
+
     it.each(["openai", "anthropic", "google", "mistral"])(
       "should return true for valid provider: %s",
       (provider) => {
@@ -92,6 +106,26 @@ describe("LLM Provider", () => {
         model: "claude-3-haiku",
         maxTokens: 2000,
       });
+    });
+
+    it("should normalize quoted provider/model values", () => {
+      process.env.LLM_PROVIDER = ' "OpenAI" ';
+      process.env.LLM_MODEL = " 'gpt-4o-mini' ";
+
+      const config = getLLMConfig();
+
+      expect(config).toEqual({
+        provider: "openai",
+        model: "gpt-4o-mini",
+        maxTokens: 2000,
+      });
+    });
+
+    it("should return null when model is blank after trimming", () => {
+      process.env.LLM_PROVIDER = "google";
+      process.env.LLM_MODEL = "   ";
+
+      expect(getLLMConfig()).toBeNull();
     });
 
     it("should parse custom maxTokens", () => {
@@ -148,6 +182,7 @@ describe("LLM Provider", () => {
 
     it("should throw when Google API key is missing", () => {
       delete process.env.GOOGLE_API_KEY;
+      delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
       const config: LLMConfig = {
         provider: "google",
         model: "gemini-pro",
@@ -155,7 +190,7 @@ describe("LLM Provider", () => {
       };
 
       expect(() => createModel(config)).toThrow(
-        "GOOGLE_API_KEY environment variable is not set"
+        "GOOGLE_API_KEY or GOOGLE_GENERATIVE_AI_API_KEY environment variable is not set"
       );
     });
 
@@ -214,6 +249,21 @@ describe("LLM Provider", () => {
       expect(model.modelId).toBe("gemini-pro");
     });
 
+    it("should create Google model from GOOGLE_GENERATIVE_AI_API_KEY", () => {
+      delete process.env.GOOGLE_API_KEY;
+      process.env.GOOGLE_GENERATIVE_AI_API_KEY = "google-alt-test-key";
+      const config: LLMConfig = {
+        provider: "google",
+        model: "gemini-pro",
+        maxTokens: 2000,
+      };
+
+      const model = createModel(config);
+
+      expect(model).toBeDefined();
+      expect(model.modelId).toBe("gemini-pro");
+    });
+
     it("should create Mistral model when API key is set", () => {
       process.env.MISTRAL_API_KEY = "mistral-test-key";
       const config: LLMConfig = {
@@ -249,6 +299,18 @@ describe("LLM Provider", () => {
       expect(result?.model.modelId).toBe("claude-3-haiku");
       expect(result?.config.provider).toBe("anthropic");
       expect(result?.config.model).toBe("claude-3-haiku");
+    });
+
+    it("should return model and normalized config for gemini alias", () => {
+      process.env.LLM_PROVIDER = "Gemini";
+      process.env.LLM_MODEL = "gemini-2.0-flash";
+      process.env.GOOGLE_GENERATIVE_AI_API_KEY = "google-test";
+
+      const result = createModelFromEnv();
+
+      expect(result).not.toBeNull();
+      expect(result?.config.provider).toBe("google");
+      expect(result?.config.model).toBe("gemini-2.0-flash");
     });
   });
 });

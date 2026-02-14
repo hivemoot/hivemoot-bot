@@ -117,6 +117,46 @@ describe("LLM Provider", () => {
 
       expect(config?.maxTokens).toBe(2000);
     });
+
+    it("should use defaults for zero maxTokens", () => {
+      process.env.LLM_PROVIDER = "anthropic";
+      process.env.LLM_MODEL = "claude-3-haiku";
+      process.env.LLM_MAX_TOKENS = "0";
+
+      const config = getLLMConfig();
+
+      expect(config?.maxTokens).toBe(2000);
+    });
+
+    it("should use defaults for negative maxTokens", () => {
+      process.env.LLM_PROVIDER = "anthropic";
+      process.env.LLM_MODEL = "claude-3-haiku";
+      process.env.LLM_MAX_TOKENS = "-42";
+
+      const config = getLLMConfig();
+
+      expect(config?.maxTokens).toBe(2000);
+    });
+
+    it("should use defaults for decimal maxTokens", () => {
+      process.env.LLM_PROVIDER = "anthropic";
+      process.env.LLM_MODEL = "claude-3-haiku";
+      process.env.LLM_MAX_TOKENS = "1234.5";
+
+      const config = getLLMConfig();
+
+      expect(config?.maxTokens).toBe(2000);
+    });
+
+    it("should trim maxTokens before parsing", () => {
+      process.env.LLM_PROVIDER = "openai";
+      process.env.LLM_MODEL = "gpt-4o-mini";
+      process.env.LLM_MAX_TOKENS = " 3000 ";
+
+      const config = getLLMConfig();
+
+      expect(config?.maxTokens).toBe(3000);
+    });
   });
 
   describe("createModel", () => {

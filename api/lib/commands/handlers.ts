@@ -6,8 +6,8 @@
  * and performs the corresponding governance action.
  */
 
-import { LABELS, SIGNATURE, isLabelMatch } from "../../config.js";
-import { createIssueOperations, createGovernanceService } from "../index.js";
+import { LABELS, REQUIRED_REPOSITORY_LABELS, SIGNATURE, isLabelMatch } from "../../config.js";
+import { createIssueOperations, createGovernanceService, createRepositoryLabelService } from "../index.js";
 import type { IssueRef } from "../types.js";
 
 /**
@@ -276,6 +276,33 @@ async function handleImplement(ctx: CommandContext): Promise<CommandResult> {
   return { status: "executed", message: "Fast-tracked to ready-to-implement." };
 }
 
+/**
+ * Handle /doctor command: ensure required labels exist and report results.
+ */
+async function handleDoctor(ctx: CommandContext): Promise<CommandResult> {
+  const labels = createRepositoryLabelService(ctx.octokit as unknown);
+  const result = await labels.ensureRequiredLabels(ctx.owner, ctx.repo);
+  const totalExpected = REQUIRED_REPOSITORY_LABELS.length;
+  const totalFound = result.created + result.renamed + result.skipped;
+
+  await reply(
+    ctx,
+    [
+      "# 🐝 Repository Health Check",
+      "",
+      "Label diagnostics completed.",
+      "",
+      `- Created: ${result.created}`,
+      `- Renamed from legacy: ${result.renamed}`,
+      `- Already present: ${result.skipped}`,
+      `- Expected labels: ${totalExpected}`,
+      `- Labels accounted for: ${totalFound}/${totalExpected}`,
+    ].join("\n"),
+  );
+
+  return { status: "executed", message: "Repository label diagnostics completed." };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Command Router
 // ─────────────────────────────────────────────────────────────────────────────
@@ -284,6 +311,7 @@ async function handleImplement(ctx: CommandContext): Promise<CommandResult> {
 const COMMAND_HANDLERS: Record<string, (ctx: CommandContext) => Promise<CommandResult>> = {
   vote: handleVote,
   implement: handleImplement,
+  doctor: handleDoctor,
 };
 
 /**

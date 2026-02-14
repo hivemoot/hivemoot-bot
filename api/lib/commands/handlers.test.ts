@@ -1,15 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { executeCommand, type CommandContext } from "./handlers.js";
-import { LABELS } from "../../config.js";
+import { LABELS, REQUIRED_REPOSITORY_LABELS } from "../../config.js";
 
 // Mock the governance/issue operations modules
 vi.mock("../index.js", () => ({
   createIssueOperations: vi.fn(() => mockIssueOps),
   createGovernanceService: vi.fn(() => mockGovernance),
+  createRepositoryLabelService: vi.fn(() => mockLabelService),
 }));
 
 let mockIssueOps: Record<string, ReturnType<typeof vi.fn>>;
 let mockGovernance: Record<string, ReturnType<typeof vi.fn>>;
+let mockLabelService: Record<string, ReturnType<typeof vi.fn>>;
 
 function createMockOctokit(permission = "admin") {
   return {
@@ -25,7 +27,17 @@ function createMockOctokit(permission = "admin") {
       },
       issues: {
         createComment: vi.fn().mockResolvedValue({}),
+        listLabelsForRepo: vi.fn().mockResolvedValue({ data: [] }),
+        createLabel: vi.fn().mockResolvedValue({}),
+        updateLabel: vi.fn().mockResolvedValue({}),
       },
+    },
+    paginate: {
+      iterator: vi.fn().mockImplementation(() => ({
+        async *[Symbol.asyncIterator]() {
+          yield { data: [] };
+        },
+      })),
     },
   };
 }
@@ -68,6 +80,13 @@ describe("executeCommand", () => {
     };
     mockGovernance = {
       transitionToVoting: vi.fn().mockResolvedValue(undefined),
+    };
+    mockLabelService = {
+      ensureRequiredLabels: vi.fn().mockResolvedValue({
+        created: 2,
+        renamed: 1,
+        skipped: 7,
+      }),
     };
   });
 
@@ -325,6 +344,29 @@ describe("executeCommand", () => {
       const result = await executeCommand(ctx);
 
       expect(result.status).toBe("rejected");
+    });
+  });
+
+  describe("/doctor command", () => {
+    it("should ensure labels and post a diagnostic report", async () => {
+      const ctx = createCtx({ verb: "doctor" });
+      const result = await executeCommand(ctx);
+      const totalExpected = REQUIRED_REPOSITORY_LABELS.length;
+
+      expect(result).toEqual({
+        status: "executed",
+        message: "Repository label diagnostics completed.",
+      });
+      expect(mockLabelService.ensureRequiredLabels).toHaveBeenCalledWith("test-org", "test-repo");
+      expect(ctx.octokit.rest.issues.createComment).toHaveBeenCalledTimes(1);
+
+      const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
+      expect(commentArgs.body).toContain("Repository Health Check");
+      expect(commentArgs.body).toContain("Created: 2");
+      expect(commentArgs.body).toContain("Renamed from legacy: 1");
+      expect(commentArgs.body).toContain("Already present: 7");
+      expect(commentArgs.body).toContain(`Expected labels: ${totalExpected}`);
+      expect(commentArgs.body).toContain(`Labels accounted for: 10/${totalExpected}`);
     });
   });
 

@@ -642,6 +642,9 @@ describe("Queen Bot", () => {
           addLabels: vi.fn().mockResolvedValue({}),
           removeLabel: vi.fn().mockResolvedValue({}),
           createComment: vi.fn().mockResolvedValue({}),
+          listLabelsForRepo: vi.fn().mockResolvedValue({ data: [] }),
+          createLabel: vi.fn().mockResolvedValue({}),
+          updateLabel: vi.fn().mockResolvedValue({}),
           update: vi.fn().mockResolvedValue({}),
           lock: vi.fn().mockResolvedValue({}),
           unlock: vi.fn().mockResolvedValue({}),
@@ -795,6 +798,38 @@ describe("Queen Bot", () => {
 
       // Command was dispatched — graphql (getLinkedIssues) should NOT have been called
       // because the handler returns early after command execution
+      expect(octokit.graphql).not.toHaveBeenCalled();
+    });
+
+    it("should return early for /doctor without processing PR intake", async () => {
+      const { handlers } = createWebhookHarness();
+      const handler = handlers.get("issue_comment.created")!;
+      const octokit = createCommandOctokit();
+      const log = { info: vi.fn(), error: vi.fn(), warn: vi.fn() };
+
+      await handler({
+        octokit,
+        log,
+        payload: {
+          issue: {
+            number: 10,
+            labels: [{ name: LABELS.DISCUSSION }],
+            pull_request: { url: "https://api.github.com/repos/hivemoot/test-repo/pulls/10" },
+          },
+          comment: {
+            id: 200,
+            body: "@hivemoot /doctor",
+            user: { login: "maintainer" },
+            performed_via_github_app: null,
+          },
+          repository: {
+            name: "test-repo",
+            full_name: "hivemoot/test-repo",
+            owner: { login: "hivemoot" },
+          },
+        },
+      });
+
       expect(octokit.graphql).not.toHaveBeenCalled();
     });
   });

@@ -85,7 +85,9 @@ describe("executeCommand", () => {
       ensureRequiredLabels: vi.fn().mockResolvedValue({
         created: 2,
         renamed: 1,
+        updated: 0,
         skipped: 7,
+        renamedLabels: [{ from: "phase:voting", to: "hivemoot:voting" }],
       }),
     };
   });
@@ -364,9 +366,28 @@ describe("executeCommand", () => {
       expect(commentArgs.body).toContain("Repository Health Check");
       expect(commentArgs.body).toContain("Created: 2");
       expect(commentArgs.body).toContain("Renamed from legacy: 1");
+      expect(commentArgs.body).toContain("Updated drifted labels: 0");
       expect(commentArgs.body).toContain("Already present: 7");
       expect(commentArgs.body).toContain(`Expected labels: ${totalExpected}`);
       expect(commentArgs.body).toContain(`Labels accounted for: 10/${totalExpected}`);
+      expect(commentArgs.body).toContain("Renamed labels:");
+      expect(commentArgs.body).toContain("`phase:voting` -> `hivemoot:voting`");
+    });
+
+    it("should report when no legacy labels were renamed", async () => {
+      mockLabelService.ensureRequiredLabels.mockResolvedValueOnce({
+        created: 0,
+        renamed: 0,
+        updated: 0,
+        skipped: REQUIRED_REPOSITORY_LABELS.length,
+        renamedLabels: [],
+      });
+
+      const ctx = createCtx({ verb: "doctor" });
+      await executeCommand(ctx);
+
+      const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
+      expect(commentArgs.body).toContain("Renamed labels: none");
     });
   });
 

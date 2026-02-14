@@ -70,6 +70,7 @@ describe("RepositoryLabelService", () => {
       created: REQUIRED_REPOSITORY_LABELS.length,
       renamed: 0,
       skipped: 0,
+      renamedLabels: [],
     });
 
     expect(client.paginate.iterator).toHaveBeenCalledWith(
@@ -110,6 +111,7 @@ describe("RepositoryLabelService", () => {
       created: REQUIRED_REPOSITORY_LABELS.length - 2,
       renamed: 0,
       skipped: 2,
+      renamedLabels: [],
     });
 
     const createdNames = vi
@@ -135,6 +137,7 @@ describe("RepositoryLabelService", () => {
       created: REQUIRED_REPOSITORY_LABELS.length - 1,
       renamed: 0,
       skipped: 1,
+      renamedLabels: [],
     });
 
     const createdNames = vi
@@ -162,6 +165,7 @@ describe("RepositoryLabelService", () => {
       created: REQUIRED_REPOSITORY_LABELS.length - 1,
       renamed: 0,
       skipped: 1,
+      renamedLabels: [],
     });
   });
 
@@ -189,7 +193,12 @@ describe("RepositoryLabelService", () => {
     )!;
     const result = await service.ensureRequiredLabels("hivemoot", "colony", [votingLabel]);
 
-    expect(result).toEqual({ created: 0, renamed: 1, skipped: 0 });
+    expect(result).toEqual({
+      created: 0,
+      renamed: 1,
+      skipped: 0,
+      renamedLabels: [{ from: "phase:voting", to: LABELS.VOTING }],
+    });
 
     expect(client.rest.issues.updateLabel).toHaveBeenCalledWith({
       owner: "hivemoot",
@@ -218,7 +227,7 @@ describe("RepositoryLabelService", () => {
     )!;
     const result = await service.ensureRequiredLabels("hivemoot", "colony", [votingLabel]);
 
-    expect(result).toEqual({ created: 0, renamed: 0, skipped: 1 });
+    expect(result).toEqual({ created: 0, renamed: 0, skipped: 1, renamedLabels: [] });
     expect(client.rest.issues.updateLabel).not.toHaveBeenCalled();
     expect(client.rest.issues.createLabel).not.toHaveBeenCalled();
   });

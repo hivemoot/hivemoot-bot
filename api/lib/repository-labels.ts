@@ -62,6 +62,7 @@ export interface EnsureLabelsResult {
   created: number;
   renamed: number;
   skipped: number;
+  renamedLabels: Array<{ from: string; to: string }>;
 }
 
 export function createRepositoryLabelService(octokit: unknown): RepositoryLabelService {
@@ -108,6 +109,7 @@ export class RepositoryLabelService {
     let created = 0;
     let renamed = 0;
     let skipped = 0;
+    const renamedLabels: Array<{ from: string; to: string }> = [];
 
     for (const label of requiredLabels) {
       const key = label.name.toLowerCase();
@@ -133,6 +135,7 @@ export class RepositoryLabelService {
           existingLabels.delete(foundLegacy.toLowerCase());
           existingLabels.add(key);
           renamed++;
+          renamedLabels.push({ from: foundLegacy, to: label.name });
           continue;
         } catch (error) {
           // If rename fails (e.g., concurrent rename), fall through to create
@@ -166,7 +169,7 @@ export class RepositoryLabelService {
       }
     }
 
-    return { created, renamed, skipped };
+    return { created, renamed, skipped, renamedLabels };
   }
 
   private async getExistingLabelNames(owner: string, repo: string): Promise<Set<string>> {

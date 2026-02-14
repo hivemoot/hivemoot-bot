@@ -282,8 +282,16 @@ async function handleImplement(ctx: CommandContext): Promise<CommandResult> {
 async function handleDoctor(ctx: CommandContext): Promise<CommandResult> {
   const labels = createRepositoryLabelService(ctx.octokit as unknown);
   const result = await labels.ensureRequiredLabels(ctx.owner, ctx.repo);
+  const maybeUpdated = (result as { updated?: unknown }).updated;
+  const updatedCount = typeof maybeUpdated === "number" ? maybeUpdated : 0;
   const totalExpected = REQUIRED_REPOSITORY_LABELS.length;
-  const totalFound = result.created + result.renamed + result.skipped;
+  const totalFound = result.created + result.renamed + result.skipped + updatedCount;
+  const renamedDetails = result.renamedLabels.length > 0
+    ? [
+      "- Renamed labels:",
+      ...result.renamedLabels.map((entry) => `  - \`${entry.from}\` -> \`${entry.to}\``),
+    ]
+    : ["- Renamed labels: none"];
 
   await reply(
     ctx,
@@ -294,9 +302,11 @@ async function handleDoctor(ctx: CommandContext): Promise<CommandResult> {
       "",
       `- Created: ${result.created}`,
       `- Renamed from legacy: ${result.renamed}`,
+      `- Updated drifted labels: ${updatedCount}`,
       `- Already present: ${result.skipped}`,
       `- Expected labels: ${totalExpected}`,
       `- Labels accounted for: ${totalFound}/${totalExpected}`,
+      ...renamedDetails,
     ].join("\n"),
   );
 

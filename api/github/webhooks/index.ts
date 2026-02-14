@@ -25,6 +25,7 @@ import {
   processImplementationIntake,
   recalculateLeaderboardForPR,
 } from "../../lib/implementation-intake.js";
+import { parseCommand, executeCommand } from "../../lib/commands/index.js";
 
 /**
  * Queen Bot - Hivemoot Governance Automation
@@ -428,23 +429,53 @@ export function app(probotApp: Probot): void {
   });
 
   /**
-   * Handle PR comments to activate pre-ready PRs.
+   * Handle comments on issues and PRs.
+   *
+   * Routes to either:
+   * 1. Command handler — @mention + /command on issues or PRs
+   * 2. PR intake processing — non-command comments on PRs
    */
   probotApp.on("issue_comment.created", async (context) => {
     const { issue, comment } = context.payload;
-    if (!issue.pull_request) {
-      return;
-    }
-
     const { owner, repo, fullName } = getRepoContext(context.payload.repository);
-    const prNumber = issue.number;
 
     try {
       const appId = getAppId();
+
+      // Skip bot's own comments
       if (comment.performed_via_github_app?.id === appId) {
         return;
       }
 
+      // Parse for @mention + /command before the PR-only filter,
+      // so commands work on both issues and PRs
+      const parsed = parseCommand(comment.body ?? "");
+      if (parsed) {
+        await executeCommand({
+          octokit: context.octokit as Parameters<typeof executeCommand>[0]["octokit"],
+          owner,
+          repo,
+          issueNumber: issue.number,
+          commentId: comment.id,
+          senderLogin: comment.user.login,
+          verb: parsed.verb,
+          freeText: parsed.freeText,
+          issueLabels: issue.labels?.map((l) =>
+            typeof l === "string" ? { name: l } : { name: l.name ?? "" },
+          ) ?? [],
+          isPullRequest: !!issue.pull_request,
+          appId,
+          log: context.log,
+        });
+        return;
+      }
+
+      // Non-command comments: only process PR comments for intake
+      if (!issue.pull_request) {
+        return;
+      }
+
+      const prNumber = issue.number;
       const issues = createIssueOperations(context.octokit, { appId });
       const prs = createPROperations(context.octokit, { appId });
       const [linkedIssues, repoConfig] = await Promise.all([
@@ -467,7 +498,7 @@ export function app(probotApp: Probot): void {
         intake: repoConfig.governance.pr.intake,
       });
     } catch (error) {
-      context.log.error({ err: error, pr: prNumber, repo: fullName }, "Failed to process PR comment");
+      context.log.error({ err: error, issue: issue.number, repo: fullName }, "Failed to process comment");
       throw error;
     }
   });

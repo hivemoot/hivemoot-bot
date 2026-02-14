@@ -163,6 +163,7 @@ describe("config", () => {
       expect(isLabelMatch("phase:discussion", LABELS.DISCUSSION)).toBe(true);
       expect(isLabelMatch("phase:voting", LABELS.VOTING)).toBe(true);
       expect(isLabelMatch("phase:extended-voting", LABELS.EXTENDED_VOTING)).toBe(true);
+      expect(isLabelMatch("phase:ready-to-implement", LABELS.READY_TO_IMPLEMENT)).toBe(true);
       expect(isLabelMatch("ready-to-implement", LABELS.READY_TO_IMPLEMENT)).toBe(true);
       expect(isLabelMatch("rejected", LABELS.REJECTED)).toBe(true);
       expect(isLabelMatch("inconclusive", LABELS.INCONCLUSIVE)).toBe(true);
@@ -203,10 +204,12 @@ describe("config", () => {
     });
 
     it("should include all legacy aliases for labels with multiple mappings", () => {
-      // READY_TO_IMPLEMENT has one legacy alias: "ready-to-implement"
+      // READY_TO_IMPLEMENT has two legacy aliases from prior naming schemes.
       const aliases = getLabelQueryAliases(LABELS.READY_TO_IMPLEMENT);
       expect(aliases).toContain(LABELS.READY_TO_IMPLEMENT);
+      expect(aliases).toContain("phase:ready-to-implement");
       expect(aliases).toContain("ready-to-implement");
+      expect(aliases).toHaveLength(3);
     });
 
     it("should return just the canonical name when no legacy aliases exist", () => {
@@ -240,6 +243,7 @@ describe("config", () => {
         "phase:discussion",
         "phase:voting",
         "phase:extended-voting",
+        "phase:ready-to-implement",
         "ready-to-implement",
         "rejected",
         "inconclusive",
@@ -259,6 +263,7 @@ describe("config", () => {
       expect(LEGACY_LABEL_MAP["phase:discussion"]).toBe(LABELS.DISCUSSION);
       expect(LEGACY_LABEL_MAP["phase:voting"]).toBe(LABELS.VOTING);
       expect(LEGACY_LABEL_MAP["phase:extended-voting"]).toBe(LABELS.EXTENDED_VOTING);
+      expect(LEGACY_LABEL_MAP["phase:ready-to-implement"]).toBe(LABELS.READY_TO_IMPLEMENT);
       expect(LEGACY_LABEL_MAP["ready-to-implement"]).toBe(LABELS.READY_TO_IMPLEMENT);
       expect(LEGACY_LABEL_MAP["rejected"]).toBe(LABELS.REJECTED);
       expect(LEGACY_LABEL_MAP["inconclusive"]).toBe(LABELS.INCONCLUSIVE);

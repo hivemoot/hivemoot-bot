@@ -326,6 +326,7 @@ export const LEGACY_LABEL_MAP: Record<string, string> = {
   "phase:discussion": LABELS.DISCUSSION,
   "phase:voting": LABELS.VOTING,
   "phase:extended-voting": LABELS.EXTENDED_VOTING,
+  "phase:ready-to-implement": LABELS.READY_TO_IMPLEMENT,
   "ready-to-implement": LABELS.READY_TO_IMPLEMENT,
   "rejected": LABELS.REJECTED,
   "inconclusive": LABELS.INCONCLUSIVE,

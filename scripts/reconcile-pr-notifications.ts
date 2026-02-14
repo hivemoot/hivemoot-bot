@@ -44,9 +44,10 @@ const VOTING_PASSED_LEGACY_SIGNATURE = "passed voting and is ready for implement
  * This avoids prefix collisions (#1 matching #10) in legacy fallback detection.
  */
 function hasLegacyIssueNumberMatch(body: string, issueNumber: number): boolean {
+  const expectedToken = String(issueNumber);
   const matches = body.matchAll(/\bIssue #(\d+)\b/g);
   for (const match of matches) {
-    if (Number.parseInt(match[1], 10) === issueNumber) {
+    if (match[1] === expectedToken) {
       return true;
     }
   }

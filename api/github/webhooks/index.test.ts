@@ -64,7 +64,7 @@ function createWebhookHarness() {
 }
 
 function createInstallationOctokit(options?: {
-  existingLabels?: Array<{ name: string }>;
+  existingLabels?: Array<{ name: string; color?: string; description?: string | null }>;
   fallbackRepositories?: Array<{ name: string; full_name: string; owner?: { login?: string } | null }>;
   fallbackRepositoryPages?: Array<Array<{ name: string; full_name: string; owner?: { login?: string } | null }>>;
   createLabelImpl?: (params: {
@@ -147,6 +147,54 @@ describe("Queen Bot", () => {
       );
       expect(log.info).toHaveBeenCalledWith(
         `[installation.created] Label bootstrap summary: reposProcessed=1, reposFailed=0, labelsCreated=${REQUIRED_REPOSITORY_LABELS.length}, labelsRenamed=0, labelsUpdated=0, labelsSkipped=0`
+      );
+    });
+
+    it("should update labels with drifted colors during bootstrap", async () => {
+      const { handlers } = createWebhookHarness();
+      const handler = handlers.get("installation.created");
+      expect(handler).toBeDefined();
+
+      // One label exists with wrong color (gray default from auto-creation)
+      const driftedLabel = {
+        name: REQUIRED_REPOSITORY_LABELS[0].name,
+        color: "ededed",
+        description: REQUIRED_REPOSITORY_LABELS[0].description ?? null,
+      };
+      const octokit = createInstallationOctokit({
+        existingLabels: [driftedLabel],
+      });
+      const log = {
+        info: vi.fn(),
+        error: vi.fn(),
+      };
+      await handler!({
+        octokit,
+        log,
+        payload: {
+          repositories: [
+            {
+              owner: { login: "hivemoot" },
+              name: "repo-drift",
+              full_name: "hivemoot/repo-drift",
+            },
+          ],
+        },
+      });
+
+      // The drifted label should be updated, the rest created
+      expect(octokit.rest.issues.updateLabel).toHaveBeenCalledTimes(1);
+      expect(octokit.rest.issues.updateLabel).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: "hivemoot",
+          repo: "repo-drift",
+          name: driftedLabel.name,
+          color: REQUIRED_REPOSITORY_LABELS[0].color,
+        })
+      );
+      expect(octokit.rest.issues.createLabel).toHaveBeenCalledTimes(REQUIRED_REPOSITORY_LABELS.length - 1);
+      expect(log.info).toHaveBeenCalledWith(
+        `[installation.created] Label bootstrap summary: reposProcessed=1, reposFailed=0, labelsCreated=${REQUIRED_REPOSITORY_LABELS.length - 1}, labelsRenamed=0, labelsUpdated=1, labelsSkipped=0`
       );
     });
 

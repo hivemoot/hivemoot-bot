@@ -6,10 +6,11 @@
  * - The /preflight command (on-demand readiness report)
  *
  * Conditions (hard gates — block merge-ready label):
- * 1. At least minApprovals approvals from trustedReviewers
- * 2. PR is not conflicting (`mergeable !== false`; `null` = not yet computed, allowed)
- * 3. All check runs on HEAD are completed with success/neutral/skipped
- * 4. All commit statuses on HEAD are success (legacy Status API)
+ * 1. PR is open and not merged
+ * 2. At least minApprovals approvals from trustedReviewers
+ * 3. PR is not conflicting (`mergeable !== false`; `null` = not yet computed, allowed)
+ * 4. All check runs on HEAD are completed with success/neutral/skipped
+ * 5. All commit statuses on HEAD are success (legacy Status API)
  *
  * Advisory checks (informational — do not block):
  * - PR has `implementation` label
@@ -98,7 +99,42 @@ export async function evaluatePreflightChecks(
   const { prs, ref, config, trustedReviewers } = params;
   const checks: PreflightCheckItem[] = [];
 
-  // 1. Approvals (hard gate)
+  // Fetch PR data upfront when not pre-provided (needed for state, mergeable, headSha)
+  let headSha: string;
+  let mergeable: boolean | null;
+  let prState: string | null = null;
+  let prMerged: boolean | null = null;
+  if (params.headSha) {
+    // Webhook path: headSha pre-fetched, PR is guaranteed open by webhook context
+    headSha = params.headSha;
+    mergeable = null;
+  } else {
+    const pr = await prs.get(ref);
+    headSha = pr.headSha;
+    mergeable = pr.mergeable;
+    prState = pr.state;
+    prMerged = pr.merged;
+  }
+
+  // 1. PR is open (hard gate)
+  // When headSha is pre-provided (webhook path), we skip this check because
+  // webhooks only fire on open PRs. For /preflight (on-demand), this prevents
+  // reporting "ready for merge" on closed or already-merged PRs.
+  if (prState !== null) {
+    const isOpen = prState === "open" && !prMerged;
+    checks.push({
+      name: "PR is open",
+      passed: isOpen,
+      severity: "hard",
+      detail: prMerged
+        ? "PR is already merged"
+        : prState !== "open"
+          ? `PR is ${prState}`
+          : "PR is open",
+    });
+  }
+
+  // 2. Approvals (hard gate)
   const approvers = await prs.getApproverLogins(ref);
   const trustedApprovers = trustedReviewers.filter((r) => approvers.has(r));
   const minApprovals = config?.minApprovals ?? 1;
@@ -112,18 +148,7 @@ export async function evaluatePreflightChecks(
       : `${trustedApprovers.length}/${minApprovals} trusted approvals`,
   });
 
-  // 2. Mergeable state (hard gate)
-  let headSha: string;
-  let mergeable: boolean | null;
-  if (params.headSha) {
-    headSha = params.headSha;
-    mergeable = null;
-  } else {
-    const pr = await prs.get(ref);
-    headSha = pr.headSha;
-    mergeable = pr.mergeable;
-  }
-
+  // 3. Mergeable state (hard gate)
   // mergeable === null means GitHub hasn't computed yet — treat as passing
   checks.push({
     name: "No merge conflicts",
@@ -136,11 +161,11 @@ export async function evaluatePreflightChecks(
         : "Branch is mergeable",
   });
 
-  // 3. CI status (hard gate, 2 API calls in parallel)
+  // 4. CI status (hard gate, 2 API calls in parallel)
   const ciResult = await evaluateCI(prs, ref, headSha);
   checks.push(ciResult);
 
-  // 4. Implementation label (advisory)
+  // 5. Implementation label (advisory)
   const labels = params.currentLabels ?? await prs.getLabels(ref);
   const hasImplementation = labels.some(l => isLabelMatch(l, LABELS.IMPLEMENTATION));
   checks.push({
@@ -152,7 +177,7 @@ export async function evaluatePreflightChecks(
       : "Missing `hivemoot:candidate` label",
   });
 
-  // 5. Merge-ready label (advisory)
+  // 6. Merge-ready label (advisory)
   const hasMergeReady = labels.some(l => isLabelMatch(l, LABELS.MERGE_READY));
   checks.push({
     name: "Merge-ready label",

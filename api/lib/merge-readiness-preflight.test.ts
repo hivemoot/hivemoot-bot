@@ -18,7 +18,7 @@ function createMockPrs(overrides: Partial<Record<keyof PROperations, unknown>> =
   return {
     getLabels: vi.fn().mockResolvedValue(["hivemoot:candidate", "hivemoot:merge-ready"]),
     getApproverLogins: vi.fn().mockResolvedValue(new Set(["alice"])),
-    get: vi.fn().mockResolvedValue({ headSha: "abc123", mergeable: true }),
+    get: vi.fn().mockResolvedValue({ headSha: "abc123", mergeable: true, state: "open", merged: false }),
     getCheckRunsForRef: vi.fn().mockResolvedValue({ totalCount: 0, checkRuns: [] }),
     getCombinedStatus: vi.fn().mockResolvedValue({ state: "pending", totalCount: 0 }),
     addLabels: vi.fn().mockResolvedValue(undefined),
@@ -50,14 +50,17 @@ describe("evaluatePreflightChecks", () => {
     it("should return all checks even when early ones fail", async () => {
       const prs = createMockPrs({
         getApproverLogins: vi.fn().mockResolvedValue(new Set<string>()),
-        get: vi.fn().mockResolvedValue({ headSha: "abc123", mergeable: false }),
+        get: vi.fn().mockResolvedValue({ headSha: "abc123", mergeable: false, state: "open", merged: false }),
         getLabels: vi.fn().mockResolvedValue([]),
       });
 
       const result = await evaluatePreflightChecks(buildParams({ prs }));
 
-      // All 5 checks should be present
-      expect(result.checks).toHaveLength(5);
+      // All 6 checks should be present (PR open + 3 hard + 2 advisory)
+      expect(result.checks).toHaveLength(6);
+
+      const prOpen = findCheck(result, "PR is open");
+      expect(prOpen?.passed).toBe(true);
 
       const approvals = findCheck(result, "Approved by trusted reviewers");
       expect(approvals?.passed).toBe(false);
@@ -73,6 +76,56 @@ describe("evaluatePreflightChecks", () => {
 
       const mergeLabel = findCheck(result, "Merge-ready label");
       expect(mergeLabel?.passed).toBe(false);
+    });
+  });
+
+  describe("PR state check", () => {
+    it("should pass when PR is open", async () => {
+      const result = await evaluatePreflightChecks(buildParams());
+
+      const check = findCheck(result, "PR is open");
+      expect(check?.passed).toBe(true);
+      expect(check?.severity).toBe("hard");
+      expect(check?.detail).toBe("PR is open");
+    });
+
+    it("should fail when PR is already merged", async () => {
+      const prs = createMockPrs({
+        get: vi.fn().mockResolvedValue({ headSha: "abc123", mergeable: true, state: "closed", merged: true }),
+      });
+      const result = await evaluatePreflightChecks(buildParams({ prs }));
+
+      const check = findCheck(result, "PR is open");
+      expect(check?.passed).toBe(false);
+      expect(check?.detail).toContain("already merged");
+    });
+
+    it("should fail when PR is closed but not merged", async () => {
+      const prs = createMockPrs({
+        get: vi.fn().mockResolvedValue({ headSha: "abc123", mergeable: null, state: "closed", merged: false }),
+      });
+      const result = await evaluatePreflightChecks(buildParams({ prs }));
+
+      const check = findCheck(result, "PR is open");
+      expect(check?.passed).toBe(false);
+      expect(check?.detail).toContain("closed");
+    });
+
+    it("should cause allHardChecksPassed to be false when PR is merged", async () => {
+      const prs = createMockPrs({
+        get: vi.fn().mockResolvedValue({ headSha: "abc123", mergeable: true, state: "closed", merged: true }),
+      });
+      const result = await evaluatePreflightChecks(buildParams({ prs }));
+
+      expect(result.allHardChecksPassed).toBe(false);
+    });
+
+    it("should not include PR state check when headSha is pre-provided (webhook path)", async () => {
+      const prs = createMockPrs();
+      const result = await evaluatePreflightChecks(buildParams({ prs, headSha: "pre-sha" }));
+
+      const check = findCheck(result, "PR is open");
+      expect(check).toBeUndefined(); // Not present in webhook path
     });
   });
 
@@ -123,7 +176,7 @@ describe("evaluatePreflightChecks", () => {
 
     it("should fail when mergeable is false", async () => {
       const prs = createMockPrs({
-        get: vi.fn().mockResolvedValue({ headSha: "abc123", mergeable: false }),
+        get: vi.fn().mockResolvedValue({ headSha: "abc123", mergeable: false, state: "open", merged: false }),
       });
       const result = await evaluatePreflightChecks(buildParams({ prs }));
 
@@ -134,7 +187,7 @@ describe("evaluatePreflightChecks", () => {
 
     it("should pass when mergeable is null (not yet computed)", async () => {
       const prs = createMockPrs({
-        get: vi.fn().mockResolvedValue({ headSha: "abc123", mergeable: null }),
+        get: vi.fn().mockResolvedValue({ headSha: "abc123", mergeable: null, state: "open", merged: false }),
       });
       const result = await evaluatePreflightChecks(buildParams({ prs }));
 

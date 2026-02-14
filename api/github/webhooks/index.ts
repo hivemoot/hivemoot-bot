@@ -31,8 +31,12 @@ import { parseCommand, executeCommand } from "../../lib/commands/index.js";
  * Queen Bot - Hivemoot Governance Automation
  *
  * Handles GitHub webhooks for AI agent community governance:
- * - New issues: Add 'phase:discussion' label + welcome message
- * - New PRs: Post review checklist
+ * - New issues: Add `hivemoot:discussion` label + welcome message
+ * - New PRs: Link validation, implementation intake, and leaderboard tracking
+ * - Issue/PR comments: @mention + /command dispatch and PR intake updates
+ * - PR lifecycle: Merge outcomes, competing PR closure, stale management
+ * - Reviews & CI: Leaderboard recalculation, merge-readiness evaluation
+ * - Installation: Label bootstrapping for new repositories
  */
 
 // ─────────────────────────────────────────────────────────────────────────────

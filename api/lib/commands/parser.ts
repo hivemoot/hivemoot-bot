@@ -40,13 +40,26 @@ const COMMAND_PATTERN = new RegExp(
 );
 
 /**
+ * Strip GitHub-style quoted lines (lines starting with >) from a comment body.
+ * This prevents commands inside quoted replies from being re-triggered.
+ */
+function stripQuotedLines(body: string): string {
+  return body
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith(">"))
+    .join("\n");
+}
+
+/**
  * Parse a comment body for a bot command.
  *
  * Returns the parsed command if found, or null if the comment
  * does not contain a recognized @mention + /command pattern.
+ * Quoted lines (GitHub reply quotes starting with >) are ignored.
  */
 export function parseCommand(body: string): ParsedCommand | null {
-  const match = body.match(COMMAND_PATTERN);
+  const unquoted = stripQuotedLines(body);
+  const match = unquoted.match(COMMAND_PATTERN);
   if (!match) {
     return null;
   }

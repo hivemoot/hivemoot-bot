@@ -349,6 +349,66 @@ describe("executeCommand", () => {
       const result = await executeCommand(ctx);
       expect(result.status).toBe("executed");
     });
+
+    it("should log when reaction fails", async () => {
+      const octokit = createMockOctokit();
+      octokit.rest.reactions.createForIssueComment
+        .mockRejectedValueOnce(new Error("Reaction failed"))
+        .mockResolvedValue({});
+
+      const ctx = createCtx({ octokit });
+      await executeCommand(ctx);
+
+      expect(ctx.log.error).toHaveBeenCalledWith(
+        expect.objectContaining({ content: "eyes" }),
+        expect.stringContaining("Failed to add eyes reaction"),
+      );
+    });
+
+    it("should not crash when rejection reply fails", async () => {
+      const octokit = createMockOctokit();
+      octokit.rest.issues.createComment.mockRejectedValue(new Error("Rate limited"));
+
+      const ctx = createCtx({
+        octokit,
+        issueLabels: [{ name: LABELS.VOTING }],
+      });
+      // Should complete without throwing even though reply() fails
+      const result = await executeCommand(ctx);
+      expect(result.status).toBe("rejected");
+    });
+
+    it("should log when rejection reply fails", async () => {
+      const octokit = createMockOctokit();
+      octokit.rest.issues.createComment.mockRejectedValue(new Error("Rate limited"));
+
+      const ctx = createCtx({
+        octokit,
+        issueLabels: [{ name: LABELS.VOTING }],
+      });
+      await executeCommand(ctx);
+
+      expect(ctx.log.error).toHaveBeenCalledWith(
+        expect.objectContaining({ issue: 42 }),
+        expect.stringContaining("Failed to post reply comment"),
+      );
+    });
+
+    it("should log when permission check fails", async () => {
+      const octokit = createMockOctokit();
+      octokit.rest.repos.getCollaboratorPermissionLevel.mockRejectedValue(
+        new Error("Token expired"),
+      );
+
+      const ctx = createCtx({ octokit });
+      const result = await executeCommand(ctx);
+
+      expect(result).toEqual({ status: "ignored" });
+      expect(ctx.log.error).toHaveBeenCalledWith(
+        expect.objectContaining({ user: "maintainer" }),
+        expect.stringContaining("Permission check failed"),
+      );
+    });
   });
 
   describe("legacy label support", () => {

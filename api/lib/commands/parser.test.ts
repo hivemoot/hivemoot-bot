@@ -102,4 +102,45 @@ describe("parseCommand", () => {
       expect(result).toEqual({ verb: "vote", freeText: undefined });
     });
   });
+
+  describe("quoted reply handling", () => {
+    it("should ignore commands inside GitHub-style quoted replies", () => {
+      const body = "> @queen /vote\nI disagree with this";
+      expect(parseCommand(body)).toBeNull();
+    });
+
+    it("should ignore commands in indented quotes", () => {
+      const body = "  > @queen /vote\nI disagree with this";
+      expect(parseCommand(body)).toBeNull();
+    });
+
+    it("should still match unquoted commands after quoted lines", () => {
+      const body = "> @queen /vote\nActually, let me do it.\n@queen /implement";
+      const result = parseCommand(body);
+      expect(result).toEqual({ verb: "implement", freeText: undefined });
+    });
+
+    it("should ignore multi-line quoted blocks", () => {
+      const body = "> @queen /vote\n> More context here\nJust a reply";
+      expect(parseCommand(body)).toBeNull();
+    });
+  });
+
+  describe("multi-command comments", () => {
+    it("should only match the first command when multiple are present", () => {
+      const body = "@queen /vote @queen /implement";
+      const result = parseCommand(body);
+      expect(result).toEqual({ verb: "vote", freeText: "@queen /implement" });
+    });
+
+    it("should match first command when multiple appear on separate lines", () => {
+      const body = "@queen /vote\n@queen /implement";
+      const result = parseCommand(body);
+      // First match wins; regex captures rest of first line as freeText (empty here
+      // since the second command is on a new line, but the regex's .+ is greedy
+      // within the line boundary set by the non-multiline mode)
+      expect(result).not.toBeNull();
+      expect(result!.verb).toBe("vote");
+    });
+  });
 });

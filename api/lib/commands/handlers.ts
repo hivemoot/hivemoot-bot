@@ -14,7 +14,7 @@ import type { IssueRef } from "../types.js";
  * Minimal interface for the octokit client needed by command handlers.
  * Uses the Probot context's octokit which has full REST API access.
  */
-interface CommandOctokit {
+export interface CommandOctokit {
   rest: {
     repos: {
       getCollaboratorPermissionLevel: (params: {
@@ -92,8 +92,13 @@ async function isAuthorized(ctx: CommandContext): Promise<boolean> {
       username: ctx.senderLogin,
     });
     return AUTHORIZED_PERMISSIONS.has(data.permission);
-  } catch {
-    // If we can't check permissions (e.g., user is not a collaborator), deny
+  } catch (error) {
+    // If we can't check permissions (e.g., user is not a collaborator), deny.
+    // Log so persistent failures (expired token, rate limit) are visible.
+    ctx.log.error(
+      { err: error, user: ctx.senderLogin, issue: ctx.issueNumber },
+      `Permission check failed for ${ctx.senderLogin} — denying command`,
+    );
     return false;
   }
 }
@@ -112,21 +117,34 @@ async function react(
       comment_id: ctx.commentId,
       content,
     });
-  } catch {
+  } catch (error) {
     // Reaction failure is non-critical — don't block command execution
+    ctx.log.error(
+      { err: error, commentId: ctx.commentId, content },
+      `Failed to add ${content} reaction — continuing`,
+    );
   }
 }
 
 /**
  * Post a reply comment on the issue.
+ * Failures are logged but do not propagate — the governance action may
+ * have already completed, so crashing the handler is worse than a missing comment.
  */
 async function reply(ctx: CommandContext, body: string): Promise<void> {
-  await ctx.octokit.rest.issues.createComment({
-    owner: ctx.owner,
-    repo: ctx.repo,
-    issue_number: ctx.issueNumber,
-    body,
-  });
+  try {
+    await ctx.octokit.rest.issues.createComment({
+      owner: ctx.owner,
+      repo: ctx.repo,
+      issue_number: ctx.issueNumber,
+      body,
+    });
+  } catch (error) {
+    ctx.log.error(
+      { err: error, issue: ctx.issueNumber },
+      `Failed to post reply comment on #${ctx.issueNumber} — continuing`,
+    );
+  }
 }
 
 /**
@@ -181,7 +199,7 @@ async function handleVote(ctx: CommandContext): Promise<CommandResult> {
  *
  * This is a fast-track command that moves an issue directly to
  * ready-to-implement, bypassing or concluding voting early.
- * Only valid from discussion or voting phases.
+ * Valid from: discussion, voting, extended-voting, or needs-human phases.
  */
 async function handleImplement(ctx: CommandContext): Promise<CommandResult> {
   if (ctx.isPullRequest) {

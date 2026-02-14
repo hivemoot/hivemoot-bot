@@ -146,7 +146,7 @@ describe("Queen Bot", () => {
         })
       );
       expect(log.info).toHaveBeenCalledWith(
-        `[installation.created] Label bootstrap summary: reposProcessed=1, reposFailed=0, labelsCreated=${REQUIRED_REPOSITORY_LABELS.length}, labelsRenamed=0, labelsSkipped=0`
+        `[installation.created] Label bootstrap summary: reposProcessed=1, reposFailed=0, labelsCreated=${REQUIRED_REPOSITORY_LABELS.length}, labelsRenamed=0, labelsUpdated=0, labelsSkipped=0`
       );
     });
 
@@ -182,7 +182,7 @@ describe("Queen Bot", () => {
         })
       );
       expect(log.info).toHaveBeenCalledWith(
-        `[installation_repositories.added] Label bootstrap summary: reposProcessed=1, reposFailed=0, labelsCreated=${REQUIRED_REPOSITORY_LABELS.length}, labelsRenamed=0, labelsSkipped=0`
+        `[installation_repositories.added] Label bootstrap summary: reposProcessed=1, reposFailed=0, labelsCreated=${REQUIRED_REPOSITORY_LABELS.length}, labelsRenamed=0, labelsUpdated=0, labelsSkipped=0`
       );
     });
 
@@ -221,7 +221,7 @@ describe("Queen Bot", () => {
         expect.objectContaining({ repo: "repo-d" })
       );
       expect(log.info).toHaveBeenCalledWith(
-        `[installation.created] Label bootstrap summary: reposProcessed=2, reposFailed=0, labelsCreated=${REQUIRED_REPOSITORY_LABELS.length * fallbackRepositories.length}, labelsRenamed=0, labelsSkipped=0`
+        `[installation.created] Label bootstrap summary: reposProcessed=2, reposFailed=0, labelsCreated=${REQUIRED_REPOSITORY_LABELS.length * fallbackRepositories.length}, labelsRenamed=0, labelsUpdated=0, labelsSkipped=0`
       );
     });
 
@@ -268,7 +268,7 @@ describe("Queen Bot", () => {
         REQUIRED_REPOSITORY_LABELS.length * 101
       );
       expect(log.info).toHaveBeenCalledWith(
-        `[installation.created] Label bootstrap summary: reposProcessed=101, reposFailed=0, labelsCreated=${REQUIRED_REPOSITORY_LABELS.length * 101}, labelsRenamed=0, labelsSkipped=0`
+        `[installation.created] Label bootstrap summary: reposProcessed=101, reposFailed=0, labelsCreated=${REQUIRED_REPOSITORY_LABELS.length * 101}, labelsRenamed=0, labelsUpdated=0, labelsSkipped=0`
       );
     });
 
@@ -303,7 +303,7 @@ describe("Queen Bot", () => {
         expect.objectContaining({ repo: "repo-e" })
       );
       expect(log.info).toHaveBeenCalledWith(
-        `[installation_repositories.added] Label bootstrap summary: reposProcessed=1, reposFailed=0, labelsCreated=${REQUIRED_REPOSITORY_LABELS.length}, labelsRenamed=0, labelsSkipped=0`
+        `[installation_repositories.added] Label bootstrap summary: reposProcessed=1, reposFailed=0, labelsCreated=${REQUIRED_REPOSITORY_LABELS.length}, labelsRenamed=0, labelsUpdated=0, labelsSkipped=0`
       );
     });
 
@@ -341,7 +341,7 @@ describe("Queen Bot", () => {
 
       expect(log.error).toHaveBeenCalledTimes(1);
       expect(log.info).toHaveBeenCalledWith(
-        `[installation.created] Label bootstrap summary: reposProcessed=2, reposFailed=1, labelsCreated=${REQUIRED_REPOSITORY_LABELS.length}, labelsRenamed=0, labelsSkipped=0`
+        `[installation.created] Label bootstrap summary: reposProcessed=2, reposFailed=1, labelsCreated=${REQUIRED_REPOSITORY_LABELS.length}, labelsRenamed=0, labelsUpdated=0, labelsSkipped=0`
       );
     });
   });

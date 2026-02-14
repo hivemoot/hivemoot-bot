@@ -344,15 +344,13 @@ async function handlePreflight(ctx: CommandContext): Promise<CommandResult> {
         body += `### Proposed Commit Message\n\n`;
         body += "```\n" + formatted + "\n```\n\n";
         body += `Copy this into the squash merge dialog, or edit as needed.\n\n`;
-      } else {
-        body += `### Commit Message\n\n`;
-        body += `LLM commit message generation unavailable: ${result.reason}\n\n`;
       }
+      // When LLM is unavailable (not configured, etc.), silently omit
+      // the commit message section rather than exposing internal details.
     } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      ctx.log.error({ err: error }, `Commit message generation failed: ${reason}`);
+      ctx.log.error({ err: error }, `Commit message generation failed: ${error instanceof Error ? error.message : String(error)}`);
       body += `### Commit Message\n\n`;
-      body += `Commit message generation failed: ${reason}\n\n`;
+      body += `Commit message generation encountered an error.\n\n`;
     }
   } else {
     body += `### Commit Message\n\n`;

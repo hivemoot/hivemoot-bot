@@ -201,4 +201,40 @@ describe("/preflight command", () => {
     expect(body).toContain("2/3 hard checks passed");
     expect(body).toContain("Review the failing checks");
   });
+
+  it("should omit commit message section when LLM is not configured", async () => {
+    const { CommitMessageGenerator } = await import("../llm/commit-message.js");
+    vi.mocked(CommitMessageGenerator).mockImplementationOnce(() => ({
+      generate: vi.fn().mockResolvedValue({
+        success: false,
+        reason: "LLM not configured",
+      }),
+    }) as any);
+
+    const ctx = createPRCtx();
+    await executeCommand(ctx);
+
+    const body = (ctx.octokit.rest.issues.createComment.mock.calls[0][0] as { body: string }).body;
+    expect(body).toContain("Preflight Check");
+    expect(body).not.toContain("Commit Message");
+    expect(body).not.toContain("LLM");
+    expect(body).not.toContain("not configured");
+    expect(body).toContain("3/3 hard checks passed");
+    expect(body).toContain("ready for merge");
+  });
+
+  it("should show generic error without details when commit generation throws", async () => {
+    const { CommitMessageGenerator } = await import("../llm/commit-message.js");
+    vi.mocked(CommitMessageGenerator).mockImplementationOnce(() => ({
+      generate: vi.fn().mockRejectedValue(new Error("ANTHROPIC_API_KEY missing")),
+    }) as any);
+
+    const ctx = createPRCtx();
+    await executeCommand(ctx);
+
+    const body = (ctx.octokit.rest.issues.createComment.mock.calls[0][0] as { body: string }).body;
+    expect(body).toContain("encountered an error");
+    expect(body).not.toContain("ANTHROPIC_API_KEY");
+    expect(body).not.toContain("missing");
+  });
 });

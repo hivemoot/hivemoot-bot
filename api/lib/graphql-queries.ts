@@ -49,7 +49,7 @@ interface LinkedIssuesResponse {
   repository: {
     pullRequest: {
       closingIssuesReferences: {
-        nodes: LinkedIssue[];
+        nodes: Array<LinkedIssue | null>;
       };
     } | null;
   };
@@ -70,7 +70,11 @@ export async function getLinkedIssues(
     { owner, repo, pr: prNumber }
   );
 
-  return response.repository.pullRequest?.closingIssuesReferences.nodes ?? [];
+  return (
+    response.repository.pullRequest?.closingIssuesReferences.nodes.filter(
+      (node): node is LinkedIssue => node !== null
+    ) ?? []
+  );
 }
 
 // ───────────────────────────────────────────────────────────────────────────────

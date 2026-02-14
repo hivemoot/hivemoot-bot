@@ -43,6 +43,14 @@ describe("types utilities", () => {
       const issue = createLinkedIssue(1, ["phase:ready-to-implement"]);
       expect(hasLabel(issue, "phase:ready-to-implement")).toBe(true);
     });
+
+    it("should ignore null label nodes", () => {
+      const issue = createLinkedIssue(1, ["bug"]);
+      issue.labels.nodes.unshift(null);
+
+      expect(hasLabel(issue, "bug")).toBe(true);
+      expect(hasLabel(issue, "phase:discussion")).toBe(false);
+    });
   });
 
   describe("filterByLabel", () => {

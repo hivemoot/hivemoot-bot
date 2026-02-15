@@ -146,7 +146,7 @@ export class CommitMessageGenerator {
               }
               return repaired;
             },
-            maxTokens: 500,
+            maxTokens: config.maxTokens,
             temperature: LLM_DEFAULTS.temperature,
             maxRetries: 0,
           }),

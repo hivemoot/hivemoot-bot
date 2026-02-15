@@ -67,7 +67,7 @@ describe("CommitMessageGenerator", () => {
     } as never);
 
     const mockModel = {} as never;
-    const mockConfig = { provider: "openai" as const, model: "gpt-4o-mini", maxTokens: 500 };
+    const mockConfig = { provider: "openai" as const, model: "gpt-4o-mini", maxTokens: 1200 };
 
     const generator = new CommitMessageGenerator({ logger: { info: vi.fn(), error: vi.fn(), debug: vi.fn() } });
     const result = await generator.generate(sampleContext, { model: mockModel, config: mockConfig });
@@ -79,6 +79,7 @@ describe("CommitMessageGenerator", () => {
     }
     expect(generateObject).toHaveBeenCalledWith(
       expect.objectContaining({
+        maxTokens: 1200,
         experimental_repairText: expect.any(Function),
       })
     );

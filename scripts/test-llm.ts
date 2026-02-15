@@ -8,6 +8,9 @@
  *   GOOGLE_API_KEY=... npx tsx scripts/test-llm.ts
  *
  * Or set LLM_PROVIDER/LLM_MODEL/GOOGLE_API_KEY in env.
+ *
+ * This is an operator troubleshooting tool (manual use only).
+ * It is not part of CI and has no production/runtime effect.
  */
 
 import { generateObject } from "ai";

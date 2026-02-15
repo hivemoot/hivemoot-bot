@@ -170,6 +170,16 @@ describe("getLinkedIssues", () => {
 
     expect(result[0].labels.nodes).toHaveLength(3);
   });
+
+  it("should propagate errors when client.graphql rejects", async () => {
+    vi.mocked(mockClient.graphql).mockRejectedValue(
+      new Error("API rate limit exceeded")
+    );
+
+    await expect(
+      getLinkedIssues(mockClient, "owner", "repo", 42)
+    ).rejects.toThrow("API rate limit exceeded");
+  });
 });
 
 describe("getPRBodyLastEditedAt", () => {
@@ -257,6 +267,16 @@ describe("getPRBodyLastEditedAt", () => {
       expect.stringContaining("getPRBodyLastEdited"),
       { owner: "test-owner", repo: "test-repo", pr: 123 }
     );
+  });
+
+  it("should propagate errors when client.graphql rejects", async () => {
+    vi.mocked(mockClient.graphql).mockRejectedValue(
+      new Error("Bad credentials")
+    );
+
+    await expect(
+      getPRBodyLastEditedAt(mockClient, "owner", "repo", 42)
+    ).rejects.toThrow("Bad credentials");
   });
 });
 
@@ -1469,5 +1489,15 @@ describe("getOpenPRsForIssue", () => {
       (call) => (call[0] as string).includes("getLinkedIssues")
     );
     expect(linkedIssuesCalls).toHaveLength(2);
+  });
+
+  it("should propagate errors when the initial cross-reference query rejects", async () => {
+    vi.mocked(mockClient.graphql).mockRejectedValue(
+      new Error("Network timeout")
+    );
+
+    await expect(
+      getOpenPRsForIssue(mockClient, "owner", "repo", 123)
+    ).rejects.toThrow("Network timeout");
   });
 });

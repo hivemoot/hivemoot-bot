@@ -120,11 +120,28 @@ describe("docs/CONFIG.md contract", () => {
     for (const envVar of [
       "APP_ID",
       "PRIVATE_KEY",
+      "APP_PRIVATE_KEY",
       "WEBHOOK_SECRET",
       "HIVEMOOT_DISCUSSION_DURATION_MINUTES",
       "HIVEMOOT_VOTING_DURATION_MINUTES",
       "HIVEMOOT_PR_STALE_DAYS",
       "HIVEMOOT_MAX_PRS_PER_ISSUE",
+    ]) {
+      it(`documents ${envVar}`, () => {
+        expect(configDoc).toContain(envVar);
+      });
+    }
+  });
+
+  describe("documents LLM environment variables", () => {
+    for (const envVar of [
+      "LLM_PROVIDER",
+      "LLM_MODEL",
+      "LLM_MAX_TOKENS",
+      "OPENAI_API_KEY",
+      "ANTHROPIC_API_KEY",
+      "GOOGLE_API_KEY",
+      "MISTRAL_API_KEY",
     ]) {
       it(`documents ${envVar}`, () => {
         expect(configDoc).toContain(envVar);

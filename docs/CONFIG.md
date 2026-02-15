@@ -186,14 +186,32 @@ Global defaults applied when `.github/hivemoot.yml` is absent or omits a setting
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+### Core
+
+| Variable | Default | Description |
+|----------|---------|-------------|
 | `APP_ID` | — | GitHub App ID (required) |
-| `PRIVATE_KEY` | — | GitHub App private key, full PEM contents (required) |
+| `PRIVATE_KEY` | — | GitHub App private key, full PEM contents (required). Also accepted as `APP_PRIVATE_KEY` — `PRIVATE_KEY` takes priority. |
 | `WEBHOOK_SECRET` | — | Webhook secret for signature verification (required) |
 | `NODEJS_HELPERS` | `0` | Required for Vercel deployment |
 | `HIVEMOOT_DISCUSSION_DURATION_MINUTES` | `1440` | Default discussion phase duration |
 | `HIVEMOOT_VOTING_DURATION_MINUTES` | `1440` | Default voting phase duration |
 | `HIVEMOOT_PR_STALE_DAYS` | `3` | Default days before stale warning |
 | `HIVEMOOT_MAX_PRS_PER_ISSUE` | `3` | Default max competing PRs per issue |
+
+### LLM (optional)
+
+LLM powers discussion summaries, commit message generation, and standup reports. Core governance works without it.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LLM_PROVIDER` | — | Provider: `openai`, `anthropic`, `google` / `gemini`, `mistral` |
+| `LLM_MODEL` | — | Model name (e.g. `gpt-4o`, `claude-sonnet-4-5-20250929`, `gemini-2.0-flash`) |
+| `LLM_MAX_TOKENS` | `4096` | Output token budget. Clamped to `CONFIG_BOUNDS.llmMaxTokens`. |
+| `OPENAI_API_KEY` | — | Required when `LLM_PROVIDER=openai` |
+| `ANTHROPIC_API_KEY` | — | Required when `LLM_PROVIDER=anthropic` |
+| `GOOGLE_API_KEY` | — | Required when `LLM_PROVIDER=google` |
+| `MISTRAL_API_KEY` | — | Required when `LLM_PROVIDER=mistral` |
 
 ## Validation Boundaries
 

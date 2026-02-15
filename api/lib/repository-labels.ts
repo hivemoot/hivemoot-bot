@@ -11,6 +11,8 @@ import { hasPaginateIterator, validateClient } from "./client-validation.js";
 
 interface ExistingLabel {
   name: string;
+  color: string;
+  description: string | null;
 }
 
 export interface RepositoryLabelClient {
@@ -61,6 +63,7 @@ function isValidRepositoryLabelClient(obj: unknown): obj is RepositoryLabelClien
 export interface EnsureLabelsResult {
   created: number;
   renamed: number;
+  updated: number;
   skipped: number;
   renamedLabels: Array<{ from: string; to: string }>;
 }
@@ -87,6 +90,18 @@ function buildReverseLegacyMap(): Map<string, string[]> {
   return reverse;
 }
 
+/**
+ * Check if an existing label's color or description differs from the required definition.
+ * Color comparison strips leading '#' and is case-insensitive (GitHub normalises to lowercase hex).
+ */
+function needsUpdate(existing: ExistingLabel, required: RepositoryLabelDefinition): boolean {
+  const existingColor = existing.color.replace(/^#/, "").toLowerCase();
+  const requiredColor = required.color.replace(/^#/, "").toLowerCase();
+  if (existingColor !== requiredColor) return true;
+  if ((existing.description ?? "") !== (required.description ?? "")) return true;
+  return false;
+}
+
 export class RepositoryLabelService {
   constructor(
     private client: RepositoryLabelClient
@@ -104,17 +119,31 @@ export class RepositoryLabelService {
     repo: string,
     requiredLabels: readonly RepositoryLabelDefinition[] = REQUIRED_REPOSITORY_LABELS
   ): Promise<EnsureLabelsResult> {
-    const existingLabels = await this.getExistingLabelNames(owner, repo);
+    const existingLabels = await this.getExistingLabels(owner, repo);
     const reverseLegacy = buildReverseLegacyMap();
     let created = 0;
     let renamed = 0;
+    let updated = 0;
     let skipped = 0;
     const renamedLabels: Array<{ from: string; to: string }> = [];
 
     for (const label of requiredLabels) {
       const key = label.name.toLowerCase();
-      if (existingLabels.has(key)) {
-        skipped++;
+      const existing = existingLabels.get(key);
+      if (existing) {
+        // Label exists — check if color or description need repair
+        if (needsUpdate(existing, label)) {
+          await this.client.rest.issues.updateLabel({
+            owner,
+            repo,
+            name: existing.name,
+            color: label.color,
+            description: label.description,
+          });
+          updated++;
+        } else {
+          skipped++;
+        }
         continue;
       }
 
@@ -133,14 +162,14 @@ export class RepositoryLabelService {
             description: label.description,
           });
           existingLabels.delete(foundLegacy.toLowerCase());
-          existingLabels.add(key);
+          existingLabels.set(key, { name: label.name, color: label.color, description: label.description ?? null });
           renamed++;
           renamedLabels.push({ from: foundLegacy, to: label.name });
           continue;
         } catch (error) {
           // If rename fails (e.g., concurrent rename), fall through to create
           if ((error as { status?: number }).status === 422) {
-            existingLabels.add(key);
+            existingLabels.set(key, { name: label.name, color: label.color, description: label.description ?? null });
             skipped++;
             continue;
           }
@@ -156,12 +185,12 @@ export class RepositoryLabelService {
           color: label.color,
           description: label.description,
         });
-        existingLabels.add(key);
+        existingLabels.set(key, { name: label.name, color: label.color, description: label.description ?? null });
         created++;
       } catch (error) {
         // Label may have been created concurrently by another process
         if ((error as { status?: number }).status === 422) {
-          existingLabels.add(key);
+          existingLabels.set(key, { name: label.name, color: label.color, description: label.description ?? null });
           skipped++;
           continue;
         }
@@ -169,10 +198,10 @@ export class RepositoryLabelService {
       }
     }
 
-    return { created, renamed, skipped, renamedLabels };
+    return { created, renamed, updated, skipped, renamedLabels };
   }
 
-  private async getExistingLabelNames(owner: string, repo: string): Promise<Set<string>> {
+  private async getExistingLabels(owner: string, repo: string): Promise<Map<string, ExistingLabel>> {
     const iterator = this.client.paginate.iterator<ExistingLabel>(
       this.client.rest.issues.listLabelsForRepo,
       {
@@ -182,10 +211,10 @@ export class RepositoryLabelService {
       }
     );
 
-    const existingLabels = new Set<string>();
+    const existingLabels = new Map<string, ExistingLabel>();
     for await (const { data } of iterator) {
       for (const label of data) {
-        existingLabels.add(label.name.toLowerCase());
+        existingLabels.set(label.name.toLowerCase(), label);
       }
     }
     return existingLabels;

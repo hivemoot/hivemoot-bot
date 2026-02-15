@@ -17,6 +17,7 @@ import {
   createStandupMetadata,
   generateMetadataTag,
 } from "./bot-comments.js";
+import { repairMalformedJsonText } from "./llm/json-repair.js";
 import { createModelFromEnv } from "./llm/provider.js";
 import { STANDUP_SYSTEM_PROMPT, buildStandupUserPrompt } from "./llm/prompts.js";
 import { withLLMRetry } from "./llm/retry.js";
@@ -728,6 +729,13 @@ export async function generateStandupLLMContent(
           schema: StandupOutputSchema,
           system: STANDUP_SYSTEM_PROMPT,
           prompt: buildStandupUserPrompt(data),
+          experimental_repairText: async (args) => {
+            const repaired = await repairMalformedJsonText(args);
+            if (repaired !== null) {
+              logger.info(`Repaired malformed LLM JSON output (error: ${args.error.message})`);
+            }
+            return repaired;
+          },
           maxTokens: config.maxTokens,
           temperature: 0.4,
           maxRetries: 0, // Disable SDK retry; our wrapper handles rate-limits

@@ -10,6 +10,7 @@ import type { LanguageModelV1 } from "ai";
 
 import type { Logger } from "../logger.js";
 import { logger as defaultLogger } from "../logger.js";
+import { repairMalformedJsonText } from "./json-repair.js";
 import { createModelFromEnv } from "./provider.js";
 import { withLLMRetry } from "./retry.js";
 import type { CommitMessage, LLMConfig, PRContext } from "./types.js";
@@ -95,7 +96,11 @@ function buildCommitMessagePrompt(context: PRContext): string {
 
 export type CommitMessageResult =
   | { success: true; message: CommitMessage }
-  | { success: false; reason: string };
+  | {
+      success: false;
+      reason: string;
+      kind: "not_configured" | "generation_failed";
+    };
 
 export interface CommitMessageGeneratorConfig {
   logger?: Logger;
@@ -115,7 +120,11 @@ export class CommitMessageGenerator {
     try {
       const modelResult = preCreatedModel ?? createModelFromEnv();
       if (!modelResult) {
-        return { success: false, reason: "LLM not configured" };
+        return {
+          success: false,
+          reason: "LLM not configured",
+          kind: "not_configured",
+        };
       }
 
       const { model, config } = modelResult;
@@ -130,7 +139,14 @@ export class CommitMessageGenerator {
             schema: CommitMessageSchema,
             system: COMMIT_MESSAGE_SYSTEM_PROMPT,
             prompt: buildCommitMessagePrompt(context),
-            maxTokens: 500,
+            experimental_repairText: async (args) => {
+              const repaired = await repairMalformedJsonText(args);
+              if (repaired !== null) {
+                this.logger.info(`Repaired malformed LLM JSON output (error: ${args.error.message})`);
+              }
+              return repaired;
+            },
+            maxTokens: config.maxTokens,
             temperature: LLM_DEFAULTS.temperature,
             maxRetries: 0,
           }),
@@ -150,7 +166,7 @@ export class CommitMessageGenerator {
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       this.logger.error(`Commit message generation failed: ${reason}`);
-      return { success: false, reason };
+      return { success: false, reason, kind: "generation_failed" };
     }
   }
 }

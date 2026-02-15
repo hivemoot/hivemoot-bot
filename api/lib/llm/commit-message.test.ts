@@ -41,7 +41,11 @@ describe("CommitMessageGenerator", () => {
     const generator = new CommitMessageGenerator({ logger: { info: vi.fn(), error: vi.fn(), debug: vi.fn() } });
     const result = await generator.generate(sampleContext);
 
-    expect(result).toEqual({ success: false, reason: "LLM not configured" });
+    expect(result).toEqual({
+      success: false,
+      reason: "LLM not configured",
+      kind: "not_configured",
+    });
   });
 
   it("should succeed when pre-created model is provided", async () => {
@@ -63,7 +67,7 @@ describe("CommitMessageGenerator", () => {
     } as never);
 
     const mockModel = {} as never;
-    const mockConfig = { provider: "openai" as const, model: "gpt-4o-mini", maxTokens: 500 };
+    const mockConfig = { provider: "openai" as const, model: "gpt-4o-mini", maxTokens: 1200 };
 
     const generator = new CommitMessageGenerator({ logger: { info: vi.fn(), error: vi.fn(), debug: vi.fn() } });
     const result = await generator.generate(sampleContext, { model: mockModel, config: mockConfig });
@@ -73,6 +77,53 @@ describe("CommitMessageGenerator", () => {
       expect(result.message.subject).toBe("Add merge-readiness evaluation for PRs");
       expect(result.message.body).toContain("merge-ready label");
     }
+    expect(generateObject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        maxTokens: 1200,
+        experimental_repairText: expect.any(Function),
+      })
+    );
+  });
+
+  it("should log when repair hook successfully repairs malformed JSON", async () => {
+    const { generateObject } = await import("ai");
+    vi.mocked(generateObject).mockResolvedValueOnce({
+      object: { subject: "Add feature", body: "Implements feature." },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+      finishReason: "stop",
+      warnings: [],
+      rawResponse: undefined,
+      response: { id: "test", timestamp: new Date(), modelId: "test-model" },
+      request: {},
+      toJsonResponse: vi.fn(),
+      experimental_providerMetadata: {},
+      providerMetadata: {},
+    } as never);
+
+    const mockModel = {} as never;
+    const mockConfig = { provider: "openai" as const, model: "gpt-4o-mini", maxTokens: 500 };
+    const loggerSpy = { info: vi.fn(), error: vi.fn(), debug: vi.fn() };
+
+    const generator = new CommitMessageGenerator({ logger: loggerSpy });
+    await generator.generate(sampleContext, { model: mockModel, config: mockConfig });
+
+    const callArgs = vi.mocked(generateObject).mock.calls[0][0] as Record<string, unknown>;
+    const repairFn = callArgs.experimental_repairText as (args: { text: string; error: { message: string } }) => Promise<string | null>;
+
+    const repaired = await repairFn({
+      text: "```json\n{\"subject\":\"Fix\",\"body\":\"Why\"}\n```",
+      error: { message: "JSON parsing failed" },
+    });
+    expect(repaired).toBe("{\"subject\":\"Fix\",\"body\":\"Why\"}");
+    expect(loggerSpy.info).toHaveBeenCalledWith(
+      expect.stringContaining("Repaired malformed LLM JSON output")
+    );
+
+    const unchanged = await repairFn({
+      text: "{\"subject\":\"Fix\",\"body\":\"Why\"}",
+      error: { message: "JSON parsing failed" },
+    });
+    expect(unchanged).toBeNull();
   });
 
   it("should truncate subject line to 72 characters", async () => {
@@ -116,7 +167,11 @@ describe("CommitMessageGenerator", () => {
     const generator = new CommitMessageGenerator({ logger: { info: vi.fn(), error: vi.fn(), debug: vi.fn() } });
     const result = await generator.generate(sampleContext, { model: mockModel, config: mockConfig });
 
-    expect(result).toEqual({ success: false, reason: "API rate limited" });
+    expect(result).toEqual({
+      success: false,
+      reason: "API rate limited",
+      kind: "generation_failed",
+    });
   });
 });
 

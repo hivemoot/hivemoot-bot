@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { GovernanceService } from "../../lib/governance.js";
 import { createIssueOperations } from "../../lib/github-client.js";
+import { getLinkedIssues } from "../../lib/graphql-queries.js";
+import { processImplementationIntake, recalculateLeaderboardForPR } from "../../lib/implementation-intake.js";
+import { evaluateMergeReadiness, loadRepositoryConfig } from "../../lib/index.js";
 import { LABELS, MESSAGES, REQUIRED_REPOSITORY_LABELS } from "../../config.js";
 import type { IssueRef } from "../../lib/types.js";
 import type { IncomingMessage, ServerResponse } from "http";
@@ -22,6 +25,37 @@ vi.mock("../../lib/env-validation.js", () => ({
 vi.mock("../../lib/llm/provider.js", () => ({
   getLLMReadiness: vi.fn(() => ({ ready: true })),
 }));
+
+vi.mock("../../lib/graphql-queries.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../lib/graphql-queries.js")>();
+  return {
+    ...actual,
+    getLinkedIssues: vi.fn().mockResolvedValue([]),
+  };
+});
+
+vi.mock("../../lib/implementation-intake.js", () => ({
+  processImplementationIntake: vi.fn().mockResolvedValue(undefined),
+  recalculateLeaderboardForPR: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("../../lib/index.js", async () => {
+  const actual = await vi.importActual<typeof import("../../lib/index.js")>("../../lib/index.js");
+  return {
+    ...actual,
+    loadRepositoryConfig: vi.fn().mockResolvedValue({
+      governance: {
+        pr: {
+          maxPRsPerIssue: 3,
+          trustedReviewers: [],
+          intake: {},
+          mergeReady: {},
+        },
+      },
+    }),
+    evaluateMergeReadiness: vi.fn().mockResolvedValue(undefined),
+  };
+});
 
 /**
  * Tests for Queen Bot webhook handlers
@@ -69,7 +103,7 @@ function createWebhookHarness() {
 }
 
 function createInstallationOctokit(options?: {
-  existingLabels?: Array<{ name: string }>;
+  existingLabels?: Array<{ name: string; color?: string; description?: string | null }>;
   fallbackRepositories?: Array<{ name: string; full_name: string; owner?: { login?: string } | null }>;
   fallbackRepositoryPages?: Array<Array<{ name: string; full_name: string; owner?: { login?: string } | null }>>;
   createLabelImpl?: (params: {
@@ -151,7 +185,55 @@ describe("Queen Bot", () => {
         })
       );
       expect(log.info).toHaveBeenCalledWith(
-        `[installation.created] Label bootstrap summary: reposProcessed=1, reposFailed=0, labelsCreated=${REQUIRED_REPOSITORY_LABELS.length}, labelsRenamed=0, labelsSkipped=0`
+        `[installation.created] Label bootstrap summary: reposProcessed=1, reposFailed=0, labelsCreated=${REQUIRED_REPOSITORY_LABELS.length}, labelsRenamed=0, labelsUpdated=0, labelsSkipped=0`
+      );
+    });
+
+    it("should update labels with drifted colors during bootstrap", async () => {
+      const { handlers } = createWebhookHarness();
+      const handler = handlers.get("installation.created");
+      expect(handler).toBeDefined();
+
+      // One label exists with wrong color (gray default from auto-creation)
+      const driftedLabel = {
+        name: REQUIRED_REPOSITORY_LABELS[0].name,
+        color: "ededed",
+        description: REQUIRED_REPOSITORY_LABELS[0].description ?? null,
+      };
+      const octokit = createInstallationOctokit({
+        existingLabels: [driftedLabel],
+      });
+      const log = {
+        info: vi.fn(),
+        error: vi.fn(),
+      };
+      await handler!({
+        octokit,
+        log,
+        payload: {
+          repositories: [
+            {
+              owner: { login: "hivemoot" },
+              name: "repo-drift",
+              full_name: "hivemoot/repo-drift",
+            },
+          ],
+        },
+      });
+
+      // The drifted label should be updated, the rest created
+      expect(octokit.rest.issues.updateLabel).toHaveBeenCalledTimes(1);
+      expect(octokit.rest.issues.updateLabel).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: "hivemoot",
+          repo: "repo-drift",
+          name: driftedLabel.name,
+          color: REQUIRED_REPOSITORY_LABELS[0].color,
+        })
+      );
+      expect(octokit.rest.issues.createLabel).toHaveBeenCalledTimes(REQUIRED_REPOSITORY_LABELS.length - 1);
+      expect(log.info).toHaveBeenCalledWith(
+        `[installation.created] Label bootstrap summary: reposProcessed=1, reposFailed=0, labelsCreated=${REQUIRED_REPOSITORY_LABELS.length - 1}, labelsRenamed=0, labelsUpdated=1, labelsSkipped=0`
       );
     });
 
@@ -187,7 +269,7 @@ describe("Queen Bot", () => {
         })
       );
       expect(log.info).toHaveBeenCalledWith(
-        `[installation_repositories.added] Label bootstrap summary: reposProcessed=1, reposFailed=0, labelsCreated=${REQUIRED_REPOSITORY_LABELS.length}, labelsRenamed=0, labelsSkipped=0`
+        `[installation_repositories.added] Label bootstrap summary: reposProcessed=1, reposFailed=0, labelsCreated=${REQUIRED_REPOSITORY_LABELS.length}, labelsRenamed=0, labelsUpdated=0, labelsSkipped=0`
       );
     });
 
@@ -226,7 +308,7 @@ describe("Queen Bot", () => {
         expect.objectContaining({ repo: "repo-d" })
       );
       expect(log.info).toHaveBeenCalledWith(
-        `[installation.created] Label bootstrap summary: reposProcessed=2, reposFailed=0, labelsCreated=${REQUIRED_REPOSITORY_LABELS.length * fallbackRepositories.length}, labelsRenamed=0, labelsSkipped=0`
+        `[installation.created] Label bootstrap summary: reposProcessed=2, reposFailed=0, labelsCreated=${REQUIRED_REPOSITORY_LABELS.length * fallbackRepositories.length}, labelsRenamed=0, labelsUpdated=0, labelsSkipped=0`
       );
     });
 
@@ -273,7 +355,7 @@ describe("Queen Bot", () => {
         REQUIRED_REPOSITORY_LABELS.length * 101
       );
       expect(log.info).toHaveBeenCalledWith(
-        `[installation.created] Label bootstrap summary: reposProcessed=101, reposFailed=0, labelsCreated=${REQUIRED_REPOSITORY_LABELS.length * 101}, labelsRenamed=0, labelsSkipped=0`
+        `[installation.created] Label bootstrap summary: reposProcessed=101, reposFailed=0, labelsCreated=${REQUIRED_REPOSITORY_LABELS.length * 101}, labelsRenamed=0, labelsUpdated=0, labelsSkipped=0`
       );
     });
 
@@ -308,7 +390,7 @@ describe("Queen Bot", () => {
         expect.objectContaining({ repo: "repo-e" })
       );
       expect(log.info).toHaveBeenCalledWith(
-        `[installation_repositories.added] Label bootstrap summary: reposProcessed=1, reposFailed=0, labelsCreated=${REQUIRED_REPOSITORY_LABELS.length}, labelsRenamed=0, labelsSkipped=0`
+        `[installation_repositories.added] Label bootstrap summary: reposProcessed=1, reposFailed=0, labelsCreated=${REQUIRED_REPOSITORY_LABELS.length}, labelsRenamed=0, labelsUpdated=0, labelsSkipped=0`
       );
     });
 
@@ -346,7 +428,7 @@ describe("Queen Bot", () => {
 
       expect(log.error).toHaveBeenCalledTimes(1);
       expect(log.info).toHaveBeenCalledWith(
-        `[installation.created] Label bootstrap summary: reposProcessed=2, reposFailed=1, labelsCreated=${REQUIRED_REPOSITORY_LABELS.length}, labelsRenamed=0, labelsSkipped=0`
+        `[installation.created] Label bootstrap summary: reposProcessed=2, reposFailed=1, labelsCreated=${REQUIRED_REPOSITORY_LABELS.length}, labelsRenamed=0, labelsUpdated=0, labelsSkipped=0`
       );
     });
   });
@@ -836,6 +918,234 @@ describe("Queen Bot", () => {
       });
 
       expect(octokit.graphql).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("pull_request_review handlers", () => {
+    const createReviewOctokit = () => ({
+      rest: {
+        pulls: {
+          get: vi.fn().mockResolvedValue({
+            data: {
+              number: 1,
+              state: "open",
+              merged: false,
+              created_at: "2026-01-01T00:00:00Z",
+              updated_at: "2026-01-01T00:00:00Z",
+              user: { login: "author" },
+              head: { sha: "abc123" },
+              mergeable: true,
+            },
+          }),
+          update: vi.fn().mockResolvedValue({}),
+          listReviews: vi.fn().mockResolvedValue({ data: [] }),
+          listCommits: vi.fn().mockResolvedValue({ data: [] }),
+          listReviewComments: vi.fn().mockResolvedValue({ data: [] }),
+        },
+        issues: {
+          get: vi.fn().mockResolvedValue({ data: { reactions: { "+1": 0, "-1": 0, confused: 0 } } }),
+          addLabels: vi.fn().mockResolvedValue({}),
+          removeLabel: vi.fn().mockResolvedValue({}),
+          createComment: vi.fn().mockResolvedValue({}),
+          update: vi.fn().mockResolvedValue({}),
+          listForRepo: vi.fn().mockResolvedValue({ data: [] }),
+          listEventsForTimeline: vi.fn().mockResolvedValue({ data: [] }),
+          listComments: vi.fn().mockResolvedValue({ data: [] }),
+          lock: vi.fn().mockResolvedValue({}),
+          unlock: vi.fn().mockResolvedValue({}),
+        },
+        checks: {
+          listForRef: vi.fn().mockResolvedValue({ data: { total_count: 0, check_runs: [] } }),
+        },
+        repos: {
+          getCombinedStatusForRef: vi.fn().mockResolvedValue({
+            data: {
+              state: "success",
+              total_count: 0,
+              statuses: [],
+            },
+          }),
+        },
+        reactions: {
+          listForIssueComment: vi.fn().mockResolvedValue({ data: [] }),
+          listForIssue: vi.fn().mockResolvedValue({ data: [] }),
+        },
+      },
+      paginate: {
+        iterator: vi.fn().mockImplementation(() => ({
+          async *[Symbol.asyncIterator]() {
+            yield { data: [] };
+          },
+        })),
+      },
+    });
+
+    beforeEach(() => {
+      vi.mocked(getLinkedIssues).mockReset();
+      vi.mocked(processImplementationIntake).mockReset();
+      vi.mocked(recalculateLeaderboardForPR).mockReset();
+      vi.mocked(loadRepositoryConfig).mockReset();
+      vi.mocked(evaluateMergeReadiness).mockReset();
+    });
+
+    it("should process intake, leaderboard, and merge-readiness on approval", async () => {
+      const { handlers } = createWebhookHarness();
+      const handler = handlers.get("pull_request_review.submitted");
+      expect(handler).toBeDefined();
+
+      const octokit = createReviewOctokit();
+      const log = { info: vi.fn(), error: vi.fn() };
+      const linkedIssues = [
+        {
+          number: 79,
+          title: "coverage gap",
+          state: "OPEN",
+          labels: { nodes: [{ name: LABELS.READY_TO_IMPLEMENT }] },
+        },
+      ];
+      const repoConfig = {
+        governance: {
+          pr: {
+            maxPRsPerIssue: 5,
+            trustedReviewers: ["maintainer-a"],
+            intake: { mode: "always" },
+            mergeReady: { minApprovals: 2 },
+          },
+        },
+      };
+
+      vi.mocked(getLinkedIssues).mockResolvedValueOnce(linkedIssues as any);
+      vi.mocked(loadRepositoryConfig).mockResolvedValueOnce(repoConfig as any);
+
+      await handler!({
+        octokit,
+        log,
+        payload: {
+          review: { state: "approved" },
+          pull_request: { number: 22 },
+          repository: {
+            name: "test-repo",
+            full_name: "hivemoot/test-repo",
+            owner: { login: "hivemoot" },
+          },
+        },
+      });
+
+      expect(recalculateLeaderboardForPR).toHaveBeenCalledWith(octokit, log, "hivemoot", "test-repo", 22);
+      expect(processImplementationIntake).toHaveBeenCalledWith(
+        expect.objectContaining({
+          octokit,
+          log,
+          owner: "hivemoot",
+          repo: "test-repo",
+          prNumber: 22,
+          linkedIssues,
+          trigger: "updated",
+          maxPRsPerIssue: 5,
+          trustedReviewers: ["maintainer-a"],
+          intake: repoConfig.governance.pr.intake,
+        })
+      );
+      expect(evaluateMergeReadiness).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ref: { owner: "hivemoot", repo: "test-repo", prNumber: 22 },
+          config: repoConfig.governance.pr.mergeReady,
+          trustedReviewers: ["maintainer-a"],
+          log,
+        })
+      );
+    });
+
+    it("should skip intake and leaderboard on non-approval review", async () => {
+      const { handlers } = createWebhookHarness();
+      const handler = handlers.get("pull_request_review.submitted");
+      expect(handler).toBeDefined();
+
+      const octokit = createReviewOctokit();
+      const log = { info: vi.fn(), error: vi.fn() };
+      const repoConfig = {
+        governance: {
+          pr: {
+            maxPRsPerIssue: 3,
+            trustedReviewers: [],
+            intake: {},
+            mergeReady: { minApprovals: 1 },
+          },
+        },
+      };
+
+      vi.mocked(getLinkedIssues).mockResolvedValueOnce([]);
+      vi.mocked(loadRepositoryConfig).mockResolvedValueOnce(repoConfig as any);
+
+      await handler!({
+        octokit,
+        log,
+        payload: {
+          review: { state: "changes_requested" },
+          pull_request: { number: 40 },
+          repository: {
+            name: "test-repo",
+            full_name: "hivemoot/test-repo",
+            owner: { login: "hivemoot" },
+          },
+        },
+      });
+
+      expect(recalculateLeaderboardForPR).not.toHaveBeenCalled();
+      expect(processImplementationIntake).not.toHaveBeenCalled();
+      expect(evaluateMergeReadiness).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ref: { owner: "hivemoot", repo: "test-repo", prNumber: 40 },
+          config: repoConfig.governance.pr.mergeReady,
+          trustedReviewers: [],
+          log,
+        })
+      );
+    });
+
+    it("should recalculate leaderboard and re-evaluate on dismissed review", async () => {
+      const { handlers } = createWebhookHarness();
+      const handler = handlers.get("pull_request_review.dismissed");
+      expect(handler).toBeDefined();
+
+      const octokit = createReviewOctokit();
+      const log = { info: vi.fn(), error: vi.fn() };
+      const repoConfig = {
+        governance: {
+          pr: {
+            maxPRsPerIssue: 3,
+            trustedReviewers: ["maintainer-b"],
+            intake: {},
+            mergeReady: { minApprovals: 1 },
+          },
+        },
+      };
+      vi.mocked(loadRepositoryConfig).mockResolvedValueOnce(repoConfig as any);
+
+      await handler!({
+        octokit,
+        log,
+        payload: {
+          review: { state: "dismissed" },
+          pull_request: { number: 56 },
+          repository: {
+            name: "test-repo",
+            full_name: "hivemoot/test-repo",
+            owner: { login: "hivemoot" },
+          },
+        },
+      });
+
+      expect(recalculateLeaderboardForPR).toHaveBeenCalledWith(octokit, log, "hivemoot", "test-repo", 56);
+      expect(processImplementationIntake).not.toHaveBeenCalled();
+      expect(evaluateMergeReadiness).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ref: { owner: "hivemoot", repo: "test-repo", prNumber: 56 },
+          config: repoConfig.governance.pr.mergeReady,
+          trustedReviewers: ["maintainer-b"],
+          log,
+        })
+      );
     });
   });
 

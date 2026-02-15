@@ -10,7 +10,7 @@
  * - LLM_MODEL: Model name (e.g., claude-3-haiku-20240307, gpt-4o-mini)
  * - ANTHROPIC_API_KEY / OPENAI_API_KEY / etc: Provider-specific API keys
  *     (Google accepts GOOGLE_API_KEY or GOOGLE_GENERATIVE_AI_API_KEY)
- * - LLM_MAX_TOKENS: Optional, defaults to 2000
+ * - LLM_MAX_TOKENS: Optional requested output budget, defaults to 4096
  */
 
 import { createAnthropic } from "@ai-sdk/anthropic";
@@ -82,6 +82,18 @@ const API_KEY_VARS: Readonly<Record<LLMProvider, readonly string[]>> = {
   mistral: ["MISTRAL_API_KEY"],
 };
 
+function parseRequestedMaxTokensFromEnv(): number {
+  const rawMaxTokens = normalizeEnvString(process.env.LLM_MAX_TOKENS, "LLM_MAX_TOKENS");
+  const parsedMaxTokens = parseInt(rawMaxTokens ?? "", 10);
+  const hasExplicitPositiveValue = Number.isFinite(parsedMaxTokens) && parsedMaxTokens > 0;
+
+  if (hasExplicitPositiveValue) {
+    return parsedMaxTokens;
+  }
+
+  return LLM_DEFAULTS.maxTokens;
+}
+
 /**
  * Lightweight check for whether the provider's API key env var is present.
  * Does not instantiate any SDK client.
@@ -121,12 +133,12 @@ export function getLLMConfig(): LLMConfig | null {
     return null;
   }
 
-  const maxTokens = parseInt(normalizeEnvString(process.env.LLM_MAX_TOKENS, "LLM_MAX_TOKENS") ?? "", 10);
+  const maxTokens = parseRequestedMaxTokensFromEnv();
 
   return {
     provider,
     model,
-    maxTokens: Number.isFinite(maxTokens) ? maxTokens : LLM_DEFAULTS.maxTokens,
+    maxTokens,
   };
 }
 
@@ -172,7 +184,28 @@ export function createModel(config: LLMConfig): LanguageModelV1 {
         throw new Error("GOOGLE_API_KEY or GOOGLE_GENERATIVE_AI_API_KEY environment variable is not set");
       }
       const google = createGoogleGenerativeAI({ apiKey });
-      return google(config.model);
+      // Disable Gemini's native responseSchema so the SDK injects the JSON
+      // schema into the prompt instead.  @ai-sdk/google v1.2.22 (Jul 2025)
+      // predates gemini-3-flash-preview (Dec 2025); the older SDK's schema
+      // serialization breaks newer models, causing "No object generated" errors.
+      //
+      // How it works (ai SDK source, generateObject json mode):
+      //   supportsStructuredOutputs=true  → sends responseSchema to Gemini API
+      //   supportsStructuredOutputs=false → appends "JSON schema: …" to the
+      //     system prompt and sets responseMimeType only
+      //
+      // Revisit after upgrading @ai-sdk/google beyond v1.2.22 — newer versions
+      // may properly serialize schemas for gemini-3-* models, making this
+      // workaround unnecessary.
+      //
+      // References:
+      //   • AI SDK docs on the flag:
+      //     https://ai-sdk.dev/providers/ai-sdk-providers/google-generative-ai#structured-outputs
+      //   • SDK source (@ai-sdk/google, object-json mode in doGenerate):
+      //     responseSchema is populated only when supportsStructuredOutputs is true
+      //   • SDK source (ai core, generateObject):
+      //     injectJsonInstruction() called when supportsStructuredOutputs is false
+      return google(config.model, { structuredOutputs: false });
     }
 
     case "mistral": {

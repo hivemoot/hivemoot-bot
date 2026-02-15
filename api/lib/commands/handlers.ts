@@ -334,6 +334,9 @@ async function handlePreflight(ctx: CommandContext): Promise<CommandResult> {
 
   // Generate commit message if all hard checks pass and LLM is configured
   if (preflight.allHardChecksPassed) {
+    const commitMessageWarning =
+      "[warning] I couldn't generate a recommended commit message this time.";
+
     try {
       const prContext = await gatherPRContext(ctx, ref);
       const noop = () => {};
@@ -353,16 +356,30 @@ async function handlePreflight(ctx: CommandContext): Promise<CommandResult> {
         const formatted = formatCommitMessage(result.message, ctx.issueNumber);
         body += `### Proposed Commit Message\n\n`;
         body += "```\n" + formatted + "\n```\n\n";
-        body += `Copy this into the squash merge dialog, or edit as needed.\n\n`;
       } else {
-        body += `### Commit Message\n\n`;
-        body += `LLM commit message generation unavailable: ${result.reason}\n\n`;
+        switch (result.kind) {
+          case "generation_failed":
+            body += `### Commit Message\n\n`;
+            body += `${commitMessageWarning}\n\n`;
+            break;
+          case "not_configured":
+            ctx.log.info("Commit message generation skipped: LLM not configured");
+            break;
+          default: {
+            const _exhaustive: never = result.kind;
+            ctx.log.error(`Unhandled commit message failure kind: ${_exhaustive}`);
+            body += `### Commit Message\n\n`;
+            body += `${commitMessageWarning}\n\n`;
+            break;
+          }
+        }
       }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       ctx.log.error({ err: error }, `Commit message generation failed: ${reason}`);
+      // Keep detailed error in logs; show generic warning in PR comments.
       body += `### Commit Message\n\n`;
-      body += `Commit message generation failed: ${reason}\n\n`;
+      body += `${commitMessageWarning}\n\n`;
     }
   } else {
     body += `### Commit Message\n\n`;

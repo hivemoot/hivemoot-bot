@@ -123,7 +123,9 @@ export interface LLMConfig {
  * Default LLM configuration values.
  */
 export const LLM_DEFAULTS = {
-  maxTokens: 2000,
+  // Conservative cross-provider baseline: high enough to avoid truncated
+  // structured JSON in practice without depending on provider-specific limits.
+  maxTokens: 4_096,
   temperature: 0.3,
 } as const;
 

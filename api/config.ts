@@ -42,12 +42,6 @@ export const CONFIG_BOUNDS = {
   mergeReady: {
     minApprovals: { min: 1, max: 20, default: 1 },
   },
-  // LLM configuration bounds
-  llmMaxTokens: {
-    min: 500,
-    max: 8000,
-    default: 2000,
-  },
 } as const;
 
 // ───────────────────────────────────────────────────────────────────────────────

@@ -54,12 +54,14 @@ vi.mock("../merge-readiness.js", () => ({
 }));
 
 vi.mock("../llm/commit-message.js", () => ({
-  CommitMessageGenerator: vi.fn().mockImplementation(() => ({
-    generate: vi.fn().mockResolvedValue({
-      success: true,
-      message: { subject: "Add feature X", body: "Implements the feature for solving problem Y." },
-    }),
-  })),
+  CommitMessageGenerator: vi.fn().mockImplementation(function () {
+    return {
+      generate: vi.fn().mockResolvedValue({
+        success: true,
+        message: { subject: "Add feature X", body: "Implements the feature for solving problem Y." },
+      }),
+    };
+  }),
   formatCommitMessage: vi.fn().mockReturnValue("Add feature X\n\nImplements the feature for solving problem Y.\n\nPR: #42"),
 }));
 
@@ -200,5 +202,74 @@ describe("/preflight command", () => {
     expect(body).not.toContain("Proposed Commit Message");
     expect(body).toContain("2/3 hard checks passed");
     expect(body).toContain("Review the failing checks");
+  });
+
+  it("should show a generic warning when commit message generation fails", async () => {
+    const { CommitMessageGenerator } = await import("../llm/commit-message.js");
+    vi.mocked(CommitMessageGenerator).mockImplementationOnce(
+      function () {
+        return {
+          generate: vi.fn().mockResolvedValue({
+            success: false,
+            reason: "No object generated: could not parse the response.",
+            kind: "generation_failed",
+          }),
+        };
+      } as any
+    );
+
+    const ctx = createPRCtx();
+    await executeCommand(ctx);
+
+    const body = (ctx.octokit.rest.issues.createComment.mock.calls[0][0] as { body: string }).body;
+    expect(body).toContain("### Commit Message");
+    expect(body).toContain("[warning] I couldn't generate a recommended commit message this time.");
+    expect(body).not.toContain("No object generated");
+    expect(body).not.toContain("could not parse the response");
+  });
+
+  it("should omit commit message section when LLM is not configured", async () => {
+    const { CommitMessageGenerator } = await import("../llm/commit-message.js");
+    vi.mocked(CommitMessageGenerator).mockImplementationOnce(
+      function () {
+        return {
+          generate: vi.fn().mockResolvedValue({
+            success: false,
+            reason: "LLM not configured",
+            kind: "not_configured",
+          }),
+        };
+      } as any
+    );
+
+    const ctx = createPRCtx();
+    await executeCommand(ctx);
+
+    const body = (ctx.octokit.rest.issues.createComment.mock.calls[0][0] as { body: string }).body;
+    expect(body).not.toContain("### Commit Message");
+    expect(body).not.toContain("Proposed Commit Message");
+    expect(body).not.toContain("LLM not configured");
+    expect(ctx.log.info).toHaveBeenCalledWith(
+      "Commit message generation skipped: LLM not configured"
+    );
+  });
+
+  it("should show generic warning when commit message generator throws", async () => {
+    const { CommitMessageGenerator } = await import("../llm/commit-message.js");
+    vi.mocked(CommitMessageGenerator).mockImplementationOnce(
+      function () {
+        return {
+          generate: vi.fn().mockRejectedValue(new Error("provider timeout")),
+        };
+      } as any
+    );
+
+    const ctx = createPRCtx();
+    await executeCommand(ctx);
+
+    const body = (ctx.octokit.rest.issues.createComment.mock.calls[0][0] as { body: string }).body;
+    expect(body).toContain("### Commit Message");
+    expect(body).toContain("[warning] I couldn't generate a recommended commit message this time.");
+    expect(body).not.toContain("provider timeout");
   });
 });

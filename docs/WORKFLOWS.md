@@ -216,3 +216,6 @@ Environment variables for customization:
 | `HIVEMOOT_VOTING_DURATION_MINUTES` | 1440 (24h) | Voting phase length |
 | `HIVEMOOT_PR_STALE_DAYS` | 3 | Days until PR gets stale warning |
 | `HIVEMOOT_MAX_PRS_PER_ISSUE` | 3 | Max competing implementations |
+| `LLM_PROVIDER` | - | Optional provider: `openai`, `anthropic`, `google`/`gemini`, `mistral` |
+| `LLM_MODEL` | - | Optional model used for summaries and commit-message generation |
+| `LLM_MAX_TOKENS` | 4096 | Optional output-token budget request; defaults to 4096 when unset/invalid/non-positive |

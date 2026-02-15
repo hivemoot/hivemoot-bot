@@ -121,12 +121,19 @@ export function getLLMConfig(): LLMConfig | null {
     return null;
   }
 
-  const maxTokens = parseInt(normalizeEnvString(process.env.LLM_MAX_TOKENS, "LLM_MAX_TOKENS") ?? "", 10);
+  const parsedMaxTokens = parseInt(
+    normalizeEnvString(process.env.LLM_MAX_TOKENS, "LLM_MAX_TOKENS") ?? "",
+    10
+  );
+  const maxTokens =
+    Number.isFinite(parsedMaxTokens) && parsedMaxTokens > 0
+      ? parsedMaxTokens
+      : LLM_DEFAULTS.maxTokens;
 
   return {
     provider,
     model,
-    maxTokens: Number.isFinite(maxTokens) ? maxTokens : LLM_DEFAULTS.maxTokens,
+    maxTokens,
   };
 }
 

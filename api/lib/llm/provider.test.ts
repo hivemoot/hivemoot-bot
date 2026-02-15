@@ -151,6 +151,19 @@ describe("LLM Provider", () => {
 
       expect(config?.maxTokens).toBe(50_000);
     });
+
+    it("should use defaults for non-positive maxTokens", () => {
+      process.env.LLM_PROVIDER = "anthropic";
+      process.env.LLM_MODEL = "claude-3-haiku";
+      process.env.LLM_MAX_TOKENS = "0";
+
+      const zeroConfig = getLLMConfig();
+      expect(zeroConfig?.maxTokens).toBe(50_000);
+
+      process.env.LLM_MAX_TOKENS = "-100";
+      const negativeConfig = getLLMConfig();
+      expect(negativeConfig?.maxTokens).toBe(50_000);
+    });
   });
 
   describe("createModel", () => {

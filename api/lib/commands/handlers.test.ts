@@ -240,6 +240,33 @@ describe("executeCommand", () => {
       expect(replyCall[0].body).toContain("`/preflight`");
     });
 
+    it("should skip unknown command on webhook retry (confused reaction exists)", async () => {
+      const octokit = createMockOctokit();
+      // Allow resolveAppBotLogin to identify the bot
+      octokit.rest.issues.listComments.mockResolvedValue({
+        data: [
+          {
+            user: { login: "hivemoot[bot]" },
+            performed_via_github_app: { id: 12345, name: "Hivemoot" },
+          },
+        ],
+      });
+      // Simulate a previous confused reaction from the bot: eyes empty, confused present
+      octokit.rest.reactions.listForIssueComment
+        .mockResolvedValueOnce({ data: [] }) // eyes check — none
+        .mockResolvedValueOnce({
+          data: [{ user: { login: "hivemoot[bot]" } }],
+        }); // confused check — bot reacted
+
+      const ctx = createCtx({ verb: "unknown", octokit });
+      const result = await executeCommand(ctx);
+
+      expect(result).toEqual({ status: "ignored" });
+      // Should NOT post a duplicate reply or reaction
+      expect(octokit.rest.reactions.createForIssueComment).not.toHaveBeenCalled();
+      expect(octokit.rest.issues.createComment).not.toHaveBeenCalled();
+    });
+
     it("should silently ignore unknown command from unauthorized users", async () => {
       const ctx = createCtx({
         verb: "unknown",
@@ -1058,7 +1085,7 @@ describe("executeCommand", () => {
       expect(result.status).toBe("executed");
     });
 
-    it("should paginate eyes reactions and skip when bot is found on later page", async () => {
+    it("should skip when bot eyes reaction is in the first 100 reactions", async () => {
       const octokit = createMockOctokit();
       octokit.rest.issues.listComments.mockResolvedValue({
         data: [
@@ -1068,13 +1095,15 @@ describe("executeCommand", () => {
           },
         ],
       });
+      // Eyes has bot reaction among others; confused has none
       octokit.rest.reactions.listForIssueComment
         .mockResolvedValueOnce({
-          data: Array.from({ length: 100 }, (_, i) => ({ user: { login: `human-${i}` } })),
-        })
-        .mockResolvedValueOnce({
-          data: [{ user: { login: "hivemoot[bot]" } }],
-        });
+          data: [
+            ...Array.from({ length: 5 }, (_, i) => ({ user: { login: `human-${i}` } })),
+            { user: { login: "hivemoot[bot]" } },
+          ],
+        }) // eyes check — bot present
+        .mockResolvedValueOnce({ data: [] }); // confused check — none
 
       const ctx = createCtx({ octokit });
       const result = await executeCommand(ctx);
@@ -1083,11 +1112,11 @@ describe("executeCommand", () => {
       expect(octokit.rest.reactions.listForIssueComment).toHaveBeenCalledTimes(2);
       expect(octokit.rest.reactions.listForIssueComment).toHaveBeenNthCalledWith(
         1,
-        expect.objectContaining({ per_page: 100, page: 1 }),
+        expect.objectContaining({ per_page: 100, content: "eyes" }),
       );
       expect(octokit.rest.reactions.listForIssueComment).toHaveBeenNthCalledWith(
         2,
-        expect.objectContaining({ per_page: 100, page: 2 }),
+        expect.objectContaining({ per_page: 100, content: "confused" }),
       );
     });
   });

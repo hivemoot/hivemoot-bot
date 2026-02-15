@@ -159,16 +159,22 @@ Permissions:
 
 - Issues: Read & Write
 - Pull Requests: Read & Write
+- Discussions: Read & Write (required for standup discussion posting)
+- Checks: Read (required for merge-readiness evaluation)
+- Commit statuses: Read (required for legacy CI status integration)
 - Metadata: Read
 
 Events:
 
-- Issues
+- Issues (including labeled and unlabeled actions)
 - Issue comments
 - Installation
 - Installation repositories
 - Pull requests
 - Pull request reviews
+- Check suites
+- Check runs
+- Statuses
 
 ## Local Development
 

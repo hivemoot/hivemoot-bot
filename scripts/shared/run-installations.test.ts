@@ -76,7 +76,9 @@ describe("run-installations shared runner", () => {
       }),
     };
 
-    vi.mocked(App).mockImplementation(() => appMock as never);
+    vi.mocked(App).mockImplementation(function MockApp() {
+      return appMock as never;
+    });
   }
 
   it("processes multiple installations/repos and reports aggregate results", async () => {

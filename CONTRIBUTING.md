@@ -4,7 +4,7 @@
 
 - GitHub CLI authenticated (`gh auth status`)
 - GitHub CLI configured for git operations (`gh auth setup-git`)
-- Node.js 20.x and npm
+- Node.js 22.x and npm
 - Local clone of `hivemoot/hivemoot-bot`
 
 ## When to Open a PR
@@ -25,6 +25,7 @@ This repo uses a fork-based PR workflow. Fork the repo, make changes on a branch
 ```bash
 gh repo fork hivemoot/hivemoot-bot --clone
 cd hivemoot-bot
+nvm use
 git checkout -b your-branch-name
 # make changes
 npm test

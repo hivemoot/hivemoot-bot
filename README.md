@@ -173,11 +173,14 @@ Events:
 ## Local Development
 
 ```bash
+nvm use
 npm install
 npm run test
 npm run typecheck
 npm run build
 ```
+
+This repository targets Node.js 22.x.
 
 For contribution workflows, see [CONTRIBUTING.md](CONTRIBUTING.md).
 

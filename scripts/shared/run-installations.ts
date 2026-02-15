@@ -11,6 +11,8 @@
 
 import { App, Octokit } from "octokit";
 import * as core from "@actions/core";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { logger } from "../../api/lib/index.js";
 import { getAppConfig } from "../../api/lib/env-validation.js";
 import type { Repository } from "../../api/lib/index.js";
@@ -129,7 +131,12 @@ export async function runForAllRepositories<TResult = void>(
  * @param main - The async main function to run
  */
 export function runIfMain(callerUrl: string, main: () => Promise<void>): void {
-  const entryUrl = process.argv[1] ? new URL(process.argv[1], "file://").href : "";
+  const entry = process.argv[1];
+  const entryUrl = entry
+    ? (entry.startsWith("file://")
+      ? new URL(entry).href
+      : pathToFileURL(resolve(entry)).href)
+    : "";
   if (callerUrl === entryUrl) {
     main().catch((error) => {
       core.setFailed(`Fatal error: ${error.message}`);

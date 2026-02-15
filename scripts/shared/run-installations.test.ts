@@ -76,7 +76,10 @@ describe("run-installations shared runner", () => {
       }),
     };
 
-    vi.mocked(App).mockImplementation(() => appMock as never);
+    // App is instantiated with `new` in production code, so the mock must be constructible.
+    vi.mocked(App).mockImplementation(function MockApp() {
+      return appMock as never;
+    } as unknown as typeof App);
   }
 
   it("processes multiple installations/repos and reports aggregate results", async () => {

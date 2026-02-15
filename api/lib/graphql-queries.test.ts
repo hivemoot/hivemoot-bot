@@ -3,6 +3,7 @@ import {
   getLinkedIssues,
   getPRBodyLastEditedAt,
   getOpenPRsForIssue,
+  isSchemaUnavailableError,
   type GraphQLClient,
 } from "./graphql-queries.js";
 import { logger } from "./logger.js";
@@ -169,6 +170,254 @@ describe("getLinkedIssues", () => {
     const result = await getLinkedIssues(mockClient, "owner", "repo", 42);
 
     expect(result[0].labels.nodes).toHaveLength(3);
+  });
+
+  // ─── Schema-unavailable fallback (#11) ───────────────────────────────────
+
+  it("should fall back to body parsing when closingIssuesReferences is unavailable", async () => {
+    let callCount = 0;
+    vi.mocked(mockClient.graphql).mockImplementation(async (query: string) => {
+      callCount++;
+      if (query.includes("getLinkedIssues")) {
+        throw new Error("Field 'closingIssuesReferences' doesn't exist on type 'PullRequest'");
+      }
+      if (query.includes("getPRBody")) {
+        return {
+          repository: {
+            pullRequest: { body: "Fixes #123\n\nThis PR fixes the bug." },
+          },
+        };
+      }
+      if (query.includes("getIssueDetails")) {
+        return {
+          repository: {
+            issue: {
+              number: 123,
+              title: "Fix bug",
+              state: "OPEN",
+              labels: { nodes: [{ name: "bug" }] },
+            },
+          },
+        };
+      }
+      throw new Error(`Unexpected query: ${query.slice(0, 60)}`);
+    });
+
+    const result = await getLinkedIssues(mockClient, "owner", "repo", 42);
+
+    expect(result).toEqual([
+      {
+        number: 123,
+        title: "Fix bug",
+        state: "OPEN",
+        labels: { nodes: [{ name: "bug" }] },
+      },
+    ]);
+    // Primary query + PR body fetch + issue detail fetch = 3 calls
+    expect(callCount).toBe(3);
+  });
+
+  it("should resolve multiple issues via fallback", async () => {
+    vi.mocked(mockClient.graphql).mockImplementation(async (query: string, variables?: Record<string, unknown>) => {
+      if (query.includes("getLinkedIssues")) {
+        throw new Error("Field 'closingIssuesReferences' doesn't exist on type 'PullRequest'");
+      }
+      if (query.includes("getPRBody")) {
+        return {
+          repository: {
+            pullRequest: { body: "Fixes #10, Closes #20" },
+          },
+        };
+      }
+      if (query.includes("getIssueDetails")) {
+        const issueNum = variables?.issue as number;
+        return {
+          repository: {
+            issue: {
+              number: issueNum,
+              title: `Issue ${issueNum}`,
+              state: "OPEN",
+              labels: { nodes: [] },
+            },
+          },
+        };
+      }
+      throw new Error(`Unexpected query: ${query.slice(0, 60)}`);
+    });
+
+    const result = await getLinkedIssues(mockClient, "owner", "repo", 42);
+
+    expect(result).toHaveLength(2);
+    expect(result.map((i) => i.number)).toEqual([10, 20]);
+  });
+
+  it("should fail closed when any fallback issue detail fetch fails", async () => {
+    vi.mocked(mockClient.graphql).mockImplementation(async (query: string, variables?: Record<string, unknown>) => {
+      if (query.includes("getLinkedIssues")) {
+        throw new Error("Field 'closingIssuesReferences' doesn't exist on type 'PullRequest'");
+      }
+      if (query.includes("getPRBody")) {
+        return {
+          repository: {
+            pullRequest: { body: "Fixes #10, Closes #20" },
+          },
+        };
+      }
+      if (query.includes("getIssueDetails")) {
+        const issueNum = variables?.issue as number;
+        if (issueNum === 20) {
+          throw new Error("API rate limit exceeded");
+        }
+        return {
+          repository: {
+            issue: {
+              number: issueNum,
+              title: `Issue ${issueNum}`,
+              state: "OPEN",
+              labels: { nodes: [] },
+            },
+          },
+        };
+      }
+      throw new Error(`Unexpected query: ${query.slice(0, 60)}`);
+    });
+
+    const result = await getLinkedIssues(mockClient, "owner", "repo", 42);
+
+    // Fail closed: partial results are discarded
+    expect(result).toEqual([]);
+  });
+
+  it("should skip deleted issues in fallback without failing", async () => {
+    vi.mocked(mockClient.graphql).mockImplementation(async (query: string, variables?: Record<string, unknown>) => {
+      if (query.includes("getLinkedIssues")) {
+        throw new Error("Field 'closingIssuesReferences' doesn't exist on type 'PullRequest'");
+      }
+      if (query.includes("getPRBody")) {
+        return {
+          repository: {
+            pullRequest: { body: "Fixes #10, Closes #20" },
+          },
+        };
+      }
+      if (query.includes("getIssueDetails")) {
+        const issueNum = variables?.issue as number;
+        if (issueNum === 20) {
+          // Issue doesn't exist
+          return { repository: { issue: null } };
+        }
+        return {
+          repository: {
+            issue: {
+              number: issueNum,
+              title: `Issue ${issueNum}`,
+              state: "OPEN",
+              labels: { nodes: [] },
+            },
+          },
+        };
+      }
+      throw new Error(`Unexpected query: ${query.slice(0, 60)}`);
+    });
+
+    const result = await getLinkedIssues(mockClient, "owner", "repo", 42);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].number).toBe(10);
+  });
+
+  it("should return empty array when fallback finds no closing keywords in PR body", async () => {
+    vi.mocked(mockClient.graphql).mockImplementation(async (query: string) => {
+      if (query.includes("getLinkedIssues")) {
+        throw new Error("Field 'closingIssuesReferences' doesn't exist on type 'PullRequest'");
+      }
+      if (query.includes("getPRBody")) {
+        return {
+          repository: {
+            pullRequest: { body: "This PR improves performance. See #42 for context." },
+          },
+        };
+      }
+      throw new Error(`Unexpected query: ${query.slice(0, 60)}`);
+    });
+
+    const result = await getLinkedIssues(mockClient, "owner", "repo", 42);
+
+    expect(result).toEqual([]);
+  });
+
+  it("should return empty array when fallback PR body is null", async () => {
+    vi.mocked(mockClient.graphql).mockImplementation(async (query: string) => {
+      if (query.includes("getLinkedIssues")) {
+        throw new Error("Field 'closingIssuesReferences' doesn't exist on type 'PullRequest'");
+      }
+      if (query.includes("getPRBody")) {
+        return {
+          repository: {
+            pullRequest: { body: null },
+          },
+        };
+      }
+      throw new Error(`Unexpected query: ${query.slice(0, 60)}`);
+    });
+
+    const result = await getLinkedIssues(mockClient, "owner", "repo", 42);
+
+    expect(result).toEqual([]);
+  });
+
+  it("should return empty array when fallback PR is not found", async () => {
+    vi.mocked(mockClient.graphql).mockImplementation(async (query: string) => {
+      if (query.includes("getLinkedIssues")) {
+        throw new Error("Field 'closingIssuesReferences' doesn't exist on type 'PullRequest'");
+      }
+      if (query.includes("getPRBody")) {
+        return {
+          repository: {
+            pullRequest: null,
+          },
+        };
+      }
+      throw new Error(`Unexpected query: ${query.slice(0, 60)}`);
+    });
+
+    const result = await getLinkedIssues(mockClient, "owner", "repo", 42);
+
+    expect(result).toEqual([]);
+  });
+
+  it("should re-throw non-schema errors without fallback", async () => {
+    vi.mocked(mockClient.graphql).mockRejectedValue(
+      new Error("Bad credentials")
+    );
+
+    await expect(
+      getLinkedIssues(mockClient, "owner", "repo", 42)
+    ).rejects.toThrow("Bad credentials");
+  });
+});
+
+describe("isSchemaUnavailableError", () => {
+  it("should detect closingIssuesReferences field missing errors", () => {
+    expect(isSchemaUnavailableError(
+      new Error("Field 'closingIssuesReferences' doesn't exist on type 'PullRequest'")
+    )).toBe(true);
+  });
+
+  it("should detect alternative schema error format", () => {
+    expect(isSchemaUnavailableError(
+      new Error('Cannot query field "closingIssuesReferences" on type "PullRequest"')
+    )).toBe(true);
+  });
+
+  it("should not match unrelated errors", () => {
+    expect(isSchemaUnavailableError(new Error("Bad credentials"))).toBe(false);
+    expect(isSchemaUnavailableError(new Error("API rate limit exceeded"))).toBe(false);
+  });
+
+  it("should handle non-Error values", () => {
+    expect(isSchemaUnavailableError("Field 'closingIssuesReferences' doesn't exist")).toBe(true);
+    expect(isSchemaUnavailableError(42)).toBe(false);
   });
 });
 

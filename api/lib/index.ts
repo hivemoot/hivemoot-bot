@@ -34,6 +34,7 @@ export {
   getLinkedIssues,
   getOpenPRsForIssue,
   getPRBodyLastEditedAt,
+  isSchemaUnavailableError,
 } from "./graphql-queries.js";
 export type { GraphQLClient } from "./graphql-queries.js";
 

@@ -9,6 +9,7 @@
 
 import type { LinkedIssue, PullRequest } from "./types.js";
 import { logger } from "./logger.js";
+import { extractSameRepoClosingIssueNumbers } from "./closing-keywords.js";
 
 /**
  * GraphQL client interface - minimal subset needed for our queries.
@@ -56,8 +57,142 @@ interface LinkedIssuesResponse {
 }
 
 /**
+ * Pattern for GraphQL errors indicating that the closingIssuesReferences
+ * field is unavailable in the current schema (e.g., old GHES versions).
+ * Triggers the body-parsing fallback when matched.
+ */
+const SCHEMA_UNAVAILABLE_PATTERN =
+  /field 'closingIssuesReferences' doesn't exist|cannot query field "closingIssuesReferences"/i;
+
+/**
+ * Check if a GraphQL error indicates the closingIssuesReferences field
+ * is unavailable in the target GitHub instance's schema.
+ */
+export function isSchemaUnavailableError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return SCHEMA_UNAVAILABLE_PATTERN.test(message);
+}
+
+const GET_PR_BODY_QUERY = `
+  query getPRBody($owner: String!, $repo: String!, $pr: Int!) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $pr) {
+        body
+      }
+    }
+  }
+`;
+
+interface PRBodyResponse {
+  repository: {
+    pullRequest: {
+      body: string | null;
+    } | null;
+  };
+}
+
+const GET_ISSUE_DETAILS_QUERY = `
+  query getIssueDetails($owner: String!, $repo: String!, $issue: Int!) {
+    repository(owner: $owner, name: $repo) {
+      issue(number: $issue) {
+        number
+        title
+        state
+        labels(first: 20) {
+          nodes {
+            name
+          }
+        }
+      }
+    }
+  }
+`;
+
+interface IssueDetailsResponse {
+  repository: {
+    issue: {
+      number: number;
+      title: string;
+      state: "OPEN" | "CLOSED";
+      labels: {
+        nodes: Array<{ name: string } | null>;
+      };
+    } | null;
+  };
+}
+
+/**
+ * Fallback: resolve linked issues by parsing closing keywords from the PR body
+ * and fetching each issue's details individually.
+ *
+ * Fail-closed: if any issue detail lookup fails, returns an empty array
+ * to avoid silently misclassifying linked PRs.
+ */
+async function getLinkedIssuesFallback(
+  client: GraphQLClient,
+  owner: string,
+  repo: string,
+  prNumber: number
+): Promise<LinkedIssue[]> {
+  // Step 1: Fetch PR body
+  const bodyResponse = await client.graphql<PRBodyResponse>(
+    GET_PR_BODY_QUERY,
+    { owner, repo, pr: prNumber }
+  );
+
+  const body = bodyResponse.repository.pullRequest?.body;
+  if (!body) {
+    return [];
+  }
+
+  // Step 2: Extract issue numbers from closing keywords
+  const issueNumbers = extractSameRepoClosingIssueNumbers(body, { owner, repo });
+  if (issueNumbers.length === 0) {
+    return [];
+  }
+
+  // Step 3: Fetch each issue's details. Fail closed on any error.
+  const issues: LinkedIssue[] = [];
+  for (const issueNumber of issueNumbers) {
+    let response: IssueDetailsResponse;
+    try {
+      response = await client.graphql<IssueDetailsResponse>(
+        GET_ISSUE_DETAILS_QUERY,
+        { owner, repo, issue: issueNumber }
+      );
+    } catch (detailError) {
+      logger.warn(
+        `Fallback issue detail fetch failed for ${owner}/${repo}#${issueNumber}: ` +
+        `${detailError instanceof Error ? detailError.message : String(detailError)}`
+      );
+      // Fail closed: partial results are worse than no results
+      return [];
+    }
+
+    const issue = response.repository.issue;
+    if (!issue) {
+      // Issue doesn't exist or was deleted — skip silently
+      continue;
+    }
+
+    issues.push(issue);
+  }
+
+  logger.info(
+    `Fallback resolved ${issues.length} linked issue(s) for ` +
+    `${owner}/${repo} PR #${prNumber} (schema unavailable)`
+  );
+
+  return issues;
+}
+
+/**
  * Get issues that will be closed when a PR is merged.
- * Uses GitHub's closingIssuesReferences which parses "fixes #123" etc.
+ *
+ * Primary path uses GitHub's closingIssuesReferences GraphQL field.
+ * Falls back to PR body parsing + per-issue detail queries when the
+ * field is unavailable (e.g., older GHES instances). The fallback is
+ * fail-closed: any partial resolution failure returns an empty array.
  */
 export async function getLinkedIssues(
   client: GraphQLClient,
@@ -65,16 +200,29 @@ export async function getLinkedIssues(
   repo: string,
   prNumber: number
 ): Promise<LinkedIssue[]> {
-  const response = await client.graphql<LinkedIssuesResponse>(
-    GET_LINKED_ISSUES_QUERY,
-    { owner, repo, pr: prNumber }
-  );
+  try {
+    const response = await client.graphql<LinkedIssuesResponse>(
+      GET_LINKED_ISSUES_QUERY,
+      { owner, repo, pr: prNumber }
+    );
 
-  return (
-    response.repository.pullRequest?.closingIssuesReferences.nodes.filter(
-      (node): node is LinkedIssue => node !== null
-    ) ?? []
-  );
+    return (
+      response.repository.pullRequest?.closingIssuesReferences.nodes.filter(
+        (node): node is LinkedIssue => node !== null
+      ) ?? []
+    );
+  } catch (error) {
+    if (!isSchemaUnavailableError(error)) {
+      throw error;
+    }
+
+    logger.warn(
+      `closingIssuesReferences unavailable for ${owner}/${repo} PR #${prNumber}, ` +
+      `falling back to body parsing`
+    );
+
+    return getLinkedIssuesFallback(client, owner, repo, prNumber);
+  }
 }
 
 // ───────────────────────────────────────────────────────────────────────────────

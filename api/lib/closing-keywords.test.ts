@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hasSameRepoClosingKeywordRef } from "./closing-keywords.js";
+import { hasSameRepoClosingKeywordRef, extractSameRepoClosingIssueNumbers } from "./closing-keywords.js";
 
 describe("hasSameRepoClosingKeywordRef", () => {
   const repository = { owner: "hivemoot", repo: "hivemoot-bot" };
@@ -66,5 +66,65 @@ describe("hasSameRepoClosingKeywordRef", () => {
         repository
       )
     ).toBe(false);
+  });
+});
+
+describe("extractSameRepoClosingIssueNumbers", () => {
+  const repository = { owner: "hivemoot", repo: "hivemoot-bot" };
+
+  it("extracts issue numbers from simple closing keywords", () => {
+    expect(
+      extractSameRepoClosingIssueNumbers("Fixes #123", repository)
+    ).toEqual([123]);
+  });
+
+  it("extracts multiple issue numbers", () => {
+    expect(
+      extractSameRepoClosingIssueNumbers("Fixes #11, Closes #22, Resolves #33", repository)
+    ).toEqual([11, 22, 33]);
+  });
+
+  it("deduplicates repeated issue numbers", () => {
+    expect(
+      extractSameRepoClosingIssueNumbers("Fixes #11\nAlso closes #11", repository)
+    ).toEqual([11]);
+  });
+
+  it("extracts from qualified same-repo references", () => {
+    expect(
+      extractSameRepoClosingIssueNumbers("Resolves hivemoot/hivemoot-bot#42", repository)
+    ).toEqual([42]);
+  });
+
+  it("extracts from same-repo issue URLs", () => {
+    expect(
+      extractSameRepoClosingIssueNumbers(
+        "Fixes https://github.com/hivemoot/hivemoot-bot/issues/99",
+        repository
+      )
+    ).toEqual([99]);
+  });
+
+  it("ignores cross-repo references", () => {
+    expect(
+      extractSameRepoClosingIssueNumbers("Fixes someone/else#21", repository)
+    ).toEqual([]);
+  });
+
+  it("ignores references inside code blocks", () => {
+    expect(
+      extractSameRepoClosingIssueNumbers("```\nFixes #21\n```", repository)
+    ).toEqual([]);
+  });
+
+  it("returns empty array for null/undefined body", () => {
+    expect(extractSameRepoClosingIssueNumbers(null, repository)).toEqual([]);
+    expect(extractSameRepoClosingIssueNumbers(undefined, repository)).toEqual([]);
+  });
+
+  it("returns empty array for body without closing keywords", () => {
+    expect(
+      extractSameRepoClosingIssueNumbers("Related to #21", repository)
+    ).toEqual([]);
   });
 });

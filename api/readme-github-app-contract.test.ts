@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-
-const README_PATH = resolve(process.cwd(), "README.md");
+const README_PATH = new URL("../README.md", import.meta.url);
 
 function readReadme(): string {
   return readFileSync(README_PATH, "utf8");
@@ -31,6 +29,7 @@ function extractBullets(section: string): string[] {
 describe("README GitHub App setup contract", () => {
   it("documents all required GitHub App permissions", () => {
     const permissions = extractBullets(extractSection(readReadme(), "Permissions"));
+    expect(permissions).toHaveLength(6);
 
     expect(permissions).toEqual(
       expect.arrayContaining([
@@ -46,6 +45,7 @@ describe("README GitHub App setup contract", () => {
 
   it("documents all required webhook event subscriptions", () => {
     const events = extractBullets(extractSection(readReadme(), "Events"));
+    expect(events).toHaveLength(9);
 
     expect(events).toEqual(
       expect.arrayContaining([

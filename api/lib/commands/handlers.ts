@@ -1428,6 +1428,9 @@ const COMMAND_HANDLERS: Record<string, (ctx: CommandContext) => Promise<CommandR
   squash: handleSquash,
 };
 
+/** Exported list of recognized command verbs for help messages and validation. */
+export const KNOWN_COMMANDS = Object.keys(COMMAND_HANDLERS);
+
 /**
  * Execute a parsed command.
  *
@@ -1440,10 +1443,6 @@ const COMMAND_HANDLERS: Record<string, (ctx: CommandContext) => Promise<CommandR
  */
 export async function executeCommand(ctx: CommandContext): Promise<CommandResult> {
   const handler = COMMAND_HANDLERS[ctx.verb];
-  if (!handler) {
-    // Unknown command — silent ignore (not a command we handle)
-    return { status: "ignored" };
-  }
 
   // Authorization: only maintainers can use commands
   const authorization = await isAuthorized(ctx);
@@ -1455,6 +1454,14 @@ export async function executeCommand(ctx: CommandContext): Promise<CommandResult
     return { status: "ignored" };
   }
   const logContext = buildCommandLogContext(ctx, authorization.permission);
+
+  if (!handler) {
+    // Unknown command from an authorized user — reply with available commands
+    const available = KNOWN_COMMANDS.map((c) => `\`/${c}\``).join(", ");
+    await react(ctx, "confused");
+    await reply(ctx, `Unknown command \`/${ctx.verb}\`. Available commands: ${available}`);
+    return { status: "rejected", reason: `Unknown command: /${ctx.verb}` };
+  }
 
   // Idempotency guard: if we already reacted with 👀, this is a webhook
   // retry and the command was already executed. Skip to prevent duplicates.

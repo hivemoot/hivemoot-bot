@@ -67,6 +67,24 @@ describe("hasSameRepoClosingKeywordRef", () => {
       )
     ).toBe(false);
   });
+
+  it("ignores closing keywords inside unclosed fenced code blocks", () => {
+    expect(
+      hasSameRepoClosingKeywordRef(
+        "```md\nFixes #21\nStill code with no closing fence",
+        repository
+      )
+    ).toBe(false);
+  });
+
+  it("ignores closing keywords after unclosed inline code", () => {
+    expect(
+      hasSameRepoClosingKeywordRef(
+        "Template starts `Fixes #21 and never closes",
+        repository
+      )
+    ).toBe(false);
+  });
 });
 
 describe("extractSameRepoClosingIssueNumbers", () => {
@@ -114,6 +132,24 @@ describe("extractSameRepoClosingIssueNumbers", () => {
   it("ignores references inside code blocks", () => {
     expect(
       extractSameRepoClosingIssueNumbers("```\nFixes #21\n```", repository)
+    ).toEqual([]);
+  });
+
+  it("ignores references inside unclosed fenced code blocks", () => {
+    expect(
+      extractSameRepoClosingIssueNumbers(
+        "```md\nFixes #21\nStill code with no closing fence",
+        repository
+      )
+    ).toEqual([]);
+  });
+
+  it("ignores references after unclosed inline code", () => {
+    expect(
+      extractSameRepoClosingIssueNumbers(
+        "Template starts `Fixes #21 and never closes",
+        repository
+      )
     ).toEqual([]);
   });
 

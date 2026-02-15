@@ -23,13 +23,66 @@ function stripTrailingPunctuation(token: string): string {
   return token.replace(/[),.;:!?]+$/, "");
 }
 
+function stripInlineCode(text: string): string {
+  let result = "";
+  let index = 0;
+
+  while (index < text.length) {
+    if (text[index] !== "`") {
+      result += text[index];
+      index += 1;
+      continue;
+    }
+
+    let fenceEnd = index;
+    while (fenceEnd < text.length && text[fenceEnd] === "`") {
+      fenceEnd += 1;
+    }
+    const delimiter = text.slice(index, fenceEnd);
+    const closingIndex = text.indexOf(delimiter, fenceEnd);
+    if (closingIndex === -1) {
+      // Unclosed inline code: treat remaining content as code.
+      break;
+    }
+
+    result += " ";
+    index = closingIndex + delimiter.length;
+  }
+
+  return result;
+}
+
 function stripMarkdownCode(body: string): string {
-  return body
-    // Remove fenced code blocks (```...``` and ~~~...~~~)
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/~~~[\s\S]*?~~~/g, " ")
-    // Remove inline code spans (`...`)
-    .replace(/`[^`]*`/g, " ");
+  const lines = body.split(/\r?\n/);
+  const nonCodeLines: string[] = [];
+  let activeFenceChar: "`" | "~" | null = null;
+  let activeFenceLength = 0;
+
+  for (const line of lines) {
+    const trimmed = line.trimStart();
+
+    if (!activeFenceChar) {
+      const openingFenceMatch = trimmed.match(/^(`{3,}|~{3,})(.*)$/);
+      if (openingFenceMatch) {
+        activeFenceChar = openingFenceMatch[1][0] as "`" | "~";
+        activeFenceLength = openingFenceMatch[1].length;
+      } else {
+        nonCodeLines.push(line);
+      }
+      continue;
+    }
+
+    const closingFencePattern = new RegExp(
+      `^${activeFenceChar}{${activeFenceLength},}\\s*$`
+    );
+    if (closingFencePattern.test(trimmed)) {
+      activeFenceChar = null;
+      activeFenceLength = 0;
+    }
+  }
+
+  // Unclosed fenced blocks are treated as code until end of body.
+  return stripInlineCode(nonCodeLines.join("\n"));
 }
 
 /**

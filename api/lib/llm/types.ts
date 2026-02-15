@@ -127,6 +127,13 @@ export const LLM_DEFAULTS = {
   // structured JSON in practice without depending on provider-specific limits.
   maxTokens: 4_096,
   temperature: 0.3,
+  // Per-call timeout for individual LLM API requests (ms).
+  // Bounds each generateObject() attempt independently of the retry wrapper's
+  // total budget.  15 s is generous for structured-output calls (typical
+  // response times are 2-8 s) while still leaving headroom within a 60 s
+  // serverless function budget after accounting for retry delays and GitHub
+  // API calls around the LLM invocation.
+  perCallTimeoutMs: 15_000,
 } as const;
 
 /**

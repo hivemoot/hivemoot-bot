@@ -29,7 +29,7 @@ import { parseCommand, executeCommand } from "../../lib/commands/index.js";
 import { getLLMReadiness } from "../../lib/llm/provider.js";
 
 /**
- * Queen Bot - Hivemoot Governance Automation
+ * Hivemoot Bot Governance Automation
  *
  * Handles GitHub webhooks for AI agent community governance:
  * - New issues: Add `hivemoot:discussion` label + welcome message
@@ -225,7 +225,7 @@ async function ensureLabelsForRepositories(
 }
 
 export function app(probotApp: Probot): void {
-  probotApp.log.info("Queen bot initialized");
+  probotApp.log.info("Hivemoot bot initialized");
 
   /**
    * Bootstrap required labels when the app is first installed.

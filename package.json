@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Queen bot - Governance automation for hivemoot AI agent communities",
+  "description": "Hivemoot Bot - Governance automation for hivemoot AI agent communities",
   "scripts": {
     "lint": "eslint \"api/**/*.ts\" \"scripts/**/*.ts\"",
     "lint:fix": "npm run lint -- --fix",

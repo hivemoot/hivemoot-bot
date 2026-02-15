@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { isLLMConfigured, getLLMConfig, createModel, createModelFromEnv } from "./provider.js";
+import { isLLMConfigured, getLLMConfig, createModel, createModelFromEnv, getLLMReadiness } from "./provider.js";
 import type { LLMConfig } from "./types.js";
 
 /**
@@ -276,6 +276,64 @@ describe("LLM Provider", () => {
 
       expect(model).toBeDefined();
       expect(model.modelId).toBe("mistral-small");
+    });
+  });
+
+  describe("getLLMReadiness", () => {
+    it("should return not_configured when provider is missing", () => {
+      delete process.env.LLM_PROVIDER;
+      delete process.env.LLM_MODEL;
+
+      expect(getLLMReadiness()).toEqual({ ready: false, reason: "not_configured" });
+    });
+
+    it("should return not_configured for invalid provider", () => {
+      process.env.LLM_PROVIDER = "invalid";
+      process.env.LLM_MODEL = "some-model";
+
+      expect(getLLMReadiness()).toEqual({ ready: false, reason: "not_configured" });
+    });
+
+    it("should return api_key_missing when provider+model set but key absent", () => {
+      process.env.LLM_PROVIDER = "anthropic";
+      process.env.LLM_MODEL = "claude-3-haiku";
+      delete process.env.ANTHROPIC_API_KEY;
+
+      expect(getLLMReadiness()).toEqual({ ready: false, reason: "api_key_missing" });
+    });
+
+    it("should return api_key_missing for google when both key vars are absent", () => {
+      process.env.LLM_PROVIDER = "google";
+      process.env.LLM_MODEL = "gemini-pro";
+      delete process.env.GOOGLE_API_KEY;
+      delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+
+      expect(getLLMReadiness()).toEqual({ ready: false, reason: "api_key_missing" });
+    });
+
+    it("should return ready when provider, model, and key are present", () => {
+      process.env.LLM_PROVIDER = "anthropic";
+      process.env.LLM_MODEL = "claude-3-haiku";
+      process.env.ANTHROPIC_API_KEY = "sk-ant-test";
+
+      expect(getLLMReadiness()).toEqual({ ready: true });
+    });
+
+    it("should return ready for google with GOOGLE_GENERATIVE_AI_API_KEY fallback", () => {
+      process.env.LLM_PROVIDER = "google";
+      process.env.LLM_MODEL = "gemini-pro";
+      delete process.env.GOOGLE_API_KEY;
+      process.env.GOOGLE_GENERATIVE_AI_API_KEY = "google-alt-key";
+
+      expect(getLLMReadiness()).toEqual({ ready: true });
+    });
+
+    it("should treat whitespace-only API key as missing", () => {
+      process.env.LLM_PROVIDER = "openai";
+      process.env.LLM_MODEL = "gpt-4o-mini";
+      process.env.OPENAI_API_KEY = "   ";
+
+      expect(getLLMReadiness()).toEqual({ ready: false, reason: "api_key_missing" });
     });
   });
 

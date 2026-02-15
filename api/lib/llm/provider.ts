@@ -19,7 +19,7 @@ import { createMistral } from "@ai-sdk/mistral";
 import { createOpenAI } from "@ai-sdk/openai";
 import type { LanguageModelV1 } from "ai";
 
-import type { LLMConfig, LLMProvider } from "./types.js";
+import type { LLMConfig, LLMProvider, LLMReadiness } from "./types.js";
 import { LLM_DEFAULTS } from "./types.js";
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -72,6 +72,41 @@ function normalizeProvider(provider: string | undefined): LLMProvider | undefine
  */
 export function isLLMConfigured(): boolean {
   return getLLMConfig() !== null;
+}
+
+// Map each provider to its accepted API key env vars.
+const API_KEY_VARS: Readonly<Record<LLMProvider, readonly string[]>> = {
+  anthropic: ["ANTHROPIC_API_KEY"],
+  openai: ["OPENAI_API_KEY"],
+  google: ["GOOGLE_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY"],
+  mistral: ["MISTRAL_API_KEY"],
+};
+
+/**
+ * Lightweight check for whether the provider's API key env var is present.
+ * Does not instantiate any SDK client.
+ */
+function hasApiKey(provider: LLMProvider): boolean {
+  return API_KEY_VARS[provider].some(
+    (key) => !!normalizeEnvString(process.env[key])
+  );
+}
+
+/**
+ * Determine LLM readiness for health-check purposes.
+ *
+ * Returns `{ ready: true }` when provider, model, and API key are all present.
+ * Otherwise returns a reason code — no secrets or internal details are exposed.
+ */
+export function getLLMReadiness(): LLMReadiness {
+  const config = getLLMConfig();
+  if (!config) {
+    return { ready: false, reason: "not_configured" };
+  }
+  if (!hasApiKey(config.provider)) {
+    return { ready: false, reason: "api_key_missing" };
+  }
+  return { ready: true };
 }
 
 /**

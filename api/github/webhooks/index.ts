@@ -26,6 +26,7 @@ import {
   recalculateLeaderboardForPR,
 } from "../../lib/implementation-intake.js";
 import { parseCommand, executeCommand } from "../../lib/commands/index.js";
+import { getLLMReadiness } from "../../lib/llm/provider.js";
 
 /**
  * Queen Bot - Hivemoot Governance Automation
@@ -904,6 +905,10 @@ export default function handler(req: IncomingMessage, res: ServerResponse): void
       JSON.stringify({
         status: validation.valid ? "ok" : "misconfigured",
         bot: "Queen",
+        checks: {
+          githubApp: { ready: validation.valid },
+          llm: getLLMReadiness(),
+        },
       })
     );
     return;

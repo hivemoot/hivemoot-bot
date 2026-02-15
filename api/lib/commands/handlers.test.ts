@@ -30,6 +30,19 @@ vi.mock("../index.js", () => ({
   }),
 }));
 
+vi.mock("../discussions.js", () => ({
+  getRepoDiscussionInfo: vi.fn().mockResolvedValue({
+    repoId: "repo-id",
+    repoCreatedAt: "2026-02-15T00:00:00.000Z",
+    hasDiscussions: true,
+    categories: [{ id: "cat-1", name: "Hivemoot Reports" }],
+  }),
+}));
+
+vi.mock("../llm/provider.js", () => ({
+  getLLMReadiness: vi.fn(() => ({ ready: false, reason: "not_configured" })),
+}));
+
 let mockIssueOps: Record<string, ReturnType<typeof vi.fn>>;
 let mockGovernance: Record<string, ReturnType<typeof vi.fn>>;
 let mockLabelService: Record<string, ReturnType<typeof vi.fn>>;
@@ -453,6 +466,54 @@ describe("executeCommand", () => {
       const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
       expect(commentArgs.body).toContain("**PR Workflow**");
       expect(commentArgs.body).toContain("trustedReviewers` is empty");
+    });
+
+    it("should report permission probe failures with details", async () => {
+      const octokit = createMockOctokit();
+      octokit.rest.pulls.list.mockRejectedValueOnce(new Error("Forbidden"));
+
+      const ctx = createCtx({ verb: "doctor", octokit });
+      await executeCommand(ctx);
+
+      const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
+      expect(commentArgs.body).toContain("**Permissions**: 1/3 capability probes failed");
+      expect(commentArgs.body).toContain("pull_requests: Forbidden");
+    });
+
+    it("should show LLM pass when provider and key are configured", async () => {
+      const { getLLMReadiness } = await import("../llm/provider.js");
+      vi.mocked(getLLMReadiness).mockReturnValueOnce({ ready: true });
+
+      const ctx = createCtx({ verb: "doctor" });
+      await executeCommand(ctx);
+
+      const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
+      expect(commentArgs.body).toContain("**LLM**: Provider, model, and API key are configured");
+    });
+
+    it("should show LLM fail when api key is missing", async () => {
+      const { getLLMReadiness } = await import("../llm/provider.js");
+      vi.mocked(getLLMReadiness).mockReturnValueOnce({
+        ready: false,
+        reason: "api_key_missing",
+      });
+
+      const ctx = createCtx({ verb: "doctor" });
+      await executeCommand(ctx);
+
+      const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
+      expect(commentArgs.body).toContain("**LLM**: Provider/model configured but API key is missing");
+    });
+
+    it("should continue report generation when a check throws unexpectedly", async () => {
+      mockLabelService.ensureRequiredLabels.mockRejectedValueOnce(new Error("boom"));
+
+      const ctx = createCtx({ verb: "doctor" });
+      await executeCommand(ctx);
+
+      const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
+      expect(commentArgs.body).toContain("**Labels**: Check failed: boom");
+      expect(commentArgs.body).toContain("**Config**");
     });
   });
 

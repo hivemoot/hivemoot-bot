@@ -139,7 +139,13 @@ export class CommitMessageGenerator {
             schema: CommitMessageSchema,
             system: COMMIT_MESSAGE_SYSTEM_PROMPT,
             prompt: buildCommitMessagePrompt(context),
-            experimental_repairText: repairMalformedJsonText,
+            experimental_repairText: async (args) => {
+              const repaired = await repairMalformedJsonText(args);
+              if (repaired !== null) {
+                this.logger.info(`Repaired malformed LLM JSON output (error: ${args.error.message})`);
+              }
+              return repaired;
+            },
             maxTokens: 500,
             temperature: LLM_DEFAULTS.temperature,
             maxRetries: 0,

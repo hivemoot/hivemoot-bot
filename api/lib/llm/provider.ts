@@ -182,12 +182,16 @@ export function createModel(config: LLMConfig): LanguageModelV1 {
       //   supportsStructuredOutputs=false → appends "JSON schema: …" to the
       //     system prompt and sets responseMimeType only
       //
+      // Revisit after upgrading @ai-sdk/google beyond v1.2.22 — newer versions
+      // may properly serialize schemas for gemini-3-* models, making this
+      // workaround unnecessary.
+      //
       // References:
       //   • AI SDK docs on the flag:
       //     https://ai-sdk.dev/providers/ai-sdk-providers/google-generative-ai#structured-outputs
-      //   • SDK source (google provider, object-json mode, lines 477-493 of dist/index.js):
-      //     responseSchema is sent only when supportsStructuredOutputs is true
-      //   • SDK source (ai core, generateObject, line 2832 of dist/index.js):
+      //   • SDK source (@ai-sdk/google, object-json mode in doGenerate):
+      //     responseSchema is populated only when supportsStructuredOutputs is true
+      //   • SDK source (ai core, generateObject):
       //     injectJsonInstruction() called when supportsStructuredOutputs is false
       return google(config.model, { structuredOutputs: false });
     }

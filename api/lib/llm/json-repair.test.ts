@@ -35,6 +35,20 @@ describe("extractLikelyJsonPayload", () => {
   it("returns null for already-plain JSON (no repair needed)", () => {
     expect(extractLikelyJsonPayload("{\"already\":\"json\"}")).toBeNull();
   });
+
+  it("extracts JSON containing braces inside string values", () => {
+    const text = "Preamble {\"subject\":\"Fix {bug} in parser\",\"body\":\"Use obj[key] syntax\"}";
+    expect(extractLikelyJsonPayload(text)).toBe(
+      "{\"subject\":\"Fix {bug} in parser\",\"body\":\"Use obj[key] syntax\"}"
+    );
+  });
+
+  it("extracts JSON with escaped quotes in string values", () => {
+    const text = "Here: {\"subject\":\"Fix \\\"quoted\\\" term\",\"body\":\"Details\"}";
+    expect(extractLikelyJsonPayload(text)).toBe(
+      "{\"subject\":\"Fix \\\"quoted\\\" term\",\"body\":\"Details\"}"
+    );
+  });
 });
 
 describe("repairMalformedJsonText", () => {

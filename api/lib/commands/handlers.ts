@@ -346,9 +346,23 @@ async function handlePreflight(ctx: CommandContext): Promise<CommandResult> {
         const formatted = formatCommitMessage(result.message, ctx.issueNumber);
         body += `### Proposed Commit Message\n\n`;
         body += "```\n" + formatted + "\n```\n\n";
-      } else if (result.kind === "generation_failed") {
-        body += `### Commit Message\n\n`;
-        body += `${commitMessageWarning}\n\n`;
+      } else {
+        switch (result.kind) {
+          case "generation_failed":
+            body += `### Commit Message\n\n`;
+            body += `${commitMessageWarning}\n\n`;
+            break;
+          case "not_configured":
+            ctx.log.info("Commit message generation skipped: LLM not configured");
+            break;
+          default: {
+            const _exhaustive: never = result.kind;
+            ctx.log.error(`Unhandled commit message failure kind: ${_exhaustive}`);
+            body += `### Commit Message\n\n`;
+            body += `${commitMessageWarning}\n\n`;
+            break;
+          }
+        }
       }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);

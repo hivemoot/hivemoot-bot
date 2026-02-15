@@ -7,8 +7,6 @@
  * Usage:
  *   GOOGLE_API_KEY=... npx tsx scripts/test-llm.ts
  *
- * Or set LLM_PROVIDER/LLM_MODEL/GOOGLE_API_KEY in env.
- *
  * This is an operator troubleshooting tool (manual use only).
  * It is not part of CI and has no production/runtime effect.
  */
@@ -25,7 +23,7 @@ if (!apiKey) {
 
 const google = createGoogleGenerativeAI({ apiKey });
 
-// Simple test schema (same as CommitMessageSchema)
+// Simplified version of CommitMessageSchema for testing
 const simpleSchema = z.object({
   subject: z.string().describe("Short imperative subject line"),
   body: z.string().describe("1-2 sentences explaining WHY"),

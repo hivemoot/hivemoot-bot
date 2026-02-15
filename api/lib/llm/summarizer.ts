@@ -91,7 +91,13 @@ export class DiscussionSummarizer {
             schema: DiscussionSummarySchema,
             system: SUMMARIZATION_SYSTEM_PROMPT,
             prompt: buildUserPrompt(context),
-            experimental_repairText: repairMalformedJsonText,
+            experimental_repairText: async (args) => {
+              const repaired = await repairMalformedJsonText(args);
+              if (repaired !== null) {
+                this.logger.info(`Repaired malformed LLM JSON output (error: ${args.error.message})`);
+              }
+              return repaired;
+            },
             maxTokens: config.maxTokens,
             temperature: LLM_DEFAULTS.temperature,
             maxRetries: 0, // Disable SDK retry; our wrapper handles rate-limits

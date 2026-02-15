@@ -729,7 +729,13 @@ export async function generateStandupLLMContent(
           schema: StandupOutputSchema,
           system: STANDUP_SYSTEM_PROMPT,
           prompt: buildStandupUserPrompt(data),
-          experimental_repairText: repairMalformedJsonText,
+          experimental_repairText: async (args) => {
+            const repaired = await repairMalformedJsonText(args);
+            if (repaired !== null) {
+              logger.info(`Repaired malformed LLM JSON output (error: ${args.error.message})`);
+            }
+            return repaired;
+          },
           maxTokens: config.maxTokens,
           temperature: 0.4,
           maxRetries: 0, // Disable SDK retry; our wrapper handles rate-limits

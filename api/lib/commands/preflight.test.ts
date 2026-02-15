@@ -245,6 +245,9 @@ describe("/preflight command", () => {
     expect(body).not.toContain("### Commit Message");
     expect(body).not.toContain("Proposed Commit Message");
     expect(body).not.toContain("LLM not configured");
+    expect(ctx.log.info).toHaveBeenCalledWith(
+      "Commit message generation skipped: LLM not configured"
+    );
   });
 
   it("should show generic warning when commit message generator throws", async () => {

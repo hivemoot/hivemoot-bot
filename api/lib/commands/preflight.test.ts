@@ -54,12 +54,14 @@ vi.mock("../merge-readiness.js", () => ({
 }));
 
 vi.mock("../llm/commit-message.js", () => ({
-  CommitMessageGenerator: vi.fn().mockImplementation(() => ({
-    generate: vi.fn().mockResolvedValue({
-      success: true,
-      message: { subject: "Add feature X", body: "Implements the feature for solving problem Y." },
-    }),
-  })),
+  CommitMessageGenerator: vi.fn().mockImplementation(function () {
+    return {
+      generate: vi.fn().mockResolvedValue({
+        success: true,
+        message: { subject: "Add feature X", body: "Implements the feature for solving problem Y." },
+      }),
+    };
+  }),
   formatCommitMessage: vi.fn().mockReturnValue("Add feature X\n\nImplements the feature for solving problem Y.\n\nPR: #42"),
 }));
 
@@ -205,14 +207,15 @@ describe("/preflight command", () => {
   it("should show a generic warning when commit message generation fails", async () => {
     const { CommitMessageGenerator } = await import("../llm/commit-message.js");
     vi.mocked(CommitMessageGenerator).mockImplementationOnce(
-      () =>
-        ({
+      function () {
+        return {
           generate: vi.fn().mockResolvedValue({
             success: false,
             reason: "No object generated: could not parse the response.",
             kind: "generation_failed",
           }),
-        }) as never
+        };
+      } as any
     );
 
     const ctx = createPRCtx();
@@ -228,14 +231,15 @@ describe("/preflight command", () => {
   it("should omit commit message section when LLM is not configured", async () => {
     const { CommitMessageGenerator } = await import("../llm/commit-message.js");
     vi.mocked(CommitMessageGenerator).mockImplementationOnce(
-      () =>
-        ({
+      function () {
+        return {
           generate: vi.fn().mockResolvedValue({
             success: false,
             reason: "LLM not configured",
             kind: "not_configured",
           }),
-        }) as never
+        };
+      } as any
     );
 
     const ctx = createPRCtx();
@@ -253,10 +257,11 @@ describe("/preflight command", () => {
   it("should show generic warning when commit message generator throws", async () => {
     const { CommitMessageGenerator } = await import("../llm/commit-message.js");
     vi.mocked(CommitMessageGenerator).mockImplementationOnce(
-      () =>
-        ({
+      function () {
+        return {
           generate: vi.fn().mockRejectedValue(new Error("provider timeout")),
-        }) as never
+        };
+      } as any
     );
 
     const ctx = createPRCtx();

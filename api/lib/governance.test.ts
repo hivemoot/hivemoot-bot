@@ -165,9 +165,9 @@ describe("GovernanceService", () => {
           success: true,
           summary: mockSummary,
         });
-        vi.mocked(DiscussionSummarizer).mockImplementation(() => ({
-          summarize: mockSummarize,
-        }));
+        vi.mocked(DiscussionSummarizer).mockImplementation(function () {
+          return { summarize: mockSummarize };
+        } as any);
 
         await governance.transitionToVoting(testRef);
 
@@ -192,9 +192,9 @@ describe("GovernanceService", () => {
           success: false,
           reason: "API rate limited",
         });
-        vi.mocked(DiscussionSummarizer).mockImplementation(() => ({
-          summarize: mockSummarize,
-        }));
+        vi.mocked(DiscussionSummarizer).mockImplementation(function () {
+          return { summarize: mockSummarize };
+        } as any);
 
         await governance.transitionToVoting(testRef);
 
@@ -208,9 +208,9 @@ describe("GovernanceService", () => {
 
       it("should fall back to generic message when LLM throws an error", async () => {
         const mockSummarize = vi.fn().mockRejectedValue(new Error("Network error"));
-        vi.mocked(DiscussionSummarizer).mockImplementation(() => ({
-          summarize: mockSummarize,
-        }));
+        vi.mocked(DiscussionSummarizer).mockImplementation(function () {
+          return { summarize: mockSummarize };
+        } as any);
 
         await governance.transitionToVoting(testRef);
 

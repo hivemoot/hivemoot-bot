@@ -160,22 +160,34 @@ async function reply(ctx: CommandContext, body: string): Promise<void> {
 }
 
 /**
- * Check if the bot has already reacted with 👀 to this comment.
- * Used as an idempotency guard against webhook retries — if we already
- * processed a command (indicated by our eyes reaction), skip re-execution.
+ * Check if the bot has already reacted to this comment with a processing
+ * marker (👀 for known commands, 😕 for unknown commands).
+ * Used as an idempotency guard against webhook retries.
  */
 async function alreadyProcessed(ctx: CommandContext): Promise<boolean> {
   try {
-    const { data: reactions } = await ctx.octokit.rest.reactions.listForIssueComment({
-      owner: ctx.owner,
-      repo: ctx.repo,
-      comment_id: ctx.commentId,
-      content: "eyes",
-      per_page: 100,
-    });
-    // Check if any eyes reaction was created by our app's bot account.
+    // Check both marker reactions: eyes (known commands) and confused (unknown commands)
+    const [eyesRes, confusedRes] = await Promise.all([
+      ctx.octokit.rest.reactions.listForIssueComment({
+        owner: ctx.owner,
+        repo: ctx.repo,
+        comment_id: ctx.commentId,
+        content: "eyes",
+        per_page: 100,
+      }),
+      ctx.octokit.rest.reactions.listForIssueComment({
+        owner: ctx.owner,
+        repo: ctx.repo,
+        comment_id: ctx.commentId,
+        content: "confused",
+        per_page: 100,
+      }),
+    ]);
+    // Check if any marker reaction was created by our app's bot account.
     // GitHub App bot usernames follow the pattern "<app-slug>[bot]".
-    return reactions.some((r) => r.user?.login.endsWith("[bot]"));
+    const hasBotReaction = (reactions: typeof eyesRes.data) =>
+      reactions.some((r) => r.user?.login.endsWith("[bot]"));
+    return hasBotReaction(eyesRes.data) || hasBotReaction(confusedRes.data);
   } catch {
     // If we can't check reactions, proceed with execution to avoid
     // silently dropping commands due to transient API failures.
@@ -470,11 +482,12 @@ export const KNOWN_COMMANDS = Object.keys(COMMAND_HANDLERS);
  * Execute a parsed command.
  *
  * Authorization flow:
- * 1. Check if the verb is recognized → ignore if not
- * 2. Check sender permissions → silent ignore if not authorized
- * 3. React with 👀 to acknowledge receipt
- * 4. Execute the handler
- * 5. React with ✅ on success, post error comment on rejection
+ * 1. Check sender permissions → silent ignore if not authorized
+ * 2. Check idempotency (eyes/confused reaction) → skip on retry
+ * 3. Unknown command → react confused + reply with available commands
+ * 4. React with 👀 to acknowledge receipt
+ * 5. Execute the handler
+ * 6. React with ✅ on success, post error comment on rejection
  */
 export async function executeCommand(ctx: CommandContext): Promise<CommandResult> {
   const handler = COMMAND_HANDLERS[ctx.verb];
@@ -489,21 +502,21 @@ export async function executeCommand(ctx: CommandContext): Promise<CommandResult
     return { status: "ignored" };
   }
 
+  // Idempotency guard: if we already reacted with 👀 or 😕, this is a webhook
+  // retry and the command was already executed. Skip to prevent duplicates.
+  if (await alreadyProcessed(ctx)) {
+    ctx.log.info(
+      `Command /${ctx.verb} on comment ${ctx.commentId} already processed — skipping retry`,
+    );
+    return { status: "ignored" };
+  }
+
   if (!handler) {
     // Unknown command from an authorized user — reply with available commands
     const available = KNOWN_COMMANDS.map((c) => `\`/${c}\``).join(", ");
     await react(ctx, "confused");
     await reply(ctx, `Unknown command \`/${ctx.verb}\`. Available commands: ${available}`);
     return { status: "rejected", reason: `Unknown command: /${ctx.verb}` };
-  }
-
-  // Idempotency guard: if we already reacted with 👀, this is a webhook
-  // retry and the command was already executed. Skip to prevent duplicates.
-  if (await alreadyProcessed(ctx)) {
-    ctx.log.info(
-      `Command /${ctx.verb} on comment ${ctx.commentId} already processed (eyes reaction found) — skipping retry`,
-    );
-    return { status: "ignored" };
   }
 
   // Acknowledge receipt

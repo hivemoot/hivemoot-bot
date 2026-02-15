@@ -150,6 +150,25 @@ describe("executeCommand", () => {
       expect(replyCall[0].body).toContain("`/preflight`");
     });
 
+    it("should skip unknown command on webhook retry (confused reaction exists)", async () => {
+      const octokit = createMockOctokit();
+      // Simulate a previous confused reaction from the bot on the eyes check (empty)
+      // and a confused reaction from the bot on the confused check
+      octokit.rest.reactions.listForIssueComment
+        .mockResolvedValueOnce({ data: [] }) // eyes check — none
+        .mockResolvedValueOnce({
+          data: [{ user: { login: "hivemoot[bot]" } }],
+        }); // confused check — bot reacted
+
+      const ctx = createCtx({ verb: "unknown", octokit });
+      const result = await executeCommand(ctx);
+
+      expect(result).toEqual({ status: "ignored" });
+      // Should NOT post a duplicate reply or reaction
+      expect(octokit.rest.reactions.createForIssueComment).not.toHaveBeenCalled();
+      expect(octokit.rest.issues.createComment).not.toHaveBeenCalled();
+    });
+
     it("should silently ignore unknown command from unauthorized users", async () => {
       const ctx = createCtx({
         verb: "unknown",

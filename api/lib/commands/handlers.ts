@@ -389,6 +389,135 @@ async function handlePreflight(ctx: CommandContext): Promise<CommandResult> {
 }
 
 /**
+ * Handle /squash command: run preflight and squash-merge when all hard checks pass.
+ *
+ * Behavior:
+ * - PR-only command
+ * - Fail-closed: blocks merge when checks fail or commit message generation fails
+ * - Requires repository squash-merge capability to be enabled
+ * - Re-runs preflight immediately before merge to reduce stale CI race windows
+ */
+async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
+  if (!ctx.isPullRequest) {
+    return { status: "rejected", reason: "The `/squash` command can only be used on pull requests, not issues." };
+  }
+
+  const octokit = ctx.octokit as any; // Full Probot client at runtime
+  const prs = createPROperations(octokit, { appId: ctx.appId });
+  const repoConfig = await loadRepositoryConfig(octokit, ctx.owner, ctx.repo);
+  const ref: PRRef = { owner: ctx.owner, repo: ctx.repo, prNumber: ctx.issueNumber };
+  const currentLabels = ctx.issueLabels.map((l) => l.name);
+
+  const pr = await prs.get(ref);
+  if (pr.merged || pr.state !== "open") {
+    return { status: "rejected", reason: "This pull request is already closed or merged." };
+  }
+  const expectedHeadSha = pr.headSha;
+
+  const repoInfo = await octokit.rest.repos.get({ owner: ctx.owner, repo: ctx.repo });
+  if (!repoInfo?.data?.allow_squash_merge) {
+    return { status: "rejected", reason: "Squash merge is disabled for this repository. Enable it in repository settings before using `/squash`." };
+  }
+
+  const preflight = await evaluatePreflightChecks({
+    prs,
+    ref,
+    config: repoConfig.governance.pr.mergeReady,
+    trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+    currentLabels,
+  });
+
+  const checklistLines = preflight.checks.map(formatCheckItem);
+  const hardCount = preflight.checks.filter((c) => c.severity === "hard").length;
+  const hardPassed = preflight.checks.filter((c) => c.severity === "hard" && c.passed).length;
+
+  let body = `## 🐝 Squash Preflight for #${ctx.issueNumber}\n\n`;
+  body += `### Checklist\n\n`;
+  body += checklistLines.join("\n") + "\n\n";
+
+  if (!preflight.allHardChecksPassed) {
+    body += `**${hardPassed}/${hardCount} hard checks passed.** Squash merge was blocked.`;
+    return { status: "rejected", reason: body };
+  }
+
+  let commitTitle = "";
+  let commitBody = "";
+  try {
+    const prContext = await gatherPRContext(ctx, ref);
+    const noop = () => {};
+    const generator = new CommitMessageGenerator({
+      logger: {
+        info: (...a: unknown[]) => ctx.log.info(...a),
+        error: (...a: unknown[]) => ctx.log.error(...a),
+        warn: noop,
+        debug: noop,
+        group: noop,
+        groupEnd: noop,
+      },
+    });
+    const result = await generator.generate(prContext);
+
+    if (!result.success) {
+      body += "### Commit Message\n\n";
+      body += "Commit message generation failed. Squash merge was blocked.\n\n";
+      body += `**${hardPassed}/${hardCount} hard checks passed.** Retry \`/squash\` after the generator is healthy.`;
+      return { status: "rejected", reason: body };
+    }
+
+    commitTitle = result.message.subject.trim();
+    const generatedBody = result.message.body.trim();
+    commitBody = generatedBody
+      ? `${generatedBody}\n\nPR: #${ctx.issueNumber}`
+      : `PR: #${ctx.issueNumber}`;
+    body += "### Proposed Commit Message\n\n";
+    body += "```\n" + formatCommitMessage(result.message, ctx.issueNumber) + "\n```\n\n";
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    ctx.log.error({ err: error }, `Commit message generation failed during /squash: ${reason}`);
+    body += "### Commit Message\n\n";
+    body += "Commit message generation failed. Squash merge was blocked.\n\n";
+    body += `**${hardPassed}/${hardCount} hard checks passed.** Retry \`/squash\` after the generator is healthy.`;
+    return { status: "rejected", reason: body };
+  }
+
+  const freshPreflight = await evaluatePreflightChecks({
+    prs,
+    ref,
+    config: repoConfig.governance.pr.mergeReady,
+    trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+    currentLabels,
+  });
+  if (!freshPreflight.allHardChecksPassed) {
+    const freshHardCount = freshPreflight.checks.filter((c) => c.severity === "hard").length;
+    const freshHardPassed = freshPreflight.checks.filter((c) => c.severity === "hard" && c.passed).length;
+    body += `**${freshHardPassed}/${freshHardCount} hard checks passed on final verification.** Checks changed while processing; squash merge was blocked.`;
+    return { status: "rejected", reason: body };
+  }
+
+  try {
+    await octokit.rest.pulls.merge({
+      owner: ctx.owner,
+      repo: ctx.repo,
+      pull_number: ctx.issueNumber,
+      sha: expectedHeadSha,
+      merge_method: "squash",
+      commit_title: commitTitle,
+      commit_message: commitBody,
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    ctx.log.error({ err: error }, `Squash merge failed for #${ctx.issueNumber}: ${reason}`);
+    body += "### Merge\n\n";
+    body += "Squash merge failed due to a GitHub merge API error. Resolve merge blockers and retry.\n\n";
+    return { status: "rejected", reason: body };
+  }
+
+  body += `**${hardPassed}/${hardCount} hard checks passed.** Squash merge completed successfully.`;
+  await reply(ctx, body);
+  return { status: "executed", message: "Squash merge completed." };
+}
+
+/**
  * Format a single preflight check item as a markdown line.
  */
 function formatCheckItem(check: PreflightCheckItem): string {
@@ -461,6 +590,7 @@ const COMMAND_HANDLERS: Record<string, (ctx: CommandContext) => Promise<CommandR
   vote: handleVote,
   implement: handleImplement,
   preflight: handlePreflight,
+  squash: handleSquash,
 };
 
 /**

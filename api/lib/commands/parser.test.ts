@@ -35,6 +35,11 @@ describe("parseCommand", () => {
       expect(result).toEqual({ verb: "preflight", freeText: undefined });
     });
 
+    it("should parse @hivemoot squash (no slash)", () => {
+      const result = parseCommand("@hivemoot squash");
+      expect(result).toEqual({ verb: "squash", freeText: undefined });
+    });
+
     it("should capture free text with slashless command", () => {
       const result = parseCommand("@hivemoot implement security fix needs fast-track");
       expect(result).toEqual({ verb: "implement", freeText: "security fix needs fast-track" });
@@ -242,6 +247,7 @@ describe("parseCommand", () => {
       expect(parseCommand("@hivemoot /vote")).toEqual(parseCommand("@hivemoot vote"));
       expect(parseCommand("@hivemoot /implement")).toEqual(parseCommand("@hivemoot implement"));
       expect(parseCommand("@hivemoot /preflight")).toEqual(parseCommand("@hivemoot preflight"));
+      expect(parseCommand("@hivemoot /squash")).toEqual(parseCommand("@hivemoot squash"));
     });
 
     it("should produce identical results for slashed and slashless with free text", () => {

@@ -412,6 +412,7 @@ async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
   if (pr.merged || pr.state !== "open") {
     return { status: "rejected", reason: "This pull request is already closed or merged." };
   }
+  const expectedHeadSha = pr.headSha;
 
   const repoInfo = await octokit.rest.repos.get({ owner: ctx.owner, repo: ctx.repo });
   if (!repoInfo?.data?.allow_squash_merge) {
@@ -459,7 +460,7 @@ async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
     if (!result.success) {
       body += "### Commit Message\n\n";
       body += "Commit message generation failed. Squash merge was blocked.\n\n";
-      body += `**${hardPassed}/${hardCount} hard checks passed.** Fix commit-message generation, then retry \`/squash\`.`;
+      body += `**${hardPassed}/${hardCount} hard checks passed.** Retry \`/squash\` after the generator is healthy.`;
       return { status: "rejected", reason: body };
     }
 
@@ -498,6 +499,7 @@ async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
       owner: ctx.owner,
       repo: ctx.repo,
       pull_number: ctx.issueNumber,
+      sha: expectedHeadSha,
       merge_method: "squash",
       commit_title: commitTitle,
       commit_message: commitBody,

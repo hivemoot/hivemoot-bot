@@ -131,6 +131,7 @@ describe("/squash command", () => {
     expect(result).toEqual({ status: "executed", message: "Squash merge completed." });
     expect(ctx.octokit.rest.pulls.merge).toHaveBeenCalledWith(
       expect.objectContaining({
+        sha: "abc123",
         merge_method: "squash",
         commit_title: "Add merge helper",
       }),
@@ -222,6 +223,8 @@ describe("/squash command", () => {
     const body = (ctx.octokit.rest.issues.createComment.mock.calls[0][0] as { body: string }).body;
     expect(body).toContain("Commit message generation failed");
     expect(body).not.toContain("LLM not configured");
+    expect(body).toContain("Retry `/squash` after the generator is healthy");
+    expect(body).not.toContain("Fix commit-message generation");
   });
 
   it("fails closed when commit message generation throws", async () => {
@@ -285,6 +288,7 @@ describe("/squash command", () => {
     expect(result).toEqual({ status: "executed", message: "Squash merge completed." });
     expect(ctx.octokit.rest.pulls.merge).toHaveBeenCalledWith(
       expect.objectContaining({
+        sha: "abc123",
         commit_title: "Tighten merge command",
         commit_message: "PR: #42",
       }),

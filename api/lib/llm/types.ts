@@ -127,6 +127,14 @@ export const LLM_DEFAULTS = {
   temperature: 0.3,
 } as const;
 
+/**
+ * LLM readiness result for health checks.
+ * Exposes only booleans and a reason code — no secrets, provider names, or model names.
+ */
+export type LLMReadiness =
+  | { ready: true }
+  | { ready: false; reason: "not_configured" | "api_key_missing" };
+
 // ───────────────────────────────────────────────────────────────────────────────
 // Issue Context for Summarization
 // ───────────────────────────────────────────────────────────────────────────────

@@ -159,6 +159,7 @@ Permissions:
 
 - Issues: Read & Write
 - Pull Requests: Read & Write
+- Contents: Read & Write
 - Metadata: Read
 
 Events:

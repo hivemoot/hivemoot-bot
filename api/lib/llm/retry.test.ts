@@ -251,7 +251,7 @@ describe("withLLMRetry", () => {
     ).rejects.toThrow();
 
     expect(fn).toHaveBeenCalledTimes(1);
-    expect(log.info).toHaveBeenCalledWith(
+    expect(log.warn).toHaveBeenCalledWith(
       expect.stringContaining("budget")
     );
   });

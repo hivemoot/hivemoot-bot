@@ -39,7 +39,7 @@ export const LLM_RETRY_DEFAULTS: LLMRetryConfig = {
   maxRetries: 3,
   maxRetryDelayMs: 60_000,
   defaultRetryDelayMs: 5_000,
-  maxTotalElapsedMs: 30_000,
+  maxTotalElapsedMs: 45_000,
 };
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -143,7 +143,7 @@ export async function withLLMRetry<T>(
       if (maxTotalElapsedMs !== undefined) {
         const elapsed = Date.now() - startTime;
         if (elapsed + delay > maxTotalElapsedMs) {
-          logger?.info(
+          logger?.warn(
             `Rate-limited but total elapsed ${(elapsed / 1000).toFixed(1)}s + ` +
               `${(delay / 1000).toFixed(1)}s delay would exceed ` +
               `${(maxTotalElapsedMs / 1000).toFixed(1)}s budget — aborting`

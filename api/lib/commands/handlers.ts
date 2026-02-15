@@ -581,6 +581,165 @@ async function gatherPRContext(
   return prContext;
 }
 
+/**
+ * Handle /merge-queue command: generate a prioritized merge queue summary.
+ *
+ * This command helps maintainers decide which PRs to merge by organizing all open PRs
+ * into actionable categories with merge-readiness status. It's not PR-specific and can
+ * be run on any issue or PR to get the repository-wide merge queue status.
+ */
+async function handleMergeQueue(ctx: CommandContext): Promise<CommandResult> {
+  const ref = { owner: ctx.owner, repo: ctx.repo };
+
+  try {
+    // Cast to full Probot octokit (same pattern as handlePreflight)
+    const octokit = ctx.octokit as any;
+    const config = await loadRepositoryConfig(octokit, ref.owner, ref.repo);
+    const prs = createPROperations(octokit, { appId: ctx.appId });
+
+    // Find all open PRs with candidate label (implementation PRs)
+    const candidatePRs = await prs.findPRsWithLabel(ref.owner, ref.repo, LABELS.IMPLEMENTATION);
+
+    // Also find merge-ready PRs to ensure we catch any that might not have candidate label
+    const mergeReadyPRs = await prs.findPRsWithLabel(ref.owner, ref.repo, LABELS.MERGE_READY);
+
+    // Combine and deduplicate
+    const allPRsMap = new Map<number, typeof candidatePRs[0]>();
+    for (const pr of [...candidatePRs, ...mergeReadyPRs]) {
+      allPRsMap.set(pr.number, pr);
+    }
+    const allPRs = Array.from(allPRsMap.values());
+
+    if (allPRs.length === 0) {
+      await reply(ctx, "## 🐝 Merge Queue\n\nNo open implementation PRs found. The queue is empty!");
+      return { status: "executed", message: "Merge queue report posted." };
+    }
+
+    // Evaluate each PR's merge readiness
+    interface PRStatus {
+      number: number;
+      createdAt: Date;
+      updatedAt: Date;
+      labels: Array<{ name: string }>;
+      checks: {
+        allHardChecksPassed: boolean;
+        details: string[];
+        hasConflicts: boolean;
+        hasMergeReady: boolean;
+      };
+    }
+
+    const prStatuses: PRStatus[] = [];
+    const { mergeReady, trustedReviewers } = config.governance.pr;
+
+    for (const pr of allPRs) {
+      const currentLabels = pr.labels.map(l => l.name);
+      const hasMergeReady = currentLabels.some(l => isLabelMatch(l, LABELS.MERGE_READY));
+
+      // Evaluate preflight checks for this PR
+      const preflight = await evaluatePreflightChecks({
+        prs,
+        ref: { ...ref, prNumber: pr.number },
+        config: mergeReady || { minApprovals: 2 },
+        trustedReviewers,
+        currentLabels,
+      });
+
+      // Extract key check results
+      const failedHardChecks = preflight.checks
+        .filter(c => c.severity === "hard" && !c.passed)
+        .map(c => `${c.name}: ${c.detail}`);
+
+      const conflictCheck = preflight.checks.find(c => c.name === "No merge conflicts");
+      const hasConflicts = conflictCheck ? !conflictCheck.passed : false;
+
+      prStatuses.push({
+        number: pr.number,
+        createdAt: pr.createdAt,
+        updatedAt: pr.updatedAt,
+        labels: pr.labels,
+        checks: {
+          allHardChecksPassed: preflight.allHardChecksPassed,
+          details: failedHardChecks,
+          hasConflicts,
+          hasMergeReady,
+        },
+      });
+    }
+
+    // Categorize PRs
+    const readyToMerge = prStatuses.filter(pr => pr.checks.allHardChecksPassed);
+    const blocked = prStatuses.filter(pr => !pr.checks.allHardChecksPassed);
+
+    // Sort ready PRs by age (oldest first - first come, first served)
+    readyToMerge.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+
+    // Sort blocked PRs: conflicts first, then by number of blocking issues
+    blocked.sort((a, b) => {
+      if (a.checks.hasConflicts !== b.checks.hasConflicts) {
+        return a.checks.hasConflicts ? -1 : 1; // Conflicts first (need attention)
+      }
+      return b.checks.details.length - a.checks.details.length; // Most issues first
+    });
+
+    // Build the report
+    let report = `## 🐝 Merge Queue — ${allPRs.length} Open Implementation PR${allPRs.length === 1 ? '' : 's'}\n\n`;
+
+    if (readyToMerge.length > 0) {
+      report += `### ✅ Ready to Merge (${readyToMerge.length})\n\n`;
+      report += "These PRs have passed all hard preflight checks and are ready for maintainer merge.\n\n";
+      report += "| PR | Age | Labels |\n";
+      report += "|---|---|---|\n";
+
+      for (const pr of readyToMerge) {
+        const age = Math.floor((Date.now() - pr.createdAt.getTime()) / (1000 * 60 * 60 * 24));
+        const ageStr = age === 0 ? "today" : `${age}d`;
+        const hasMR = pr.checks.hasMergeReady ? "🏷️ merge-ready" : "";
+        report += `| [#${pr.number}](https://github.com/${ref.owner}/${ref.repo}/pull/${pr.number}) | ${ageStr} | ${hasMR} |\n`;
+      }
+      report += "\n";
+
+      if (readyToMerge.length === 1) {
+        report += `💡 **Quick merge:** [Click here to merge #${readyToMerge[0].number}](https://github.com/${ref.owner}/${ref.repo}/pull/${readyToMerge[0].number})\n\n`;
+      } else {
+        report += `💡 **Recommended merge order:** Start with #${readyToMerge.slice(0, 3).map(pr => pr.number).join(", #")} (oldest first to minimize rebase cycles)\n\n`;
+      }
+    }
+
+    if (blocked.length > 0) {
+      report += `### ⏸️ Blocked (${blocked.length})\n\n`;
+      report += "These PRs have one or more failing hard checks.\n\n";
+      report += "| PR | Blockers |\n";
+      report += "|---|---|\n";
+
+      for (const pr of blocked.slice(0, 10)) { // Limit to top 10 to avoid huge reports
+        const blockerSummary = pr.checks.hasConflicts
+          ? "🔴 Has merge conflicts"
+          : pr.checks.details[0] || "Unknown blocker";
+        report += `| [#${pr.number}](https://github.com/${ref.owner}/${ref.repo}/pull/${pr.number}) | ${blockerSummary} |\n`;
+      }
+
+      if (blocked.length > 10) {
+        report += `\n_... and ${blocked.length - 10} more blocked PRs_\n`;
+      }
+      report += "\n";
+    }
+
+    report += "---\n";
+    report += `buzz buzz 🐝 ${SIGNATURE}`;
+
+    await reply(ctx, report);
+    return { status: "executed", message: "Merge queue report posted." };
+
+  } catch (error) {
+    ctx.log.error({ err: error }, "Failed to generate merge queue report");
+    return {
+      status: "rejected",
+      reason: "Failed to generate merge queue report. Check logs for details."
+    };
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Command Router
 // ─────────────────────────────────────────────────────────────────────────────
@@ -591,6 +750,7 @@ const COMMAND_HANDLERS: Record<string, (ctx: CommandContext) => Promise<CommandR
   implement: handleImplement,
   preflight: handlePreflight,
   squash: handleSquash,
+  "merge-queue": handleMergeQueue,
 };
 
 /**

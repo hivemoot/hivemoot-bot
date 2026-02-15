@@ -19,6 +19,53 @@ describe("parseCommand", () => {
     });
   });
 
+  describe("slashless commands (aliases)", () => {
+    it("should parse @hivemoot vote (no slash)", () => {
+      const result = parseCommand("@hivemoot vote");
+      expect(result).toEqual({ verb: "vote", freeText: undefined });
+    });
+
+    it("should parse @hivemoot implement (no slash)", () => {
+      const result = parseCommand("@hivemoot implement");
+      expect(result).toEqual({ verb: "implement", freeText: undefined });
+    });
+
+    it("should parse @hivemoot preflight (no slash)", () => {
+      const result = parseCommand("@hivemoot preflight");
+      expect(result).toEqual({ verb: "preflight", freeText: undefined });
+    });
+
+    it("should parse @hivemoot squash (no slash)", () => {
+      const result = parseCommand("@hivemoot squash");
+      expect(result).toEqual({ verb: "squash", freeText: undefined });
+    });
+
+    it("should capture free text with slashless command", () => {
+      const result = parseCommand("@hivemoot implement security fix needs fast-track");
+      expect(result).toEqual({ verb: "implement", freeText: "security fix needs fast-track" });
+    });
+
+    it("should be case-insensitive for slashless commands", () => {
+      expect(parseCommand("@hivemoot Vote")).toEqual({ verb: "vote", freeText: undefined });
+      expect(parseCommand("@hivemoot IMPLEMENT")).toEqual({ verb: "implement", freeText: undefined });
+    });
+
+    it("should not match unknown verbs without a slash", () => {
+      expect(parseCommand("@hivemoot please help")).toBeNull();
+      expect(parseCommand("@hivemoot great work")).toBeNull();
+      expect(parseCommand("@hivemoot thanks")).toBeNull();
+    });
+
+    it("should find slashless command on its own line in a larger comment", () => {
+      const result = parseCommand("I think this is ready.\n\n@hivemoot implement");
+      expect(result).toEqual({ verb: "implement", freeText: undefined });
+    });
+
+    it("should reject slashless command embedded mid-sentence", () => {
+      expect(parseCommand("Let's ask @hivemoot implement this")).toBeNull();
+    });
+  });
+
   describe("case insensitivity", () => {
     it("should match @Hivemoot /Vote", () => {
       const result = parseCommand("@Hivemoot /Vote");
@@ -88,6 +135,15 @@ describe("parseCommand", () => {
       const result = parseCommand(body);
       expect(result).toEqual({ verb: "implement", freeText: undefined });
     });
+
+    it("should ignore slashless commands inside inline code", () => {
+      expect(parseCommand("Use `@hivemoot vote` to start voting")).toBeNull();
+    });
+
+    it("should ignore slashless commands inside fenced code blocks", () => {
+      const body = "```\n@hivemoot implement\n```";
+      expect(parseCommand(body)).toBeNull();
+    });
   });
 
   describe("non-matching inputs", () => {
@@ -126,6 +182,11 @@ describe("parseCommand", () => {
       const result = parseCommand("@hivemoot\t/vote");
       expect(result).toEqual({ verb: "vote", freeText: undefined });
     });
+
+    it("should handle multiple spaces between mention and slashless command", () => {
+      const result = parseCommand("@hivemoot   vote");
+      expect(result).toEqual({ verb: "vote", freeText: undefined });
+    });
   });
 
   describe("quoted reply handling", () => {
@@ -149,6 +210,11 @@ describe("parseCommand", () => {
       const body = "> @hivemoot /vote\n> More context here\nJust a reply";
       expect(parseCommand(body)).toBeNull();
     });
+
+    it("should ignore slashless commands in quotes", () => {
+      const body = "> @hivemoot vote\nI disagree";
+      expect(parseCommand(body)).toBeNull();
+    });
   });
 
   describe("multi-command comments", () => {
@@ -164,6 +230,30 @@ describe("parseCommand", () => {
       const result = parseCommand(body);
       expect(result).not.toBeNull();
       expect(result!.verb).toBe("vote");
+    });
+  });
+
+  describe("slash vs slashless behavior", () => {
+    it("should accept any verb with a slash (forwarded to handler for dispatch)", () => {
+      const result = parseCommand("@hivemoot /unknowncmd");
+      expect(result).toEqual({ verb: "unknowncmd", freeText: undefined });
+    });
+
+    it("should reject unknown verbs without a slash", () => {
+      expect(parseCommand("@hivemoot unknowncmd")).toBeNull();
+    });
+
+    it("should produce identical results for slashed and slashless known verbs", () => {
+      expect(parseCommand("@hivemoot /vote")).toEqual(parseCommand("@hivemoot vote"));
+      expect(parseCommand("@hivemoot /implement")).toEqual(parseCommand("@hivemoot implement"));
+      expect(parseCommand("@hivemoot /preflight")).toEqual(parseCommand("@hivemoot preflight"));
+      expect(parseCommand("@hivemoot /squash")).toEqual(parseCommand("@hivemoot squash"));
+    });
+
+    it("should produce identical results for slashed and slashless with free text", () => {
+      expect(parseCommand("@hivemoot /vote sounds good")).toEqual(
+        parseCommand("@hivemoot vote sounds good"),
+      );
     });
   });
 });

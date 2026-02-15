@@ -105,6 +105,14 @@ const PR_OPENED_LINK_RETRY_DELAY_MS = 2000;
 // Helper Functions
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** Check if a PR targets the repository's default branch */
+function targetsDefaultBranch(
+  pullRequest: { base: { ref: string } },
+  repository: { default_branch?: string },
+): boolean {
+  return !repository.default_branch || pullRequest.base.ref === repository.default_branch;
+}
+
 /** Extract repository context from webhook payload */
 function getRepoContext(repository: InstallationRepoPayload): RepoContext {
   const ownerFromFullName = repository.full_name.split("/")[0];
@@ -280,6 +288,15 @@ export function app(probotApp: Probot): void {
     const { owner, repo, fullName } = getRepoContext(context.payload.repository);
     context.log.info(`Processing PR #${number} in ${fullName}`);
 
+    // Skip governance processing for PRs targeting non-default branches (stacked PRs)
+    if (!targetsDefaultBranch(context.payload.pull_request, context.payload.repository)) {
+      context.log.info(
+        { owner, repo, pr: number, base: context.payload.pull_request.base.ref },
+        "Skipping PR intake — targets non-default branch"
+      );
+      return;
+    }
+
     try {
       const appId = getAppId();
       const issues = createIssueOperations(context.octokit, { appId });
@@ -360,6 +377,14 @@ export function app(probotApp: Probot): void {
     const { owner, repo, fullName } = getRepoContext(context.payload.repository);
     context.log.info(`Processing PR update #${number} in ${fullName}`);
 
+    if (!targetsDefaultBranch(context.payload.pull_request, context.payload.repository)) {
+      context.log.info(
+        { owner, repo, pr: number, base: context.payload.pull_request.base.ref },
+        "Skipping PR update intake — targets non-default branch"
+      );
+      return;
+    }
+
     try {
       const appId = getAppId();
       const issues = createIssueOperations(context.octokit, { appId });
@@ -399,6 +424,10 @@ export function app(probotApp: Probot): void {
   probotApp.on("pull_request.edited", async (context) => {
     // Only body edits can change closing keywords — skip title/base changes
     if (!context.payload.changes?.body) {
+      return;
+    }
+
+    if (!targetsDefaultBranch(context.payload.pull_request, context.payload.repository)) {
       return;
     }
 

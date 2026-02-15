@@ -123,7 +123,7 @@ export interface LLMConfig {
  * Default LLM configuration values.
  */
 export const LLM_DEFAULTS = {
-  maxTokens: 2000,
+  maxTokens: 50_000,
   temperature: 0.3,
 } as const;
 

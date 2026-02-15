@@ -10,7 +10,7 @@
  * - LLM_MODEL: Model name (e.g., claude-3-haiku-20240307, gpt-4o-mini)
  * - ANTHROPIC_API_KEY / OPENAI_API_KEY / etc: Provider-specific API keys
  *     (Google accepts GOOGLE_API_KEY or GOOGLE_GENERATIVE_AI_API_KEY)
- * - LLM_MAX_TOKENS: Optional, defaults to 2000
+ * - LLM_MAX_TOKENS: Optional, defaults to 50000
  */
 
 import { createAnthropic } from "@ai-sdk/anthropic";

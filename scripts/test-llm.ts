@@ -57,13 +57,13 @@ interface TestConfig {
 
 const tests: TestConfig[] = [
   // Test 1: The production config (gemini-3-flash-preview, default structuredOutputs=true)
-  { name: "gemini-3-flash-preview (default)", model: "gemini-3-flash-preview" },
-  // Test 2: Same model, structuredOutputs disabled
-  { name: "gemini-3-flash-preview (no structured)", model: "gemini-3-flash-preview", structuredOutputs: false },
+  { name: "gemini-3-flash-preview (native)", model: "gemini-3-flash-preview" },
+  // Test 2: Same model, structuredOutputs disabled (mirrors production fix)
+  { name: "gemini-3-flash-preview (prompt-based)", model: "gemini-3-flash-preview", structuredOutputs: false },
   // Test 3: Older stable model
-  { name: "gemini-2.0-flash (default)", model: "gemini-2.0-flash" },
+  { name: "gemini-2.0-flash (native)", model: "gemini-2.0-flash" },
   // Test 4: Older model, structuredOutputs disabled
-  { name: "gemini-2.0-flash (no structured)", model: "gemini-2.0-flash", structuredOutputs: false },
+  { name: "gemini-2.0-flash (prompt-based)", model: "gemini-2.0-flash", structuredOutputs: false },
 ];
 
 async function runTest(config: TestConfig): Promise<void> {
@@ -72,9 +72,11 @@ async function runTest(config: TestConfig): Promise<void> {
   console.log(`${label} Testing...`);
 
   try {
-    const model = google(config.model);
-    const providerOptions =
-      config.structuredOutputs === false ? { google: { structuredOutputs: false } } : undefined;
+    // Mirror production: structuredOutputs is set at model construction,
+    // not via providerOptions in generateObject.
+    const model = config.structuredOutputs === false
+      ? google(config.model, { structuredOutputs: false })
+      : google(config.model);
 
     const result = await generateObject({
       model,
@@ -84,7 +86,6 @@ async function runTest(config: TestConfig): Promise<void> {
       maxTokens: 500,
       temperature: 0.3,
       maxRetries: 0,
-      ...(providerOptions ? { providerOptions } : {}),
     });
 
     console.log(`${label} SUCCESS`);
@@ -105,7 +106,7 @@ async function main() {
   try {
     const { version } = JSON.parse(
       (await import("fs")).readFileSync(
-        new URL("../../node_modules/@ai-sdk/google/package.json", import.meta.url),
+        new URL("../node_modules/@ai-sdk/google/package.json", import.meta.url),
         "utf8"
       )
     );

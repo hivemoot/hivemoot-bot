@@ -256,4 +256,60 @@ describe("merge-readiness webhook handlers", () => {
     expect(loadRepositoryConfig).not.toHaveBeenCalled();
     expect(evaluateMergeReadiness).not.toHaveBeenCalled();
   });
+
+  it("re-evaluates merge-readiness when implementation label is added", async () => {
+    const { handlers } = createWebhookHarness();
+    const handler = handlers.get("pull_request.labeled");
+    expect(handler).toBeDefined();
+
+    const context = createWebhookContext({
+      payload: {
+        label: { name: "hivemoot:candidate" },
+        pull_request: {
+          number: 89,
+          labels: [{ name: "hivemoot:candidate" }, { name: "hivemoot:merge-ready" }],
+        },
+        repository: { name: "repo", full_name: "hivemoot/repo", owner: { login: "hivemoot" } },
+      },
+    });
+
+    await handler!(context);
+
+    expect(createPROperations).toHaveBeenCalledTimes(1);
+    expect(loadRepositoryConfig).toHaveBeenCalledWith(context.octokit, "hivemoot", "repo");
+    expect(evaluateMergeReadiness).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ref: { owner: "hivemoot", repo: "repo", prNumber: 89 },
+        currentLabels: ["hivemoot:candidate", "hivemoot:merge-ready"],
+      })
+    );
+  });
+
+  it("re-evaluates merge-readiness when implementation label is removed", async () => {
+    const { handlers } = createWebhookHarness();
+    const handler = handlers.get("pull_request.unlabeled");
+    expect(handler).toBeDefined();
+
+    const context = createWebhookContext({
+      payload: {
+        label: { name: "hivemoot:candidate" },
+        pull_request: {
+          number: 90,
+          labels: [{ name: "hivemoot:merge-ready" }],
+        },
+        repository: { name: "repo", full_name: "hivemoot/repo", owner: { login: "hivemoot" } },
+      },
+    });
+
+    await handler!(context);
+
+    expect(createPROperations).toHaveBeenCalledTimes(1);
+    expect(loadRepositoryConfig).toHaveBeenCalledWith(context.octokit, "hivemoot", "repo");
+    expect(evaluateMergeReadiness).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ref: { owner: "hivemoot", repo: "repo", prNumber: 90 },
+        currentLabels: ["hivemoot:merge-ready"],
+      })
+    );
+  });
 });

@@ -224,6 +224,26 @@ describe("/squash command", () => {
     expect(body).not.toContain("LLM not configured");
   });
 
+  it("fails closed when commit message generation throws", async () => {
+    const { CommitMessageGenerator } = await import("../llm/commit-message.js");
+    vi.mocked(CommitMessageGenerator).mockImplementationOnce(
+      function () {
+        return {
+          generate: vi.fn().mockRejectedValue(new Error("upstream timeout")),
+        };
+      } as any,
+    );
+    const ctx = createPRCtx();
+
+    const result = await executeCommand(ctx);
+
+    expect(result.status).toBe("rejected");
+    expect(ctx.octokit.rest.pulls.merge).not.toHaveBeenCalled();
+    const body = (ctx.octokit.rest.issues.createComment.mock.calls[0][0] as { body: string }).body;
+    expect(body).toContain("Commit message generation failed");
+    expect(body).toContain("Retry `/squash` after the generator is healthy");
+  });
+
   it("blocks merge when final verification changes before merge", async () => {
     const { evaluatePreflightChecks } = await import("../merge-readiness.js");
     vi.mocked(evaluatePreflightChecks)
@@ -244,5 +264,42 @@ describe("/squash command", () => {
     const body = (ctx.octokit.rest.issues.createComment.mock.calls[0][0] as { body: string }).body;
     expect(body).toContain("final verification");
     expect(body).toContain("blocked");
+  });
+
+  it("uses PR fallback commit body when generator returns an empty body", async () => {
+    const { CommitMessageGenerator } = await import("../llm/commit-message.js");
+    vi.mocked(CommitMessageGenerator).mockImplementationOnce(
+      function () {
+        return {
+          generate: vi.fn().mockResolvedValue({
+            success: true,
+            message: { subject: "Tighten merge command", body: "   " },
+          }),
+        };
+      } as any,
+    );
+    const ctx = createPRCtx();
+
+    const result = await executeCommand(ctx);
+
+    expect(result).toEqual({ status: "executed", message: "Squash merge completed." });
+    expect(ctx.octokit.rest.pulls.merge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commit_title: "Tighten merge command",
+        commit_message: "PR: #42",
+      }),
+    );
+  });
+
+  it("fails closed when GitHub squash merge API returns an error", async () => {
+    const octokit = createMockOctokit();
+    octokit.rest.pulls.merge.mockRejectedValueOnce(new Error("merge blocked by branch protection"));
+    const ctx = createPRCtx({ octokit });
+
+    const result = await executeCommand(ctx);
+
+    expect(result.status).toBe("rejected");
+    const body = (octokit.rest.issues.createComment.mock.calls[0][0] as { body: string }).body;
+    expect(body).toContain("Squash merge failed due to a GitHub merge API error");
   });
 });

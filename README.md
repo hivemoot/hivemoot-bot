@@ -135,12 +135,20 @@ governance:
 |---|---|---|
 | `APP_ID` | - | GitHub App ID |
 | `PRIVATE_KEY` | - | GitHub App private key (full PEM contents) |
+| `APP_PRIVATE_KEY` | - | Legacy/private-key alias fallback (used when `PRIVATE_KEY` is unset) |
 | `WEBHOOK_SECRET` | - | Webhook secret for signature verification |
 | `NODEJS_HELPERS` | `0` | Required for Vercel |
 | `HIVEMOOT_DISCUSSION_DURATION_MINUTES` | `1440` | Discussion duration default |
 | `HIVEMOOT_VOTING_DURATION_MINUTES` | `1440` | Voting duration default |
 | `HIVEMOOT_PR_STALE_DAYS` | `3` | Days before stale warning |
 | `HIVEMOOT_MAX_PRS_PER_ISSUE` | `3` | Default max competing PRs per issue |
+| `LLM_PROVIDER` | - | Optional summary provider (`anthropic`, `openai`, `google`, `mistral`) |
+| `LLM_MODEL` | - | Optional model name used by the configured LLM provider |
+| `LLM_MAX_TOKENS` | `2000` | Optional response token cap (clamped to configured bounds) |
+| `ANTHROPIC_API_KEY` | - | Required when `LLM_PROVIDER=anthropic` |
+| `OPENAI_API_KEY` | - | Required when `LLM_PROVIDER=openai` |
+| `GOOGLE_API_KEY` | - | Required when `LLM_PROVIDER=google` |
+| `MISTRAL_API_KEY` | - | Required when `LLM_PROVIDER=mistral` |
 
 ## Deployment
 

@@ -76,7 +76,9 @@ describe("run-installations shared runner", () => {
       }),
     };
 
-    vi.mocked(App).mockImplementation(() => appMock as never);
+    vi.mocked(App).mockImplementation(function MockApp() {
+      return appMock as never;
+    });
   }
 
   it("processes multiple installations/repos and reports aggregate results", async () => {
@@ -107,6 +109,14 @@ describe("run-installations shared runner", () => {
       afterAll,
     });
 
+    expect(App).toHaveBeenCalledTimes(1);
+    expect(App).toHaveBeenCalledWith(
+      expect.objectContaining({
+        appId: "12345",
+        privateKey: "test-private-key",
+        Octokit: expect.any(Function),
+      })
+    );
     expect(processRepository).toHaveBeenCalledTimes(3);
     expect(afterAll).toHaveBeenCalledWith({
       results: [

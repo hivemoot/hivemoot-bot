@@ -187,6 +187,11 @@ describe("DiscussionSummarizer", () => {
         expect(result.summary.metadata.commentCount).toBe(5);
         expect(result.summary.metadata.participantCount).toBe(3);
       }
+      expect(generateObject).toHaveBeenCalledWith(
+        expect.objectContaining({
+          experimental_repairText: expect.any(Function),
+        })
+      );
     });
 
     it("should fail closed when LLM returns incorrect metadata (possible hallucination)", async () => {

@@ -10,6 +10,7 @@ import type { LanguageModelV1 } from "ai";
 
 import type { Logger } from "../logger.js";
 import { logger as defaultLogger } from "../logger.js";
+import { repairMalformedJsonText } from "./json-repair.js";
 import { createModelFromEnv } from "./provider.js";
 import { withLLMRetry } from "./retry.js";
 import type { CommitMessage, LLMConfig, PRContext } from "./types.js";
@@ -130,6 +131,7 @@ export class CommitMessageGenerator {
             schema: CommitMessageSchema,
             system: COMMIT_MESSAGE_SYSTEM_PROMPT,
             prompt: buildCommitMessagePrompt(context),
+            experimental_repairText: repairMalformedJsonText,
             maxTokens: 500,
             temperature: LLM_DEFAULTS.temperature,
             maxRetries: 0,

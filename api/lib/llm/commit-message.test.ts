@@ -73,6 +73,11 @@ describe("CommitMessageGenerator", () => {
       expect(result.message.subject).toBe("Add merge-readiness evaluation for PRs");
       expect(result.message.body).toContain("merge-ready label");
     }
+    expect(generateObject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        experimental_repairText: expect.any(Function),
+      })
+    );
   });
 
   it("should truncate subject line to 72 characters", async () => {

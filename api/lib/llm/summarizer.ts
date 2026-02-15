@@ -11,6 +11,7 @@ import type { LanguageModelV1 } from "ai";
 
 import type { Logger } from "../logger.js";
 import { logger as defaultLogger } from "../logger.js";
+import { repairMalformedJsonText } from "./json-repair.js";
 import { buildUserPrompt, SUMMARIZATION_SYSTEM_PROMPT } from "./prompts.js";
 import { createModelFromEnv } from "./provider.js";
 import { withLLMRetry } from "./retry.js";
@@ -90,6 +91,7 @@ export class DiscussionSummarizer {
             schema: DiscussionSummarySchema,
             system: SUMMARIZATION_SYSTEM_PROMPT,
             prompt: buildUserPrompt(context),
+            experimental_repairText: repairMalformedJsonText,
             maxTokens: config.maxTokens,
             temperature: LLM_DEFAULTS.temperature,
             maxRetries: 0, // Disable SDK retry; our wrapper handles rate-limits

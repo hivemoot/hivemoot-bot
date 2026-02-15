@@ -515,6 +515,38 @@ describe("executeCommand", () => {
       expect(commentArgs.body).toContain("**Labels**: Check failed: boom");
       expect(commentArgs.body).toContain("**Config**");
     });
+
+    it("should report advisory PR workflow and validate enabled standup category", async () => {
+      const { loadRepositoryConfig } = await import("../index.js");
+      vi.mocked(loadRepositoryConfig).mockResolvedValueOnce({
+        version: 1,
+        governance: {
+          proposals: {
+            discussion: { exits: [{ type: "manual" }], durationMs: 0 },
+            voting: { exits: [{ type: "manual" }], durationMs: 0 },
+            extendedVoting: { exits: [{ type: "manual" }], durationMs: 0 },
+          },
+          pr: {
+            staleDays: 3,
+            maxPRsPerIssue: 3,
+            trustedReviewers: [],
+            intake: [{ method: "update" }],
+            mergeReady: null,
+          },
+        },
+        standup: {
+          enabled: true,
+          category: "Hivemoot Reports",
+        },
+      });
+
+      const ctx = createCtx({ verb: "doctor" });
+      await executeCommand(ctx);
+
+      const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
+      expect(commentArgs.body).toContain("**PR Workflow**: No trusted reviewers configured");
+      expect(commentArgs.body).toContain("**Standup**: Category `Hivemoot Reports` is available");
+    });
   });
 
   describe("error handling", () => {

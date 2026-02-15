@@ -2,8 +2,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { GovernanceService } from "../../lib/governance.js";
 import { createIssueOperations } from "../../lib/github-client.js";
 import { LABELS, MESSAGES, REQUIRED_REPOSITORY_LABELS } from "../../config.js";
+import { getLinkedIssues } from "../../lib/graphql-queries.js";
+import { recalculateLeaderboardForPR } from "../../lib/implementation-intake.js";
 import type { IssueRef } from "../../lib/types.js";
 import type { IncomingMessage, ServerResponse } from "http";
+import { getOpenPRsForIssue } from "../../lib/index.js";
 import { app as registerWebhookApp } from "./index.js";
 
 // Mock probot to prevent actual initialization
@@ -22,6 +25,36 @@ vi.mock("../../lib/env-validation.js", () => ({
 vi.mock("../../lib/llm/provider.js", () => ({
   getLLMReadiness: vi.fn(() => ({ ready: true })),
 }));
+
+vi.mock("../../lib/graphql-queries.js", async () => {
+  const actual = await vi.importActual<typeof import("../../lib/graphql-queries.js")>(
+    "../../lib/graphql-queries.js"
+  );
+  return {
+    ...actual,
+    getLinkedIssues: vi.fn(actual.getLinkedIssues),
+  };
+});
+
+vi.mock("../../lib/index.js", async () => {
+  const actual = await vi.importActual<typeof import("../../lib/index.js")>(
+    "../../lib/index.js"
+  );
+  return {
+    ...actual,
+    getOpenPRsForIssue: vi.fn(actual.getOpenPRsForIssue),
+  };
+});
+
+vi.mock("../../lib/implementation-intake.js", async () => {
+  const actual = await vi.importActual<typeof import("../../lib/implementation-intake.js")>(
+    "../../lib/implementation-intake.js"
+  );
+  return {
+    ...actual,
+    recalculateLeaderboardForPR: vi.fn(actual.recalculateLeaderboardForPR),
+  };
+});
 
 /**
  * Tests for Queen Bot webhook handlers
@@ -849,6 +882,220 @@ describe("Queen Bot", () => {
       // Command was dispatched — graphql (getLinkedIssues) should NOT have been called
       // because the handler returns early after command execution
       expect(octokit.graphql).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("pull_request.closed handler", () => {
+    const createClosedPrOctokit = () => ({
+      rest: {
+        issues: {
+          get: vi.fn().mockResolvedValue({ data: { labels: [] } }),
+          removeLabel: vi.fn().mockResolvedValue({}),
+          addLabels: vi.fn().mockResolvedValue({}),
+          update: vi.fn().mockResolvedValue({}),
+          createComment: vi.fn().mockResolvedValue({}),
+          listForRepo: vi.fn().mockResolvedValue({ data: [] }),
+          listComments: vi.fn().mockResolvedValue({ data: [] }),
+          lock: vi.fn().mockResolvedValue({}),
+          unlock: vi.fn().mockResolvedValue({}),
+        },
+        reactions: {
+          listForIssueComment: vi.fn().mockResolvedValue({ data: [] }),
+          listForIssue: vi.fn().mockResolvedValue({ data: [] }),
+        },
+        pulls: {
+          get: vi.fn().mockResolvedValue({
+            data: {
+              number: 24,
+              state: "open",
+              merged: false,
+              created_at: "2026-02-15T00:00:00Z",
+              updated_at: "2026-02-15T00:00:00Z",
+              user: { login: "alice" },
+              head: { sha: "abc123" },
+              mergeable: true,
+            },
+          }),
+          update: vi.fn().mockResolvedValue({}),
+          listReviews: vi.fn().mockResolvedValue({ data: [] }),
+          listCommits: vi.fn().mockResolvedValue({ data: [] }),
+          listReviewComments: vi.fn().mockResolvedValue({ data: [] }),
+        },
+        checks: {
+          listForRef: vi.fn().mockResolvedValue({ data: { total_count: 0, check_runs: [] } }),
+        },
+        repos: {
+          getCombinedStatusForRef: vi.fn().mockResolvedValue({ data: { state: "success", total_count: 0, statuses: [] } }),
+        },
+      },
+      paginate: {
+        iterator: vi.fn().mockImplementation(() => ({
+          async *[Symbol.asyncIterator]() {
+            yield { data: [] };
+          },
+        })),
+      },
+    });
+
+    beforeEach(() => {
+      vi.mocked(getLinkedIssues).mockReset();
+      vi.mocked(getOpenPRsForIssue).mockReset();
+      vi.mocked(recalculateLeaderboardForPR).mockReset();
+    });
+
+    it("cleans governance labels and recalculates leaderboard when PR closes unmerged", async () => {
+      const { handlers } = createWebhookHarness();
+      const handler = handlers.get("pull_request.closed");
+      expect(handler).toBeDefined();
+
+      const octokit = createClosedPrOctokit();
+
+      vi.mocked(recalculateLeaderboardForPR).mockResolvedValue(undefined);
+
+      await handler!({
+        octokit,
+        log: { info: vi.fn(), error: vi.fn() },
+        payload: {
+          pull_request: { number: 24, merged: false },
+          repository: {
+            name: "test-repo",
+            full_name: "hivemoot/test-repo",
+            owner: { login: "hivemoot" },
+          },
+        },
+      });
+
+      expect(vi.mocked(getLinkedIssues)).not.toHaveBeenCalled();
+      expect(vi.mocked(recalculateLeaderboardForPR)).toHaveBeenCalledWith(
+        octokit,
+        expect.any(Object),
+        "hivemoot",
+        "test-repo",
+        24
+      );
+      expect(octokit.rest.issues.removeLabel).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: "hivemoot",
+          repo: "test-repo",
+          issue_number: 24,
+          name: LABELS.IMPLEMENTATION,
+        })
+      );
+      expect(octokit.rest.issues.removeLabel).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: "hivemoot",
+          repo: "test-repo",
+          issue_number: 24,
+          name: LABELS.MERGE_READY,
+        })
+      );
+    });
+
+    it("marks linked ready issues as implemented and closes competing PRs on merge", async () => {
+      const { handlers } = createWebhookHarness();
+      const handler = handlers.get("pull_request.closed");
+      expect(handler).toBeDefined();
+
+      const octokit = createClosedPrOctokit();
+
+      vi.mocked(getLinkedIssues).mockResolvedValue([
+        {
+          number: 79,
+          labels: { nodes: [{ name: LABELS.READY_TO_IMPLEMENT }] },
+        } as Awaited<ReturnType<typeof getLinkedIssues>>[number],
+        {
+          number: 80,
+          labels: { nodes: [{ name: "bug" }] },
+        } as Awaited<ReturnType<typeof getLinkedIssues>>[number],
+      ]);
+      vi.mocked(getOpenPRsForIssue).mockResolvedValue([
+        { number: 24 },
+        { number: 88 },
+      ]);
+
+      await handler!({
+        octokit,
+        log: { info: vi.fn(), error: vi.fn() },
+        payload: {
+          pull_request: { number: 24, merged: true },
+          repository: {
+            name: "test-repo",
+            full_name: "hivemoot/test-repo",
+            owner: { login: "hivemoot" },
+          },
+        },
+      });
+
+      expect(vi.mocked(getLinkedIssues)).toHaveBeenCalledWith(
+        octokit,
+        "hivemoot",
+        "test-repo",
+        24
+      );
+      expect(vi.mocked(getOpenPRsForIssue)).toHaveBeenCalledWith(
+        octokit,
+        "hivemoot",
+        "test-repo",
+        79
+      );
+      expect(octokit.rest.issues.removeLabel).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: "hivemoot",
+          repo: "test-repo",
+          issue_number: 79,
+          name: LABELS.READY_TO_IMPLEMENT,
+        })
+      );
+      expect(octokit.rest.issues.addLabels).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: "hivemoot",
+          repo: "test-repo",
+          issue_number: 79,
+          labels: [LABELS.IMPLEMENTED],
+        })
+      );
+      expect(octokit.rest.issues.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: "hivemoot",
+          repo: "test-repo",
+          issue_number: 79,
+          state: "closed",
+          state_reason: "completed",
+        })
+      );
+      expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: "hivemoot",
+          repo: "test-repo",
+          issue_number: 79,
+        })
+      );
+      expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: "hivemoot",
+          repo: "test-repo",
+          issue_number: 88,
+        })
+      );
+      expect(octokit.rest.pulls.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: "hivemoot",
+          repo: "test-repo",
+          pull_number: 88,
+          state: "closed",
+        })
+      );
+      expect(octokit.rest.pulls.update).not.toHaveBeenCalledWith(
+        expect.objectContaining({ pull_number: 24, state: "closed" })
+      );
+      expect(octokit.rest.issues.removeLabel).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: "hivemoot",
+          repo: "test-repo",
+          issue_number: 80,
+          name: LABELS.READY_TO_IMPLEMENT,
+        })
+      );
     });
   });
 

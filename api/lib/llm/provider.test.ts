@@ -104,7 +104,7 @@ describe("LLM Provider", () => {
       expect(config).toEqual({
         provider: "anthropic",
         model: "claude-3-haiku",
-        maxTokens: 50_000,
+        maxTokens: 2000,
       });
     });
 
@@ -117,7 +117,7 @@ describe("LLM Provider", () => {
       expect(config).toEqual({
         provider: "openai",
         model: "gpt-4o-mini",
-        maxTokens: 50_000,
+        maxTokens: 2000,
       });
     });
 
@@ -149,7 +149,7 @@ describe("LLM Provider", () => {
 
       const config = getLLMConfig();
 
-      expect(config?.maxTokens).toBe(50_000);
+      expect(config?.maxTokens).toBe(2000);
     });
 
     it("should use defaults for non-positive maxTokens", () => {
@@ -158,11 +158,11 @@ describe("LLM Provider", () => {
       process.env.LLM_MAX_TOKENS = "0";
 
       const zeroConfig = getLLMConfig();
-      expect(zeroConfig?.maxTokens).toBe(50_000);
+      expect(zeroConfig?.maxTokens).toBe(2000);
 
       process.env.LLM_MAX_TOKENS = "-100";
       const negativeConfig = getLLMConfig();
-      expect(negativeConfig?.maxTokens).toBe(50_000);
+      expect(negativeConfig?.maxTokens).toBe(2000);
     });
   });
 

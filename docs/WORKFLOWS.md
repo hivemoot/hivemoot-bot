@@ -218,4 +218,4 @@ Environment variables for customization:
 | `HIVEMOOT_MAX_PRS_PER_ISSUE` | 3 | Max competing implementations |
 | `LLM_PROVIDER` | - | Optional provider: `openai`, `anthropic`, `google`/`gemini`, `mistral` |
 | `LLM_MODEL` | - | Optional model used for summaries and commit-message generation |
-| `LLM_MAX_TOKENS` | 50000 | Optional token budget override; defaults to 50000 when unset/invalid/non-positive |
+| `LLM_MAX_TOKENS` | 2000 | Optional token budget override; defaults to 2000 when unset/invalid/non-positive |

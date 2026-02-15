@@ -45,8 +45,8 @@ export const CONFIG_BOUNDS = {
   // LLM configuration bounds
   llmMaxTokens: {
     min: 500,
-    max: 50_000,
-    default: 50_000,
+    max: 8000,
+    default: 2000,
   },
 } as const;
 

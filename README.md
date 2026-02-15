@@ -143,7 +143,7 @@ governance:
 | `HIVEMOOT_MAX_PRS_PER_ISSUE` | `3` | Default max competing PRs per issue |
 | `LLM_PROVIDER` | - | Optional LLM provider: `openai`, `anthropic`, `google`/`gemini`, `mistral` |
 | `LLM_MODEL` | - | Optional LLM model name used for summaries/commit-message generation |
-| `LLM_MAX_TOKENS` | `50000` | Optional token budget override; falls back to `50000` when unset, invalid, or non-positive |
+| `LLM_MAX_TOKENS` | `2000` | Optional token budget override; falls back to `2000` when unset, invalid, or non-positive |
 | `GOOGLE_API_KEY` / `GOOGLE_GENERATIVE_AI_API_KEY` | - | Required when `LLM_PROVIDER=google` (either variable accepted; `GOOGLE_API_KEY` takes priority) |
 | `OPENAI_API_KEY` | - | Required when `LLM_PROVIDER=openai` |
 | `ANTHROPIC_API_KEY` | - | Required when `LLM_PROVIDER=anthropic` |

@@ -41,6 +41,21 @@ import type { IssueOperations } from "../api/lib/github-client.js";
 const VOTING_PASSED_LEGACY_SIGNATURE = "passed voting and is ready for implementation";
 
 /**
+ * Parse all "Issue #N" tokens and require exact numeric equality.
+ * This avoids prefix collisions (#1 matching #10) in legacy fallback detection.
+ */
+function hasLegacyIssueNumberMatch(body: string, issueNumber: number): boolean {
+  const expectedToken = String(issueNumber);
+  const matches = body.matchAll(/\bIssue #(\d+)\b/g);
+  for (const match of matches) {
+    if (match[1] === expectedToken) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Check if a PR already has a voting-passed notification for this issue.
  *
  * Single-pass detection:
@@ -72,7 +87,7 @@ export async function hasVotingPassedNotification(
     if (
       comment.body &&
       comment.body.includes(VOTING_PASSED_LEGACY_SIGNATURE) &&
-      comment.body.includes(`Issue #${issueNumber}`)
+      hasLegacyIssueNumberMatch(comment.body, issueNumber)
     ) {
       return true;
     }

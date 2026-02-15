@@ -60,9 +60,16 @@ export type { Logger } from "./logger.js";
 export { processImplementationIntake, recalculateLeaderboardForPR } from "./implementation-intake.js";
 export type { IntakeTrigger, LeaderboardRecalcClient } from "./implementation-intake.js";
 
-// Merge readiness
-export { evaluateMergeReadiness } from "./merge-readiness.js";
-export type { MergeReadinessParams, MergeReadinessResult } from "./merge-readiness.js";
+// Merge readiness & preflight
+export { evaluateMergeReadiness, evaluatePreflightChecks } from "./merge-readiness.js";
+export type {
+  MergeReadinessParams,
+  MergeReadinessResult,
+  PreflightParams,
+  PreflightResult,
+  PreflightCheckItem,
+  PreflightSeverity,
+} from "./merge-readiness.js";
 
 // Repository label bootstrap
 export { RepositoryLabelService, createRepositoryLabelService } from "./repository-labels.js";

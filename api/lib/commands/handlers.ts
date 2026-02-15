@@ -7,8 +7,18 @@
  */
 
 import { LABELS, REQUIRED_REPOSITORY_LABELS, SIGNATURE, isLabelMatch } from "../../config.js";
-import { createIssueOperations, createGovernanceService, createRepositoryLabelService } from "../index.js";
-import type { IssueRef } from "../types.js";
+import {
+  createIssueOperations,
+  createGovernanceService,
+  createPROperations,
+  createRepositoryLabelService,
+  loadRepositoryConfig,
+} from "../index.js";
+import { evaluatePreflightChecks } from "../merge-readiness.js";
+import type { PreflightCheckItem } from "../merge-readiness.js";
+import { CommitMessageGenerator, formatCommitMessage } from "../llm/commit-message.js";
+import type { PRContext } from "../llm/types.js";
+import type { IssueRef, PRRef } from "../types.js";
 
 /**
  * Minimal interface for the octokit client needed by command handlers.
@@ -277,6 +287,161 @@ async function handleImplement(ctx: CommandContext): Promise<CommandResult> {
 }
 
 /**
+ * Handle /preflight command: generate a merge readiness report for a PR.
+ *
+ * Runs the same hard checks used by the merge-ready label automation,
+ * plus advisory checks, and optionally generates an LLM commit message.
+ * Posts the full report as a PR comment.
+ */
+async function handlePreflight(ctx: CommandContext): Promise<CommandResult> {
+  if (!ctx.isPullRequest) {
+    return { status: "rejected", reason: "The `/preflight` command can only be used on pull requests, not issues." };
+  }
+
+  // The octokit passed to commands is the full Probot octokit (cast to the
+  // minimal CommandOctokit interface). createPROperations and loadRepositoryConfig
+  // validate the shape at runtime. These casts are safe because the actual
+  // Probot client has all required methods — only the declared type is narrow.
+  const octokit = ctx.octokit as any; // Full Probot client at runtime
+  const prs = createPROperations(octokit, { appId: ctx.appId });
+  const repoConfig = await loadRepositoryConfig(octokit, ctx.owner, ctx.repo);
+
+  const ref: PRRef = { owner: ctx.owner, repo: ctx.repo, prNumber: ctx.issueNumber };
+  const currentLabels = ctx.issueLabels.map(l => l.name);
+
+  // Run shared preflight checks (same signals as merge-ready label)
+  const preflight = await evaluatePreflightChecks({
+    prs,
+    ref,
+    config: repoConfig.governance.pr.mergeReady,
+    trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+    currentLabels,
+  });
+
+  // Build checklist markdown
+  const checklistLines = preflight.checks.map(formatCheckItem);
+
+  const hardCount = preflight.checks.filter(c => c.severity === "hard").length;
+  const hardPassed = preflight.checks.filter(c => c.severity === "hard" && c.passed).length;
+
+  let body = `## 🐝 Preflight Check for #${ctx.issueNumber}\n\n`;
+  body += `### Checklist\n\n`;
+  body += checklistLines.join("\n") + "\n\n";
+
+  // Generate commit message if all hard checks pass and LLM is configured
+  if (preflight.allHardChecksPassed) {
+    try {
+      const prContext = await gatherPRContext(ctx, ref);
+      const noop = () => {};
+      const generator = new CommitMessageGenerator({
+        logger: {
+          info: (...a: unknown[]) => ctx.log.info(...a),
+          error: (...a: unknown[]) => ctx.log.error(...a),
+          warn: noop,
+          debug: noop,
+          group: noop,
+          groupEnd: noop,
+        },
+      });
+      const result = await generator.generate(prContext);
+
+      if (result.success) {
+        const formatted = formatCommitMessage(result.message, ctx.issueNumber);
+        body += `### Proposed Commit Message\n\n`;
+        body += "```\n" + formatted + "\n```\n\n";
+        body += `Copy this into the squash merge dialog, or edit as needed.\n\n`;
+      } else {
+        body += `### Commit Message\n\n`;
+        body += `LLM commit message generation unavailable: ${result.reason}\n\n`;
+      }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      ctx.log.error({ err: error }, `Commit message generation failed: ${reason}`);
+      body += `### Commit Message\n\n`;
+      body += `Commit message generation failed: ${reason}\n\n`;
+    }
+  } else {
+    body += `### Commit Message\n\n`;
+    body += `Commit message not generated — resolve failing hard checks first.\n\n`;
+  }
+
+  // Summary line
+  if (preflight.allHardChecksPassed) {
+    body += `**${hardPassed}/${hardCount} hard checks passed.** This PR is ready for merge.`;
+  } else {
+    body += `**${hardPassed}/${hardCount} hard checks passed.** Review the failing checks above before merging.`;
+  }
+
+  await reply(ctx, body);
+
+  return { status: "executed", message: "Preflight report posted." };
+}
+
+/**
+ * Format a single preflight check item as a markdown line.
+ */
+function formatCheckItem(check: PreflightCheckItem): string {
+  const icon = check.passed ? "[x]" : (check.severity === "advisory" ? "[!]" : "[ ]");
+  const severityTag = check.severity === "advisory" ? " *(advisory)*" : "";
+  return `- ${icon} **${check.name}**: ${check.detail}${severityTag}`;
+}
+
+/**
+ * Gather PR context for commit message generation.
+ * Collects title, body, and commit messages via the full Probot octokit.
+ */
+async function gatherPRContext(
+  ctx: CommandContext,
+  ref: PRRef,
+): Promise<PRContext> {
+  const prContext: PRContext = {
+    prNumber: ref.prNumber,
+    title: "",
+    body: "",
+    diffStat: "",
+    commitMessages: [],
+  };
+
+  try {
+    // The command context receives the full Probot octokit cast to CommandOctokit.
+    // For PR context gathering we need pulls.get and pulls.listCommits which are
+    // available on the underlying client. This cast is safe — read-only operations.
+    const fullOctokit = ctx.octokit as unknown as {
+      rest: {
+        pulls: {
+          get: (p: { owner: string; repo: string; pull_number: number }) =>
+            Promise<{ data: { title: string; body: string | null } }>;
+          listCommits: (p: { owner: string; repo: string; pull_number: number; per_page?: number }) =>
+            Promise<{ data: Array<{ commit: { message: string } }> }>;
+        };
+      };
+    };
+
+    const pullData = await fullOctokit.rest.pulls.get({
+      owner: ref.owner,
+      repo: ref.repo,
+      pull_number: ref.prNumber,
+    });
+    prContext.title = pullData.data.title;
+    prContext.body = pullData.data.body ?? "";
+
+    // Get commit messages
+    const commits = await fullOctokit.rest.pulls.listCommits({
+      owner: ref.owner,
+      repo: ref.repo,
+      pull_number: ref.prNumber,
+      per_page: 100,
+    });
+    prContext.commitMessages = commits.data.map(c => c.commit.message.split("\n")[0]);
+  } catch (error) {
+    // Non-fatal — we still have the checklist
+    ctx.log.error({ err: error }, "Failed to gather full PR context for commit message");
+  }
+
+  return prContext;
+}
+
+/**
  * Handle /doctor command: ensure required labels exist and report results.
  */
 async function handleDoctor(ctx: CommandContext): Promise<CommandResult> {
@@ -322,6 +487,7 @@ const COMMAND_HANDLERS: Record<string, (ctx: CommandContext) => Promise<CommandR
   vote: handleVote,
   implement: handleImplement,
   doctor: handleDoctor,
+  preflight: handlePreflight,
 };
 
 /**

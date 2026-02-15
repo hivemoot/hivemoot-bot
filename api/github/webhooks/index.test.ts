@@ -18,6 +18,11 @@ vi.mock("../../lib/env-validation.js", () => ({
   getAppId: vi.fn(() => 12345),
 }));
 
+// Mock LLM provider
+vi.mock("../../lib/llm/provider.js", () => ({
+  getLLMReadiness: vi.fn(() => ({ ready: true })),
+}));
+
 /**
  * Tests for Queen Bot webhook handlers
  *
@@ -946,9 +951,12 @@ describe("Queen Bot", () => {
     };
 
     describe("GET requests (health check)", () => {
-      it("should return 200 ok when environment is valid", async () => {
+      it("should return 200 ok with checks when environment is valid", async () => {
         const { validateEnv } = await import("../../lib/env-validation.js");
         vi.mocked(validateEnv).mockReturnValue({ valid: true, missing: [] });
+
+        const { getLLMReadiness } = await import("../../lib/llm/provider.js");
+        vi.mocked(getLLMReadiness).mockReturnValue({ ready: true });
 
         // Re-import handler to pick up mocks
         const { default: handler } = await import("./index.js");
@@ -963,15 +971,20 @@ describe("Queen Bot", () => {
         const body = JSON.parse(res.body);
         expect(body.status).toBe("ok");
         expect(body.bot).toBe("Queen");
+        expect(body.checks.githubApp).toEqual({ ready: true });
+        expect(body.checks.llm).toEqual({ ready: true });
         expect(body.missing).toBeUndefined();
       });
 
-      it("should return 503 misconfigured when environment is invalid", async () => {
+      it("should return 503 misconfigured with checks when environment is invalid", async () => {
         const { validateEnv } = await import("../../lib/env-validation.js");
         vi.mocked(validateEnv).mockReturnValue({
           valid: false,
           missing: ["APP_ID", "WEBHOOK_SECRET"],
         });
+
+        const { getLLMReadiness } = await import("../../lib/llm/provider.js");
+        vi.mocked(getLLMReadiness).mockReturnValue({ ready: false, reason: "not_configured" });
 
         const { default: handler } = await import("./index.js");
 
@@ -985,7 +998,30 @@ describe("Queen Bot", () => {
         const body = JSON.parse(res.body);
         expect(body.status).toBe("misconfigured");
         expect(body.bot).toBe("Queen");
+        expect(body.checks.githubApp).toEqual({ ready: false });
+        expect(body.checks.llm).toEqual({ ready: false, reason: "not_configured" });
         expect(body.missing).toBeUndefined();
+      });
+
+      it("should report llm api_key_missing when provider configured but key absent", async () => {
+        const { validateEnv } = await import("../../lib/env-validation.js");
+        vi.mocked(validateEnv).mockReturnValue({ valid: true, missing: [] });
+
+        const { getLLMReadiness } = await import("../../lib/llm/provider.js");
+        vi.mocked(getLLMReadiness).mockReturnValue({ ready: false, reason: "api_key_missing" });
+
+        const { default: handler } = await import("./index.js");
+
+        const req = createMockRequest("GET");
+        const res = createMockResponse();
+
+        handler(req, res);
+
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.body);
+        expect(body.status).toBe("ok");
+        expect(body.checks.githubApp).toEqual({ ready: true });
+        expect(body.checks.llm).toEqual({ ready: false, reason: "api_key_missing" });
       });
     });
 

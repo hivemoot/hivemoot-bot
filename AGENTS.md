@@ -82,7 +82,7 @@ All four must pass before any PR. Run targeted tests with `npm test -- path/to/f
 
 - Never expose internal error details (provider names, API keys, stack traces) in user-facing comments.
 - Validate webhook signatures via `WEBHOOK_SECRET`.
-- GitHub App permissions are minimal: Issues R/W, Pull Requests R/W, Metadata R.
+- GitHub App permissions are scoped to the minimum required. See the README's **GitHub App Setup** section for the current list.
 - No secrets in code — all via environment variables.
 
 ## Before you start

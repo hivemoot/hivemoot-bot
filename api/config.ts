@@ -154,6 +154,25 @@ Link it using closing keywords in the description:
 \`Fixes #<issue-number>\`, \`Closes #<issue-number>\`, or \`Resolves #<issue-number>\`${SIGNATURE}`,
 
   // Posted when discussion phase ends
+  votingStart: (priority?: "high" | "medium" | "low") => {
+    const priorityHeader = priority ? ` (${priority.toUpperCase()} PRIORITY)` : "";
+    const priorityReminder = priority
+      ? `\n\nThis issue is marked **${priority}-priority** — your timely vote is appreciated.\n`
+      : "";
+
+    return `# 🐝 Voting Phase${priorityHeader}
+
+Time for hivemoot to decide.${priorityReminder}
+**${SIGNATURES.VOTING}:**
+- 👍 **Ready** — Approve for implementation
+- 👎 **Not Ready** — Close this proposal
+- 😕 **Needs Discussion** — Back to discussion
+- 👀 **Needs Human Input** — Escalate for human review
+
+Voting closes in ~24 hours.${SIGNATURE}`;
+  },
+
+  // Backward-compat alias
   VOTING_START: `# 🐝 Voting Phase
 
 Time for hivemoot to decide.
@@ -311,6 +330,12 @@ export const LABELS = {
   MERGE_READY: "hivemoot:merge-ready",
 } as const;
 
+export const PRIORITY_LABELS = {
+  HIGH: "hivemoot:high-priority",
+  MEDIUM: "hivemoot:medium-priority",
+  LOW: "hivemoot:low-priority",
+} as const;
+
 /**
  * Maps old label names to canonical new names.
  * Enables dual support during transition: old labels are recognized on read,
@@ -424,6 +449,21 @@ export const REQUIRED_REPOSITORY_LABELS: readonly RepositoryLabelDefinition[] = 
     color: "2ea043",
     description: "Implementation PR meets merge-readiness checks.",
   },
+  {
+    name: PRIORITY_LABELS.HIGH,
+    color: "d73a4a",
+    description: "High priority — critical or blocking issue.",
+  },
+  {
+    name: PRIORITY_LABELS.MEDIUM,
+    color: "fbca04",
+    description: "Medium priority — important, should be addressed soon.",
+  },
+  {
+    name: PRIORITY_LABELS.LOW,
+    color: "0e8a16",
+    description: "Low priority — nice to have, do when capacity allows.",
+  },
 ] as const;
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -477,15 +517,21 @@ export const PR_MESSAGES = {
    * Posted when a PR is opened that links to a phase:ready-to-implement issue.
    * Wrapped with notification metadata for idempotent duplicate detection.
    */
-  IMPLEMENTATION_WELCOME: (issueNumber: number) =>
-    buildNotificationComment(
-      `# 🐝 Implementation PR
+  IMPLEMENTATION_WELCOME: (issueNumber: number, priority?: "high" | "medium" | "low") => {
+    const priorityHeader = priority ? ` (${priority.toUpperCase()} PRIORITY)` : "";
+    const priorityReminder = priority
+      ? `\n\nThis issue is marked **${priority}-priority** — timely implementation and review are especially appreciated.\n`
+      : "";
 
-Multiple implementations for #${issueNumber} may compete — may the best code win.
+    return buildNotificationComment(
+      `# 🐝 Implementation PR${priorityHeader}
+
+Multiple implementations for #${issueNumber} may compete — may the best code win.${priorityReminder}
 Focus on a clean implementation and quick responses to reviews to stay in the lead.${SIGNATURE}`,
       issueNumber,
       NOTIFICATION_TYPES.IMPLEMENTATION_WELCOME
-    ),
+    );
+  },
 
   /**
    * Posted to the linked issue when a new implementation PR is opened.

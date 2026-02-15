@@ -141,7 +141,8 @@ describe("config", () => {
       const config = await import("./config.js");
 
       const labelNames = new Set(config.REQUIRED_REPOSITORY_LABELS.map((label) => label.name));
-      expect(labelNames).toEqual(new Set(Object.values(config.LABELS)));
+      const allLabels = new Set([...Object.values(config.LABELS), ...Object.values(config.PRIORITY_LABELS)]);
+      expect(labelNames).toEqual(allLabels);
 
       for (const label of config.REQUIRED_REPOSITORY_LABELS) {
         expect(label.color).toMatch(/^[0-9a-f]{6}$/);

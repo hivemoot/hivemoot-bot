@@ -164,6 +164,8 @@ Time for hivemoot to decide.
 - 😕 **Needs Discussion** — Back to discussion
 - 👀 **Needs Human Input** — Escalate for human review
 
+Pick **one** reaction only — multiple different reactions will void your vote.
+
 Voting closes in ~24 hours.${SIGNATURE}`,
 
   // Posted when voting ends with a ready-to-implement outcome

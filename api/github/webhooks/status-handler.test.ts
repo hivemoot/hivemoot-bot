@@ -5,7 +5,6 @@ const mocks = vi.hoisted(() => {
     createPROperations: vi.fn(),
     loadRepositoryConfig: vi.fn(),
     evaluateMergeReadiness: vi.fn(),
-    prOps: {},
   };
 });
 
@@ -125,7 +124,6 @@ function createCheckContext(options?: {
 describe("status webhook handler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.createPROperations.mockReturnValue(mocks.prOps);
     mocks.loadRepositoryConfig.mockResolvedValue({
       governance: {
         pr: {
@@ -201,6 +199,25 @@ describe("status webhook handler", () => {
         headSha: "abc123",
       })
     );
+  });
+
+  it("skips merge-readiness evaluation when no pull request matches the status SHA", async () => {
+    const { handlers } = createWebhookHarness();
+    const handler = handlers.get("status");
+    expect(handler).toBeDefined();
+
+    const context = createStatusContext({
+      sha: "abc123",
+      pullRequests: [
+        { number: 11, head: { sha: "def456" } },
+        { number: 12, head: { sha: "ghi789" } },
+      ],
+    });
+
+    await handler!(context);
+
+    expect(context.octokit.rest.pulls.list).toHaveBeenCalledTimes(1);
+    expect(mocks.evaluateMergeReadiness).not.toHaveBeenCalled();
   });
 
   it("aggregates per-PR merge-readiness failures", async () => {

@@ -172,7 +172,24 @@ export function createModel(config: LLMConfig): LanguageModelV1 {
         throw new Error("GOOGLE_API_KEY or GOOGLE_GENERATIVE_AI_API_KEY environment variable is not set");
       }
       const google = createGoogleGenerativeAI({ apiKey });
-      return google(config.model);
+      // Disable Gemini's native responseSchema so the SDK injects the JSON
+      // schema into the prompt instead.  @ai-sdk/google v1.2.22 (Jul 2025)
+      // predates gemini-3-flash-preview (Dec 2025); the older SDK's schema
+      // serialization breaks newer models, causing "No object generated" errors.
+      //
+      // How it works (ai SDK source, generateObject json mode):
+      //   supportsStructuredOutputs=true  → sends responseSchema to Gemini API
+      //   supportsStructuredOutputs=false → appends "JSON schema: …" to the
+      //     system prompt and sets responseMimeType only
+      //
+      // References:
+      //   • AI SDK docs on the flag:
+      //     https://ai-sdk.dev/providers/ai-sdk-providers/google-generative-ai#structured-outputs
+      //   • SDK source (google provider, object-json mode, lines 477-493 of dist/index.js):
+      //     responseSchema is sent only when supportsStructuredOutputs is true
+      //   • SDK source (ai core, generateObject, line 2832 of dist/index.js):
+      //     injectJsonInstruction() called when supportsStructuredOutputs is false
+      return google(config.model, { structuredOutputs: false });
     }
 
     case "mistral": {

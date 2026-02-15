@@ -249,6 +249,19 @@ describe("LLM Provider", () => {
       expect(model.modelId).toBe("gemini-pro");
     });
 
+    it("should disable native structured outputs for Google models", () => {
+      process.env.GOOGLE_API_KEY = "google-test-key";
+      const config: LLMConfig = {
+        provider: "google",
+        model: "gemini-3-flash-preview",
+        maxTokens: 2000,
+      };
+
+      const model = createModel(config);
+
+      expect(model.supportsStructuredOutputs).toBe(false);
+    });
+
     it("should create Google model from GOOGLE_GENERATIVE_AI_API_KEY", () => {
       delete process.env.GOOGLE_API_KEY;
       process.env.GOOGLE_GENERATIVE_AI_API_KEY = "google-alt-test-key";

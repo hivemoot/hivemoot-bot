@@ -147,7 +147,8 @@ governance:
 | `LLM_MAX_TOKENS` | `2000` | Optional response token cap (clamped to configured bounds) |
 | `ANTHROPIC_API_KEY` | - | Required when `LLM_PROVIDER=anthropic` |
 | `OPENAI_API_KEY` | - | Required when `LLM_PROVIDER=openai` |
-| `GOOGLE_API_KEY` | - | Required when `LLM_PROVIDER=google` |
+| `GOOGLE_API_KEY` | - | Required when `LLM_PROVIDER=google` (preferred) |
+| `GOOGLE_GENERATIVE_AI_API_KEY` | - | Fallback when `GOOGLE_API_KEY` is not set |
 | `MISTRAL_API_KEY` | - | Required when `LLM_PROVIDER=mistral` |
 
 ## Deployment

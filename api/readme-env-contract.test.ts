@@ -1,24 +1,79 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { extname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const REQUIRED_ENV_VARS = [
-  "APP_ID",
-  "PRIVATE_KEY",
-  "APP_PRIVATE_KEY",
-  "WEBHOOK_SECRET",
-  "NODEJS_HELPERS",
-  "HIVEMOOT_DISCUSSION_DURATION_MINUTES",
-  "HIVEMOOT_VOTING_DURATION_MINUTES",
-  "HIVEMOOT_PR_STALE_DAYS",
-  "HIVEMOOT_MAX_PRS_PER_ISSUE",
-  "LLM_PROVIDER",
-  "LLM_MODEL",
-  "LLM_MAX_TOKENS",
-  "ANTHROPIC_API_KEY",
-  "OPENAI_API_KEY",
-  "GOOGLE_API_KEY",
-  "MISTRAL_API_KEY",
-] as const;
+const PROJECT_ROOT = new URL("..", import.meta.url);
+const SOURCE_DIRECTORIES = ["api", "scripts"] as const;
+const EXCLUDED_FILE_SUFFIXES = [".test.ts"] as const;
+const EXCLUDED_PATH_SEGMENTS = ["dist", "node_modules"] as const;
+
+function listSourceFiles(rootDir: string): string[] {
+  const entries = readdirSync(rootDir);
+  const files: string[] = [];
+
+  for (const entry of entries) {
+    const fullPath = join(rootDir, entry);
+    const stats = statSync(fullPath);
+
+    if (stats.isDirectory()) {
+      if (EXCLUDED_PATH_SEGMENTS.includes(entry)) {
+        continue;
+      }
+      files.push(...listSourceFiles(fullPath));
+      continue;
+    }
+
+    if (extname(entry) !== ".ts") {
+      continue;
+    }
+
+    if (EXCLUDED_FILE_SUFFIXES.some((suffix) => entry.endsWith(suffix))) {
+      continue;
+    }
+
+    files.push(fullPath);
+  }
+
+  return files;
+}
+
+function isDocumentedRuntimeEnvVar(envVar: string): boolean {
+  if (envVar === "APP_ID" || envVar === "PRIVATE_KEY" || envVar === "APP_PRIVATE_KEY" || envVar === "WEBHOOK_SECRET") {
+    return true;
+  }
+  if (envVar.startsWith("HIVEMOOT_")) {
+    return true;
+  }
+  if (envVar.startsWith("LLM_")) {
+    return true;
+  }
+  if (envVar.endsWith("_API_KEY")) {
+    return true;
+  }
+  return false;
+}
+
+function getRuntimeEnvVarsFromSource(): Set<string> {
+  const envVars = new Set<string>();
+  const processEnvPattern = /\bprocess\.env\.([A-Z][A-Z0-9_]*)\b/g;
+  const projectRootPath = fileURLToPath(PROJECT_ROOT);
+
+  for (const sourceDirectory of SOURCE_DIRECTORIES) {
+    const rootDir = join(projectRootPath, sourceDirectory);
+    for (const sourceFile of listSourceFiles(rootDir)) {
+      const content = readFileSync(sourceFile, "utf8");
+      for (const match of content.matchAll(processEnvPattern)) {
+        const envVar = match[1];
+        if (envVar && isDocumentedRuntimeEnvVar(envVar)) {
+          envVars.add(envVar);
+        }
+      }
+    }
+  }
+
+  return envVars;
+}
 
 function getDocumentedEnvVarsFromReadme(readmeContent: string): Set<string> {
   const vars = new Set<string>();
@@ -36,10 +91,11 @@ function getDocumentedEnvVarsFromReadme(readmeContent: string): Set<string> {
 
 describe("README environment variable contract", () => {
   it("documents all required runtime environment variables", () => {
-    const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+    const runtimeEnvVars = getRuntimeEnvVarsFromSource();
+    const readme = readFileSync(new URL("README.md", PROJECT_ROOT), "utf8");
     const documentedVars = getDocumentedEnvVarsFromReadme(readme);
 
-    for (const envVar of REQUIRED_ENV_VARS) {
+    for (const envVar of runtimeEnvVars) {
       expect(documentedVars, `README missing env var: ${envVar}`).toContain(envVar);
     }
   });

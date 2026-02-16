@@ -71,7 +71,7 @@ const MAX_CONTENT_CHARS = 100_000;
  * - Author's comments marked: **@alice (author)**
  * - Reaction signal shown: **@scout [👍 3]** (only when thumbsUp > 0)
  */
-function buildBlueprintUserPrompt(context: IssueContext): string {
+export function buildBlueprintUserPrompt(context: IssueContext): string {
   const { title, body, comments } = context;
 
   let discussionText = `## Issue: ${title}\n\n`;
@@ -114,7 +114,7 @@ Generate a structured implementation blueprint. Focus on concrete steps, design 
 /**
  * Truncate discussion content, preserving issue body and prioritizing recent comments.
  */
-function truncateDiscussion(
+export function truncateDiscussion(
   title: string,
   body: string,
   author: string,

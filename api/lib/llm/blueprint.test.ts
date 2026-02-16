@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { BlueprintGenerator } from "./blueprint.js";
+import { BlueprintGenerator, buildBlueprintUserPrompt, truncateDiscussion } from "./blueprint.js";
 import type { ImplementationPlan, IssueContext } from "./types.js";
 import type { Logger } from "../logger.js";
 
@@ -22,6 +22,11 @@ vi.mock("ai", () => ({
 // Mock the provider module
 vi.mock("./provider.js", () => ({
   createModelFromEnv: vi.fn(),
+}));
+
+// Mock the JSON repair module
+vi.mock("./json-repair.js", () => ({
+  repairMalformedJsonText: vi.fn(),
 }));
 
 describe("BlueprintGenerator", () => {
@@ -323,5 +328,276 @@ describe("BlueprintGenerator", () => {
         "Blueprint generation failed: API rate limit exceeded"
       );
     });
+  });
+
+  describe("experimental_repairText callback", () => {
+    it("should log when JSON repair succeeds", async () => {
+      const { createModelFromEnv } = await import("./provider.js");
+      const { generateObject } = await import("ai");
+      const { repairMalformedJsonText } = await import("./json-repair.js");
+
+      vi.mocked(createModelFromEnv).mockReturnValue({
+        model: {} as never,
+        config: { provider: "anthropic", model: "test", maxTokens: 2000 },
+      });
+
+      // Capture the repairText callback by intercepting generateObject
+      let capturedRepairFn: ((args: { text: string; error: Error }) => Promise<string | null>) | undefined;
+      vi.mocked(generateObject).mockImplementation(async (opts: Record<string, unknown>) => {
+        capturedRepairFn = opts.experimental_repairText as typeof capturedRepairFn;
+        return {
+          object: {
+            goal: "Test",
+            plan: "",
+            decisions: [],
+            outOfScope: [],
+            openQuestions: [],
+            metadata: { commentCount: 1, participantCount: 1 },
+          },
+          finishReason: "stop",
+          usage: { promptTokens: 100, completionTokens: 200 },
+        } as never;
+      });
+
+      const generator = new BlueprintGenerator({ logger: mockLogger });
+      await generator.generate({
+        title: "Test",
+        body: "Body",
+        author: "alice",
+        comments: [{ author: "bob", body: "Comment", createdAt: "2024-01-01T00:00:00Z" }],
+      });
+
+      expect(capturedRepairFn).toBeDefined();
+
+      // Simulate repair succeeding
+      vi.mocked(repairMalformedJsonText).mockResolvedValue('{"fixed": true}');
+      await capturedRepairFn!({ text: "bad json", error: new Error("parse error") });
+
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        "Repaired malformed LLM JSON output (error: parse error)"
+      );
+    });
+
+    it("should not log when JSON repair returns null", async () => {
+      const { createModelFromEnv } = await import("./provider.js");
+      const { generateObject } = await import("ai");
+      const { repairMalformedJsonText } = await import("./json-repair.js");
+
+      vi.mocked(createModelFromEnv).mockReturnValue({
+        model: {} as never,
+        config: { provider: "anthropic", model: "test", maxTokens: 2000 },
+      });
+
+      let capturedRepairFn: ((args: { text: string; error: Error }) => Promise<string | null>) | undefined;
+      vi.mocked(generateObject).mockImplementation(async (opts: Record<string, unknown>) => {
+        capturedRepairFn = opts.experimental_repairText as typeof capturedRepairFn;
+        return {
+          object: {
+            goal: "Test",
+            plan: "",
+            decisions: [],
+            outOfScope: [],
+            openQuestions: [],
+            metadata: { commentCount: 1, participantCount: 1 },
+          },
+          finishReason: "stop",
+          usage: { promptTokens: 100, completionTokens: 200 },
+        } as never;
+      });
+
+      const generator = new BlueprintGenerator({ logger: mockLogger });
+      await generator.generate({
+        title: "Test",
+        body: "Body",
+        author: "alice",
+        comments: [{ author: "bob", body: "Comment", createdAt: "2024-01-01T00:00:00Z" }],
+      });
+
+      // Simulate repair failing (returning null)
+      vi.mocked(repairMalformedJsonText).mockResolvedValue(null);
+      const result = await capturedRepairFn!({ text: "bad json", error: new Error("parse error") });
+
+      expect(result).toBeNull();
+      // The "Repaired malformed" log should NOT have been called
+      expect(mockLogger.info).not.toHaveBeenCalledWith(
+        expect.stringContaining("Repaired malformed")
+      );
+    });
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────────
+// buildBlueprintUserPrompt
+// ───────────────────────────────────────────────────────────────────────────────
+
+describe("buildBlueprintUserPrompt", () => {
+  it("should include issue title and body", () => {
+    const context: IssueContext = {
+      title: "Add caching layer",
+      body: "We need Redis caching for the API",
+      author: "alice",
+      comments: [
+        { author: "bob", body: "Agreed", createdAt: "2024-01-01T00:00:00Z" },
+      ],
+    };
+
+    const prompt = buildBlueprintUserPrompt(context);
+
+    expect(prompt).toContain("## Issue: Add caching layer");
+    expect(prompt).toContain("We need Redis caching for the API");
+    expect(prompt).toContain("Total comments: 1");
+    expect(prompt).toContain("Unique participants: 1");
+  });
+
+  it("should show fallback when body is empty", () => {
+    const context: IssueContext = {
+      title: "Fix bug",
+      body: "",
+      author: "alice",
+      comments: [],
+    };
+
+    const prompt = buildBlueprintUserPrompt(context);
+
+    expect(prompt).toContain("(No description provided)");
+  });
+
+  it("should show 'No comments yet' when comments array is empty", () => {
+    const context: IssueContext = {
+      title: "Test",
+      body: "Body",
+      author: "alice",
+      comments: [],
+    };
+
+    const prompt = buildBlueprintUserPrompt(context);
+
+    expect(prompt).toContain("(No comments yet)");
+    expect(prompt).toContain("Total comments: 0");
+  });
+
+  it("should mark the issue author in comments", () => {
+    const context: IssueContext = {
+      title: "Test",
+      body: "Body",
+      author: "alice",
+      comments: [
+        { author: "alice", body: "My follow-up", createdAt: "2024-01-01T00:00:00Z" },
+        { author: "bob", body: "My input", createdAt: "2024-01-02T00:00:00Z" },
+      ],
+    };
+
+    const prompt = buildBlueprintUserPrompt(context);
+
+    expect(prompt).toContain("**@alice (author)**");
+    expect(prompt).toContain("**@bob**");
+    expect(prompt).not.toContain("@bob (author)");
+  });
+
+  it("should include reaction signals when present", () => {
+    const context: IssueContext = {
+      title: "Test",
+      body: "Body",
+      author: "alice",
+      comments: [
+        {
+          author: "bob",
+          body: "Great idea",
+          createdAt: "2024-01-01T00:00:00Z",
+          reactions: { thumbsUp: 5, thumbsDown: 0 },
+        },
+        {
+          author: "carol",
+          body: "Not sure",
+          createdAt: "2024-01-02T00:00:00Z",
+          reactions: { thumbsUp: 0, thumbsDown: 2 },
+        },
+      ],
+    };
+
+    const prompt = buildBlueprintUserPrompt(context);
+
+    expect(prompt).toContain("**@bob [👍 5]**");
+    // thumbsDown-only should NOT show a signal (only thumbsUp is shown)
+    expect(prompt).not.toContain("[👍 0]");
+    expect(prompt).toContain("**@carol**");
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────────
+// truncateDiscussion
+// ───────────────────────────────────────────────────────────────────────────────
+
+describe("truncateDiscussion", () => {
+  const comments = [
+    { author: "alice", body: "First comment", createdAt: "2024-01-01T00:00:00Z" },
+    { author: "bob", body: "Second comment", createdAt: "2024-01-02T00:00:00Z" },
+    { author: "carol", body: "Third comment", createdAt: "2024-01-03T00:00:00Z" },
+  ];
+
+  it("should include all comments when space permits", () => {
+    const result = truncateDiscussion("Test", "Body", "alice", comments, 10_000);
+
+    expect(result).toContain("## Issue: Test");
+    expect(result).toContain("First comment");
+    expect(result).toContain("Second comment");
+    expect(result).toContain("Third comment");
+    expect(result).not.toContain("truncated");
+  });
+
+  it("should prioritize recent comments when truncating", () => {
+    // Use a small maxChars that fits the header + ~1 comment
+    const result = truncateDiscussion("Test", "Body", "alice", comments, 500);
+
+    // Should always include the most recent comment
+    expect(result).toContain("Third comment");
+    // May skip older comments
+    if (!result.includes("First comment")) {
+      expect(result).toContain("older comments truncated for length");
+    }
+  });
+
+  it("should show skipped count when comments are truncated", () => {
+    // Force truncation by using very small maxChars
+    const result = truncateDiscussion("Test", "Body", "alice", comments, 350);
+
+    expect(result).toContain("older comments truncated for length");
+  });
+
+  it("should show full truncation message when no space for comments", () => {
+    // Header alone exceeds maxChars
+    const result = truncateDiscussion("Test", "Body", "alice", comments, 10);
+
+    expect(result).toContain("(Truncated - too many comments to include)");
+    expect(result).not.toContain("First comment");
+  });
+
+  it("should mark the issue author in truncated output", () => {
+    const result = truncateDiscussion("Test", "Body", "alice", comments, 10_000);
+
+    expect(result).toContain("**@alice (author)**");
+    expect(result).toContain("**@bob**");
+  });
+
+  it("should include reaction signals in truncated output", () => {
+    const commentsWithReactions = [
+      {
+        author: "alice",
+        body: "My idea",
+        createdAt: "2024-01-01T00:00:00Z",
+        reactions: { thumbsUp: 7, thumbsDown: 0 },
+      },
+      { author: "bob", body: "Comment", createdAt: "2024-01-02T00:00:00Z" },
+    ];
+
+    const result = truncateDiscussion("Test", "Body", "alice", commentsWithReactions, 10_000);
+
+    expect(result).toContain("[👍 7]");
+  });
+
+  it("should show fallback when body is empty", () => {
+    const result = truncateDiscussion("Test", "", "alice", comments, 10_000);
+
+    expect(result).toContain("(No description provided)");
   });
 });

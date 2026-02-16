@@ -8,6 +8,17 @@ vi.mock("../index.js", () => ({
   createGovernanceService: vi.fn(() => mockGovernance),
 }));
 
+// Mock the blueprint generator to control success/failure paths.
+// vi.hoisted ensures the mock fn is available before vi.mock runs.
+const { mockBlueprintGenerate } = vi.hoisted(() => ({
+  mockBlueprintGenerate: vi.fn(),
+}));
+vi.mock("../llm/blueprint.js", () => ({
+  BlueprintGenerator: class {
+    generate = mockBlueprintGenerate;
+  },
+}));
+
 let mockIssueOps: Record<string, ReturnType<typeof vi.fn>>;
 let mockGovernance: Record<string, ReturnType<typeof vi.fn>>;
 
@@ -71,6 +82,11 @@ describe("executeCommand", () => {
     mockGovernance = {
       transitionToVoting: vi.fn().mockResolvedValue(undefined),
     };
+    // Default: LLM not configured → fallback blueprint
+    mockBlueprintGenerate.mockResolvedValue({
+      success: false,
+      reason: "LLM not configured",
+    });
   });
 
   describe("authorization", () => {
@@ -355,6 +371,62 @@ describe("executeCommand", () => {
       expect(body).toContain('"type":"alignment"');
       expect(body).toContain("Blueprint");
       expect(body).toContain("@maintainer via `/gather`");
+    });
+
+    it("should use LLM-generated blueprint when generation succeeds", async () => {
+      mockIssueOps.getIssueContext.mockResolvedValue({
+        title: "Improve onboarding docs",
+        body: "Proposal body",
+        author: "queen",
+        comments: [
+          { author: "alice", body: "Looks good", createdAt: "2026-02-16T00:00:00.000Z" },
+        ],
+      });
+      mockBlueprintGenerate.mockResolvedValue({
+        success: true,
+        plan: {
+          goal: "Revamp the onboarding documentation",
+          plan: "1. Audit existing docs\n2. Add getting started guide",
+          decisions: ["Use MDX format"],
+          outOfScope: ["Video tutorials"],
+          openQuestions: [],
+          metadata: { commentCount: 1, participantCount: 1 },
+        },
+      });
+
+      const ctx = createCtx({ verb: "gather" });
+      const result = await executeCommand(ctx);
+
+      expect(result).toEqual({ status: "executed", message: "Created the blueprint comment." });
+      const body = mockIssueOps.comment.mock.calls[0][1];
+      expect(body).toContain("Revamp the onboarding documentation");
+      expect(body).toContain("## Plan");
+      expect(body).toContain("## Decisions");
+      expect(body).toContain("Use MDX format");
+      expect(body).toContain("## Out of scope");
+      expect(body).toContain("Video tutorials");
+    });
+
+    it("should log reason when using fallback blueprint", async () => {
+      mockIssueOps.getIssueContext.mockResolvedValue({
+        title: "Test",
+        body: "Body",
+        author: "queen",
+        comments: [
+          { author: "alice", body: "Comment", createdAt: "2026-02-16T00:00:00.000Z" },
+        ],
+      });
+      mockBlueprintGenerate.mockResolvedValue({
+        success: false,
+        reason: "LLM not configured",
+      });
+
+      const ctx = createCtx({ verb: "gather" });
+      await executeCommand(ctx);
+
+      expect(ctx.log.info).toHaveBeenCalledWith(
+        "Using fallback blueprint for #42: LLM not configured"
+      );
     });
 
     it("should update existing canonical blueprint comment", async () => {

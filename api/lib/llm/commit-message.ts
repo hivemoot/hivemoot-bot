@@ -149,6 +149,7 @@ export class CommitMessageGenerator {
             maxTokens: config.maxTokens,
             temperature: LLM_DEFAULTS.temperature,
             maxRetries: 0,
+            abortSignal: AbortSignal.timeout(LLM_DEFAULTS.perCallTimeoutMs),
           }),
         undefined,
         this.logger

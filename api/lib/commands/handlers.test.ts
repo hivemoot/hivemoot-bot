@@ -445,6 +445,67 @@ describe("executeCommand", () => {
       expect(octokit.rest.reactions.createForIssueComment).not.toHaveBeenCalled();
     });
 
+    it("should scan reaction pages for app-bot eyes reaction", async () => {
+      const octokit = createMockOctokit();
+      octokit.rest.reactions.listForIssueComment.mockImplementation(({ page = 1 }) => {
+        if (page === 1) {
+          return Promise.resolve({
+            data: Array.from({ length: 100 }, () => ({ user: { login: "some-user" } })),
+          });
+        }
+        return Promise.resolve({
+          data: [{ user: { login: "hivemoot[bot]" } }],
+        });
+      });
+
+      const ctx = createCtx({ octokit });
+      const result = await executeCommand(ctx);
+
+      expect(result).toEqual({ status: "ignored" });
+      expect(octokit.rest.reactions.listForIssueComment).toHaveBeenCalledWith(
+        expect.objectContaining({ page: 1, per_page: 100 }),
+      );
+      expect(octokit.rest.reactions.listForIssueComment).toHaveBeenCalledWith(
+        expect.objectContaining({ page: 2, per_page: 100 }),
+      );
+    });
+
+    it("should scan comment pages to resolve app bot login", async () => {
+      const octokit = createMockOctokit();
+      octokit.rest.issues.listComments.mockImplementation(({ page = 1 }) => {
+        if (page === 1) {
+          return Promise.resolve({
+            data: Array.from({ length: 100 }, (_, i) => ({
+              user: { login: `human-${i}` },
+              performed_via_github_app: null,
+            })),
+          });
+        }
+        return Promise.resolve({
+          data: [
+            {
+              user: { login: "hivemoot[bot]" },
+              performed_via_github_app: { id: 12345 },
+            },
+          ],
+        });
+      });
+      octokit.rest.reactions.listForIssueComment.mockResolvedValue({
+        data: [{ user: { login: "hivemoot[bot]" } }],
+      });
+
+      const ctx = createCtx({ octokit });
+      const result = await executeCommand(ctx);
+
+      expect(result).toEqual({ status: "ignored" });
+      expect(octokit.rest.issues.listComments).toHaveBeenCalledWith(
+        expect.objectContaining({ page: 1, per_page: 100 }),
+      );
+      expect(octokit.rest.issues.listComments).toHaveBeenCalledWith(
+        expect.objectContaining({ page: 2, per_page: 100 }),
+      );
+    });
+
     it("should not skip when eyes reaction is from a non-bot user", async () => {
       const octokit = createMockOctokit();
       octokit.rest.reactions.listForIssueComment.mockResolvedValue({

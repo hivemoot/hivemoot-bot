@@ -40,6 +40,7 @@ export interface CommandOctokit {
         comment_id: number;
         content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
         per_page?: number;
+        page?: number;
       }) => Promise<{ data: Array<{ user: { login: string } | null }> }>;
     };
     issues: {
@@ -54,6 +55,7 @@ export interface CommandOctokit {
         repo: string;
         issue_number: number;
         per_page?: number;
+        page?: number;
       }) => Promise<{
         data: Array<{
           user: { login: string } | null;
@@ -177,24 +179,25 @@ async function reply(ctx: CommandContext, body: string): Promise<void> {
  */
 async function alreadyProcessed(ctx: CommandContext): Promise<boolean> {
   try {
-    const [{ data: reactions }, { data: comments }] = await Promise.all([
-      ctx.octokit.rest.reactions.listForIssueComment({
-        owner: ctx.owner,
-        repo: ctx.repo,
-        comment_id: ctx.commentId,
-        content: "eyes",
-        per_page: 100,
-      }),
-      ctx.octokit.rest.issues.listComments({
+    const perPage = 100;
+    let botLogin: string | undefined;
+
+    // Resolve this app's exact bot login from issue comments authored via this app.
+    // Pagination is required for busy threads where our comment may not be on page 1.
+    for (let page = 1; ; page++) {
+      const { data: comments } = await ctx.octokit.rest.issues.listComments({
         owner: ctx.owner,
         repo: ctx.repo,
         issue_number: ctx.issueNumber,
-        per_page: 100,
-      }),
-    ]);
+        per_page: perPage,
+        page,
+      });
+      botLogin = comments.find((c) => c.performed_via_github_app?.id === ctx.appId)?.user?.login;
+      if (botLogin || comments.length < perPage) {
+        break;
+      }
+    }
 
-    // Resolve this app's exact bot login from any comment authored via this app.
-    const botLogin = comments.find((c) => c.performed_via_github_app?.id === ctx.appId)?.user?.login;
     if (!botLogin) {
       ctx.log.info(
         { issue: ctx.issueNumber, appId: ctx.appId },
@@ -203,7 +206,26 @@ async function alreadyProcessed(ctx: CommandContext): Promise<boolean> {
       return false;
     }
 
-    return reactions.some((r) => r.user?.login === botLogin);
+    // Reactions also paginate; if our eyes reaction is on a later page we must still
+    // short-circuit retries to preserve command idempotency.
+    for (let page = 1; ; page++) {
+      const { data: reactions } = await ctx.octokit.rest.reactions.listForIssueComment({
+        owner: ctx.owner,
+        repo: ctx.repo,
+        comment_id: ctx.commentId,
+        content: "eyes",
+        per_page: perPage,
+        page,
+      });
+      if (reactions.some((r) => r.user?.login === botLogin)) {
+        return true;
+      }
+      if (reactions.length < perPage) {
+        break;
+      }
+    }
+
+    return false;
   } catch (error) {
     ctx.log.error(
       { err: error, issue: ctx.issueNumber, commentId: ctx.commentId },

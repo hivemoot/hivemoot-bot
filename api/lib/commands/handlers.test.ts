@@ -25,6 +25,14 @@ function createMockOctokit(permission = "admin") {
       },
       issues: {
         createComment: vi.fn().mockResolvedValue({}),
+        listComments: vi.fn().mockResolvedValue({
+          data: [
+            {
+              user: { login: "hivemoot[bot]" },
+              performed_via_github_app: { id: 12345 },
+            },
+          ],
+        }),
       },
     },
   };
@@ -423,10 +431,10 @@ describe("executeCommand", () => {
   });
 
   describe("idempotency guard", () => {
-    it("should skip execution when bot already reacted with eyes", async () => {
+    it("should skip execution when this app bot already reacted with eyes", async () => {
       const octokit = createMockOctokit();
       octokit.rest.reactions.listForIssueComment.mockResolvedValue({
-        data: [{ user: { login: "hivemoot-bot[bot]" } }],
+        data: [{ user: { login: "hivemoot[bot]" } }],
       });
 
       const ctx = createCtx({ octokit });
@@ -449,6 +457,35 @@ describe("executeCommand", () => {
       expect(result.status).toBe("executed");
     });
 
+    it("should not skip when eyes reaction is from a different bot", async () => {
+      const octokit = createMockOctokit();
+      octokit.rest.reactions.listForIssueComment.mockResolvedValue({
+        data: [{ user: { login: "other-app[bot]" } }],
+      });
+
+      const ctx = createCtx({ octokit });
+      const result = await executeCommand(ctx);
+
+      expect(result.status).toBe("executed");
+    });
+
+    it("should proceed when app bot login cannot be resolved", async () => {
+      const octokit = createMockOctokit();
+      octokit.rest.reactions.listForIssueComment.mockResolvedValue({
+        data: [{ user: { login: "hivemoot[bot]" } }],
+      });
+      octokit.rest.issues.listComments.mockResolvedValue({ data: [] });
+
+      const ctx = createCtx({ octokit });
+      const result = await executeCommand(ctx);
+
+      expect(result.status).toBe("executed");
+      expect(ctx.log.info).toHaveBeenCalledWith(
+        expect.objectContaining({ issue: 42, appId: 12345 }),
+        expect.stringContaining("unable to resolve app bot login"),
+      );
+    });
+
     it("should proceed when reaction check fails", async () => {
       const octokit = createMockOctokit();
       octokit.rest.reactions.listForIssueComment.mockRejectedValue(
@@ -459,6 +496,10 @@ describe("executeCommand", () => {
       const result = await executeCommand(ctx);
 
       expect(result.status).toBe("executed");
+      expect(ctx.log.error).toHaveBeenCalledWith(
+        expect.objectContaining({ issue: 42, commentId: 100 }),
+        expect.stringContaining("Failed to check command idempotency reactions"),
+      );
     });
 
     it("should proceed when no eyes reactions exist", async () => {

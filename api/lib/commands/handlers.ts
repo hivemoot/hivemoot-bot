@@ -49,6 +49,17 @@ export interface CommandOctokit {
         issue_number: number;
         body: string;
       }) => Promise<unknown>;
+      listComments: (params: {
+        owner: string;
+        repo: string;
+        issue_number: number;
+        per_page?: number;
+      }) => Promise<{
+        data: Array<{
+          user: { login: string } | null;
+          performed_via_github_app?: { id: number } | null;
+        }>;
+      }>;
     };
   };
 }
@@ -166,17 +177,38 @@ async function reply(ctx: CommandContext, body: string): Promise<void> {
  */
 async function alreadyProcessed(ctx: CommandContext): Promise<boolean> {
   try {
-    const { data: reactions } = await ctx.octokit.rest.reactions.listForIssueComment({
-      owner: ctx.owner,
-      repo: ctx.repo,
-      comment_id: ctx.commentId,
-      content: "eyes",
-      per_page: 100,
-    });
-    // Check if any eyes reaction was created by our app's bot account.
-    // GitHub App bot usernames follow the pattern "<app-slug>[bot]".
-    return reactions.some((r) => r.user?.login.endsWith("[bot]"));
-  } catch {
+    const [{ data: reactions }, { data: comments }] = await Promise.all([
+      ctx.octokit.rest.reactions.listForIssueComment({
+        owner: ctx.owner,
+        repo: ctx.repo,
+        comment_id: ctx.commentId,
+        content: "eyes",
+        per_page: 100,
+      }),
+      ctx.octokit.rest.issues.listComments({
+        owner: ctx.owner,
+        repo: ctx.repo,
+        issue_number: ctx.issueNumber,
+        per_page: 100,
+      }),
+    ]);
+
+    // Resolve this app's exact bot login from any comment authored via this app.
+    const botLogin = comments.find((c) => c.performed_via_github_app?.id === ctx.appId)?.user?.login;
+    if (!botLogin) {
+      ctx.log.info(
+        { issue: ctx.issueNumber, appId: ctx.appId },
+        "Skipping idempotency short-circuit: unable to resolve app bot login",
+      );
+      return false;
+    }
+
+    return reactions.some((r) => r.user?.login === botLogin);
+  } catch (error) {
+    ctx.log.error(
+      { err: error, issue: ctx.issueNumber, commentId: ctx.commentId },
+      "Failed to check command idempotency reactions — continuing",
+    );
     // If we can't check reactions, proceed with execution to avoid
     // silently dropping commands due to transient API failures.
     return false;

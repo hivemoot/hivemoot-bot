@@ -171,4 +171,5 @@ export interface IssueComment {
   body?: string;
   created_at?: string;
   performed_via_github_app?: { id: number } | null;
+  reactions?: { "+1"?: number; "-1"?: number };
 }

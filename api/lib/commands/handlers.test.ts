@@ -331,7 +331,7 @@ describe("executeCommand", () => {
   });
 
   describe("/gather command", () => {
-    it("should create canonical alignment comment when none exists", async () => {
+    it("should create canonical blueprint comment when none exists", async () => {
       mockIssueOps.getIssueContext.mockResolvedValue({
         title: "Improve onboarding docs",
         body: "Proposal body",
@@ -344,7 +344,7 @@ describe("executeCommand", () => {
       const ctx = createCtx({ verb: "gather" });
       const result = await executeCommand(ctx);
 
-      expect(result).toEqual({ status: "executed", message: "Created the alignment ledger comment." });
+      expect(result).toEqual({ status: "executed", message: "Created the blueprint comment." });
       expect(mockIssueOps.findAlignmentCommentId).toHaveBeenCalledWith({
         owner: "test-org",
         repo: "test-repo",
@@ -353,11 +353,11 @@ describe("executeCommand", () => {
       expect(mockIssueOps.comment).toHaveBeenCalledTimes(1);
       const body = mockIssueOps.comment.mock.calls[0][1];
       expect(body).toContain('"type":"alignment"');
-      expect(body).toContain("Colony Alignment Ledger");
-      expect(body).toContain("Triggered by @maintainer via `/gather`.");
+      expect(body).toContain("Blueprint");
+      expect(body).toContain("@maintainer via `/gather`");
     });
 
-    it("should update existing canonical alignment comment", async () => {
+    it("should update existing canonical blueprint comment", async () => {
       mockIssueOps.findAlignmentCommentId.mockResolvedValue(555);
       mockIssueOps.getIssueContext.mockResolvedValue({
         title: "Improve onboarding docs",
@@ -369,7 +369,7 @@ describe("executeCommand", () => {
       const ctx = createCtx({ verb: "gather" });
       const result = await executeCommand(ctx);
 
-      expect(result).toEqual({ status: "executed", message: "Updated the alignment ledger comment." });
+      expect(result).toEqual({ status: "executed", message: "Updated the blueprint comment." });
       expect(ctx.octokit.rest.issues.updateComment).toHaveBeenCalledWith({
         owner: "test-org",
         repo: "test-repo",
@@ -394,7 +394,7 @@ describe("executeCommand", () => {
       expect(result.status).toBe("rejected");
     });
 
-    it("should preserve existing alignment when refresh context fetch fails", async () => {
+    it("should preserve existing blueprint when refresh context fetch fails", async () => {
       mockIssueOps.findAlignmentCommentId.mockResolvedValue(555);
       mockIssueOps.getIssueContext.mockRejectedValue(new Error("upstream timeout"));
 
@@ -403,12 +403,12 @@ describe("executeCommand", () => {
 
       expect(result).toEqual({
         status: "executed",
-        message: "Alignment refresh failed; previous comment preserved.",
+        message: "Blueprint refresh failed; previous comment preserved.",
       });
       expect(ctx.octokit.rest.issues.updateComment).not.toHaveBeenCalled();
       expect(ctx.octokit.rest.issues.createComment).toHaveBeenCalledWith(
         expect.objectContaining({
-          body: expect.stringContaining("Keeping the previous alignment comment unchanged."),
+          body: expect.stringContaining("Keeping the previous blueprint comment unchanged."),
         }),
       );
     });

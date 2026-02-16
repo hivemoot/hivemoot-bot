@@ -1,0 +1,296 @@
+/**
+ * Blueprint Generator Service
+ *
+ * Uses LLM to generate implementation blueprints from issue discussions.
+ * Separate from DiscussionSummarizer — different schema, different purpose.
+ *
+ * The blueprint is designed for an implementing agent who has NOT read the
+ * discussion thread. It extracts concrete steps, decisions, and scope
+ * boundaries from the conversation.
+ */
+
+import { generateObject } from "ai";
+
+import type { LanguageModelV1 } from "ai";
+
+import type { Logger } from "../logger.js";
+import { logger as defaultLogger } from "../logger.js";
+import { repairMalformedJsonText } from "./json-repair.js";
+import { createModelFromEnv } from "./provider.js";
+import { withLLMRetry } from "./retry.js";
+import type { ImplementationPlan, IssueContext, LLMConfig } from "./types.js";
+import { ImplementationPlanSchema, LLM_DEFAULTS } from "./types.js";
+
+// ───────────────────────────────────────────────────────────────────────────────
+// Types
+// ───────────────────────────────────────────────────────────────────────────────
+
+export type BlueprintResult =
+  | { success: true; plan: ImplementationPlan }
+  | { success: false; reason: string };
+
+// ───────────────────────────────────────────────────────────────────────────────
+// System Prompt
+// ───────────────────────────────────────────────────────────────────────────────
+
+export const BLUEPRINT_SYSTEM_PROMPT = `You are an implementation architect. Extract a concrete implementation blueprint from this GitHub issue discussion.
+
+KEY CONTEXT:
+- Your output is for an engineer who has NOT read the discussion thread
+- Focus on WHAT to build and HOW, not on summarizing the conversation
+- Promote heavily-endorsed comments (marked with 👍 counts) to concrete plan steps
+- The issue author's comments carry the original intent — weight them accordingly
+
+OUTPUT GUIDELINES:
+- goal: 1-2 sentences describing what will be built. Be specific and actionable.
+- plan: Free-form markdown. Use numbered steps, tables, code blocks, and inline code. Write a step-by-step implementation plan that an engineer can follow.
+- decisions: Concrete design choices extracted from the discussion (e.g., "Use PostgreSQL, not SQLite" or "API versioning via URL path prefix").
+- outOfScope: Items explicitly excluded — these were discussed and ruled out. An implementer must NOT build these.
+- openQuestions: Unresolved questions AND active disagreements. These need resolution before or during implementation.
+
+IMPORTANT:
+- Only include information that appears in the discussion
+- Do not hallucinate requirements, decisions, or scope exclusions
+- If discussion is minimal, keep the output minimal
+- Counts (comments, participants) must be accurate`;
+
+// ───────────────────────────────────────────────────────────────────────────────
+// User Prompt Builder
+// ───────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Maximum characters to include from discussion content.
+ * ~25k tokens ≈ ~100k characters, leaves room for response.
+ */
+const MAX_CONTENT_CHARS = 100_000;
+
+/**
+ * Build the user prompt with enriched comment formatting.
+ *
+ * Enrichments over the voting prompt:
+ * - Author's comments marked: **@alice (author)**
+ * - Reaction signal shown: **@scout [👍 3]** (only when thumbsUp > 0)
+ */
+function buildBlueprintUserPrompt(context: IssueContext): string {
+  const { title, body, comments } = context;
+
+  let discussionText = `## Issue: ${title}\n\n`;
+  discussionText += `### Original Description\n${body || "(No description provided)"}\n\n`;
+
+  if (comments.length === 0) {
+    discussionText += "### Discussion\n(No comments yet)\n";
+  } else {
+    discussionText += "### Discussion\n\n";
+    for (const comment of comments) {
+      // Author marking
+      const isAuthor = comment.author === context.author;
+      let authorLabel = `**@${comment.author}`;
+      if (isAuthor) {
+        authorLabel += " (author)";
+      }
+      // Reaction signal
+      if (comment.reactions?.thumbsUp && comment.reactions.thumbsUp > 0) {
+        authorLabel += ` [👍 ${comment.reactions.thumbsUp}]`;
+      }
+      authorLabel += "**";
+
+      discussionText += `${authorLabel} (${comment.createdAt}):\n${comment.body}\n\n---\n\n`;
+    }
+  }
+
+  // Truncate if too long, keeping issue body and recent comments
+  if (discussionText.length > MAX_CONTENT_CHARS) {
+    discussionText = truncateDiscussion(title, body, context.author, comments, MAX_CONTENT_CHARS);
+  }
+
+  const uniqueParticipants = new Set(comments.map((c) => c.author));
+
+  return `Extract an implementation blueprint from this GitHub issue discussion.
+
+METADATA:
+- Total comments: ${comments.length}
+- Unique participants: ${uniqueParticipants.size}
+
+${discussionText}
+
+Generate a structured implementation blueprint. Focus on concrete steps, design decisions, and scope boundaries.`;
+}
+
+/**
+ * Truncate discussion content, preserving issue body and prioritizing recent comments.
+ */
+function truncateDiscussion(
+  title: string,
+  body: string,
+  author: string,
+  comments: ReadonlyArray<{ author: string; body: string; createdAt: string; reactions?: { thumbsUp: number; thumbsDown: number } }>,
+  maxChars: number
+): string {
+  let result = `## Issue: ${title}\n\n`;
+  result += `### Original Description\n${body || "(No description provided)"}\n\n`;
+
+  const headerLen = result.length + 200;
+  const availableForComments = maxChars - headerLen;
+
+  if (availableForComments <= 0) {
+    return result + "### Discussion\n(Truncated - too many comments to include)\n";
+  }
+
+  const includedComments: string[] = [];
+  let usedChars = 0;
+  let skippedCount = 0;
+
+  for (let i = comments.length - 1; i >= 0; i--) {
+    const comment = comments[i];
+    const isAuthor = comment.author === author;
+    let authorLabel = `**@${comment.author}`;
+    if (isAuthor) authorLabel += " (author)";
+    if (comment.reactions?.thumbsUp && comment.reactions.thumbsUp > 0) {
+      authorLabel += ` [👍 ${comment.reactions.thumbsUp}]`;
+    }
+    authorLabel += "**";
+
+    const commentText = `${authorLabel} (${comment.createdAt}):\n${comment.body}\n\n---\n\n`;
+
+    if (usedChars + commentText.length <= availableForComments) {
+      includedComments.unshift(commentText);
+      usedChars += commentText.length;
+    } else {
+      skippedCount = i + 1;
+      break;
+    }
+  }
+
+  result += "### Discussion\n\n";
+
+  if (skippedCount > 0) {
+    result += `*[${skippedCount} older comments truncated for length]*\n\n`;
+  }
+
+  result += includedComments.join("");
+
+  return result;
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
+// Blueprint Generator
+// ───────────────────────────────────────────────────────────────────────────────
+
+export interface BlueprintGeneratorConfig {
+  logger?: Logger;
+}
+
+/**
+ * Implementation blueprint generator using LLM.
+ */
+export class BlueprintGenerator {
+  private logger: Logger;
+
+  constructor(config?: BlueprintGeneratorConfig) {
+    this.logger = config?.logger ?? defaultLogger;
+  }
+
+  /**
+   * Generate an implementation blueprint from an issue discussion.
+   *
+   * Returns failure if:
+   * - LLM is not configured (and no preCreatedModel provided)
+   * - Discussion is too minimal (no comments from others)
+   * - LLM API fails
+   * - Metadata validation fails (possible hallucination)
+   */
+  async generate(
+    context: IssueContext,
+    preCreatedModel?: { model: LanguageModelV1; config: LLMConfig }
+  ): Promise<BlueprintResult> {
+    // Minimal discussions: no LLM needed
+    const hasDiscussion = context.comments.some((c) => c.author !== context.author);
+    if (!hasDiscussion) {
+      this.logger.debug("No discussion from others, using minimal blueprint");
+      return {
+        success: true,
+        plan: this.createMinimalPlan(context),
+      };
+    }
+
+    try {
+      const modelResult = preCreatedModel ?? createModelFromEnv();
+      if (!modelResult) {
+        this.logger.debug("LLM not configured, skipping blueprint generation");
+        return { success: false, reason: "LLM not configured" };
+      }
+
+      const { model, config } = modelResult;
+      const userPrompt = buildBlueprintUserPrompt(context);
+
+      this.logger.info(
+        `Generating blueprint with ${config.provider}/${config.model} for ${context.comments.length} comments`
+      );
+
+      const result = await withLLMRetry(
+        () =>
+          generateObject({
+            model,
+            schema: ImplementationPlanSchema,
+            system: BLUEPRINT_SYSTEM_PROMPT,
+            prompt: userPrompt,
+            experimental_repairText: async (args) => {
+              const repaired = await repairMalformedJsonText(args);
+              if (repaired !== null) {
+                this.logger.info(`Repaired malformed LLM JSON output (error: ${args.error.message})`);
+              }
+              return repaired;
+            },
+            maxTokens: config.maxTokens,
+            temperature: LLM_DEFAULTS.temperature,
+            maxRetries: 0, // Disable SDK retry; our wrapper handles rate-limits
+          }),
+        undefined,
+        this.logger
+      );
+
+      const plan = result.object;
+
+      // Fail-closed metadata validation: reject if LLM hallucinates counts
+      const expectedComments = context.comments.length;
+      const expectedParticipants = new Set(context.comments.map((c) => c.author)).size;
+
+      if (
+        plan.metadata.commentCount !== expectedComments ||
+        plan.metadata.participantCount !== expectedParticipants
+      ) {
+        const reason =
+          `LLM metadata mismatch indicates possible hallucination. ` +
+          `Expected: ${expectedComments} comments, ${expectedParticipants} participants. ` +
+          `Got: ${plan.metadata.commentCount} comments, ${plan.metadata.participantCount} participants.`;
+
+        this.logger.error(reason);
+        return { success: false, reason };
+      }
+
+      this.logger.info("Blueprint generated successfully");
+      return { success: true, plan };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Blueprint generation failed: ${message}`);
+      return { success: false, reason: message };
+    }
+  }
+
+  /**
+   * Create a minimal blueprint for issues with no discussion from others.
+   */
+  private createMinimalPlan(context: IssueContext): ImplementationPlan {
+    return {
+      goal: context.title,
+      plan: "",
+      decisions: [],
+      outOfScope: [],
+      openQuestions: [],
+      metadata: {
+        commentCount: 0,
+        participantCount: 0,
+      },
+    };
+  }
+}

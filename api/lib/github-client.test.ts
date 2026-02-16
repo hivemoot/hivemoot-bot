@@ -1635,6 +1635,59 @@ describe("IssueOperations", () => {
 
       expect(comments).toHaveLength(2);
     });
+
+    it("should include reactions when present in API response", async () => {
+      mockClient.paginate.iterator = vi.fn().mockReturnValue({
+        async *[Symbol.asyncIterator]() {
+          yield {
+            data: [
+              {
+                id: 1,
+                body: "Great idea!",
+                user: { login: "alice", type: "User" },
+                created_at: "2024-01-15T10:00:00Z",
+                reactions: { "+1": 3, "-1": 1 },
+              },
+            ],
+          };
+        },
+      });
+
+      const comments = await issueOps.getDiscussionComments(testRef);
+
+      expect(comments).toHaveLength(1);
+      expect(comments[0].reactions).toEqual({ thumbsUp: 3, thumbsDown: 1 });
+    });
+
+    it("should omit reactions when counts are zero", async () => {
+      mockClient.paginate.iterator = vi.fn().mockReturnValue({
+        async *[Symbol.asyncIterator]() {
+          yield {
+            data: [
+              {
+                id: 1,
+                body: "Normal comment",
+                user: { login: "alice", type: "User" },
+                created_at: "2024-01-15T10:00:00Z",
+                reactions: { "+1": 0, "-1": 0 },
+              },
+              {
+                id: 2,
+                body: "No reactions field",
+                user: { login: "bob", type: "User" },
+                created_at: "2024-01-15T11:00:00Z",
+              },
+            ],
+          };
+        },
+      });
+
+      const comments = await issueOps.getDiscussionComments(testRef);
+
+      expect(comments).toHaveLength(2);
+      expect(comments[0].reactions).toBeUndefined();
+      expect(comments[1].reactions).toBeUndefined();
+    });
   });
 
   describe("getIssueContext", () => {

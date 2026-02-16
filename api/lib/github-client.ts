@@ -11,6 +11,7 @@
 import {
   parseMetadata,
   isVotingComment,
+  isAlignmentComment,
   isHumanHelpComment,
   isNotificationComment,
   selectCurrentVotingComment,
@@ -397,6 +398,33 @@ export class IssueOperations {
     }
 
     return count;
+  }
+
+  /**
+   * Find the canonical alignment comment on an issue.
+   *
+   * Returns the first alignment comment authored by this app, or null when absent.
+   */
+  async findAlignmentCommentId(ref: IssueRef): Promise<number | null> {
+    const iterator = this.client.paginate.iterator<IssueComment>(
+      this.client.rest.issues.listComments,
+      {
+        owner: ref.owner,
+        repo: ref.repo,
+        issue_number: ref.issueNumber,
+        per_page: 100,
+      }
+    );
+
+    for await (const { data: comments } of iterator) {
+      for (const comment of comments) {
+        if (isAlignmentComment(comment.body, this.appId, comment.performed_via_github_app?.id)) {
+          return comment.id;
+        }
+      }
+    }
+
+    return null;
   }
 
   /**

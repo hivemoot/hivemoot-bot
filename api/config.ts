@@ -1,5 +1,5 @@
 /**
- * Queen Bot Configuration
+ * Hivemoot Bot Configuration
  *
  * Shared configuration for governance automation across webhook handlers
  * and scheduled scripts.

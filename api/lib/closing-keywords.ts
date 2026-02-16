@@ -32,6 +32,74 @@ function stripMarkdownCode(body: string): string {
     .replace(/`[^`]*`/g, " ");
 }
 
+/**
+ * Extract same-repo issue numbers referenced by closing keywords.
+ *
+ * Returns deduplicated issue numbers in the order they appear.
+ * Only includes same-repo references (bare #N, qualified owner/repo#N,
+ * or full GitHub URL pointing to the same owner/repo).
+ */
+export function extractSameRepoClosingIssueNumbers(body: string | null | undefined, repository: RepositoryRef): number[] {
+  if (!body) {
+    return [];
+  }
+
+  const searchableBody = stripMarkdownCode(body);
+  const normalizedOwner = repository.owner.toLowerCase();
+  const normalizedRepo = repository.repo.toLowerCase();
+  const seen = new Set<number>();
+  const result: number[] = [];
+
+  for (const match of searchableBody.matchAll(CLOSING_KEYWORD_PATTERN)) {
+    const rawTarget = match[1];
+    if (!rawTarget) continue;
+
+    const target = stripTrailingPunctuation(rawTarget);
+
+    if (ISSUE_NUMBER_PATTERN.test(target)) {
+      const num = parseInt(target.slice(1), 10);
+      if (!seen.has(num)) {
+        seen.add(num);
+        result.push(num);
+      }
+      continue;
+    }
+
+    const qualifiedMatch = target.match(QUALIFIED_REFERENCE_PATTERN);
+    if (qualifiedMatch) {
+      const [, owner, repo] = qualifiedMatch;
+      if (
+        owner.toLowerCase() === normalizedOwner &&
+        repo.toLowerCase() === normalizedRepo
+      ) {
+        const num = parseInt(target.split("#")[1], 10);
+        if (!seen.has(num)) {
+          seen.add(num);
+          result.push(num);
+        }
+      }
+      continue;
+    }
+
+    const urlMatch = target.match(ISSUE_URL_PATTERN);
+    if (urlMatch) {
+      const [, owner, repo] = urlMatch;
+      if (
+        owner.toLowerCase() === normalizedOwner &&
+        repo.toLowerCase() === normalizedRepo
+      ) {
+        const num = parseInt(target.split("/").pop()!, 10);
+        if (!seen.has(num)) {
+          seen.add(num);
+          result.push(num);
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
 export function hasSameRepoClosingKeywordRef(body: string | null | undefined, repository: RepositoryRef): boolean {
   if (!body) {
     return false;

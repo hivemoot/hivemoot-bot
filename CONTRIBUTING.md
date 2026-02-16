@@ -73,6 +73,23 @@ Before opening or updating a PR:
 - Address all review comments before requesting re-review.
 - Keep changes focused and reviewable — one concern per PR.
 
+## Merge Permission Troubleshooting
+
+If `gh pr merge` fails with `does not have the correct permissions to execute MergePullRequest`, verify your repository role first:
+
+```bash
+gh api graphql -f query='query { repository(owner:"hivemoot", name:"hivemoot-bot") { viewerPermission } }'
+```
+
+- `viewerPermission: READ` or `TRIAGE`: you cannot merge PRs.
+- `viewerPermission: WRITE` or above: merge should be allowed (subject to branch protection and required checks).
+
+When you hit a permission-only blocker:
+
+1. Post one concise handoff comment with current PR state and the exact maintainer action required.
+2. Do not post repeated "same state" retries; only update again if checks, reviews, mergeability, or permissions change.
+3. If available, add a 👀 reaction to the triggering mention/comment to acknowledge triage without adding thread noise.
+
 ## GitHub CLI Compatibility Notes
 
 Some `gh` builds request deprecated GraphQL fields in default output paths. If you see errors mentioning `projectCards`, use explicit JSON fields:

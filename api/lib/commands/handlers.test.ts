@@ -26,6 +26,7 @@ function createMockOctokit(permission = "admin") {
       issues: {
         createComment: vi.fn().mockResolvedValue({}),
         updateComment: vi.fn().mockResolvedValue({}),
+        listComments: vi.fn().mockResolvedValue({ data: [] }),
       },
     },
   };
@@ -511,8 +512,18 @@ describe("executeCommand", () => {
   describe("idempotency guard", () => {
     it("should skip execution when bot already reacted with eyes", async () => {
       const octokit = createMockOctokit();
+      // Mock that this app authored a comment - so we can resolve bot login
+      octokit.rest.issues.listComments.mockResolvedValue({
+        data: [
+          {
+            user: { login: "hivemoot[bot]" },
+            performed_via_github_app: { id: 12345, name: "Hivemoot" },
+          },
+        ],
+      });
+      // Mock eyes reaction from our bot
       octokit.rest.reactions.listForIssueComment.mockResolvedValue({
-        data: [{ user: { login: "hivemoot-bot[bot]" } }],
+        data: [{ user: { login: "hivemoot[bot]" } }],
       });
 
       const ctx = createCtx({ octokit });
@@ -523,15 +534,44 @@ describe("executeCommand", () => {
       expect(octokit.rest.reactions.createForIssueComment).not.toHaveBeenCalled();
     });
 
-    it("should not skip when eyes reaction is from a non-bot user", async () => {
+    it("should not skip when eyes reaction is from a different bot", async () => {
       const octokit = createMockOctokit();
+      // Mock that this app authored a comment
+      octokit.rest.issues.listComments.mockResolvedValue({
+        data: [
+          {
+            user: { login: "hivemoot[bot]" },
+            performed_via_github_app: { id: 12345, name: "Hivemoot" },
+          },
+        ],
+      });
+      // Mock eyes reaction from a different bot
       octokit.rest.reactions.listForIssueComment.mockResolvedValue({
-        data: [{ user: { login: "some-human" } }],
+        data: [{ user: { login: "codecov[bot]" } }],
       });
 
       const ctx = createCtx({ octokit });
       const result = await executeCommand(ctx);
 
+      expect(result.status).toBe("executed");
+    });
+
+    it("should proceed when bot identity cannot be resolved", async () => {
+      const octokit = createMockOctokit();
+      // Mock that we cannot resolve bot login (no comments from this app)
+      octokit.rest.issues.listComments.mockResolvedValue({
+        data: [
+          {
+            user: { login: "other-bot[bot]" },
+            performed_via_github_app: { id: 99999, name: "Other App" },
+          },
+        ],
+      });
+
+      const ctx = createCtx({ octokit });
+      const result = await executeCommand(ctx);
+
+      // Should proceed because we can't confirm bot identity - fail open
       expect(result.status).toBe("executed");
     });
 

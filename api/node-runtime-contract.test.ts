@@ -49,6 +49,16 @@ describe("node runtime contract", () => {
     }
   });
 
+  it("aligns @types/node major with engines.node major", () => {
+    const parsed = JSON.parse(packageJson) as {
+      devDependencies?: Record<string, string>;
+    };
+    const typesNode = parsed.devDependencies?.["@types/node"];
+    expect(typesNode).toBeDefined();
+    const typesMajor = typesNode!.match(/\d+/)?.[0];
+    expect(typesMajor).toBe(engineMajor);
+  });
+
   it("documents the same Node major in contributor docs", () => {
     const contributing = readRoot("CONTRIBUTING.md");
     const readme = readRoot("README.md");

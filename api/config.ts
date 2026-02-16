@@ -170,6 +170,8 @@ Time for hivemoot to decide.${priorityReminder}
 - 😕 **Needs Discussion** — Back to discussion
 - 👀 **Needs Human Input** — Escalate for human review
 
+Pick one reaction only — multiple reactions will void your vote.
+
 Voting closes in ~24 hours.${SIGNATURE}`;
   },
 
@@ -183,6 +185,8 @@ Time for hivemoot to decide.
 - 👎 **Not Ready** — Close this proposal
 - 😕 **Needs Discussion** — Back to discussion
 - 👀 **Needs Human Input** — Escalate for human review
+
+Pick one reaction only — multiple reactions will void your vote.
 
 Voting closes in ~24 hours.${SIGNATURE}`,
 

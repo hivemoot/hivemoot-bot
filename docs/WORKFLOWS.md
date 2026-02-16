@@ -206,6 +206,31 @@ Implementation PRs are monitored for activity to free up slots for active contri
 | Issue phase transitions | Scheduled script | Every 5 min |
 | Stale PR cleanup | Scheduled script | Every hour |
 
+## CI Deploy Health Gate
+
+Production deploys on `main` include a post-deploy health probe against:
+
+- `<vercel-deploy-url>/api/github/webhooks`
+
+The CI workflow captures the deployment URL from `vercel deploy` output, then performs retry/backoff health checks before treating the deploy as successful.
+
+### Decision Matrix
+
+| Health signal | Classification | CI behavior |
+|---|---|---|
+| `status != "ok"` | Critical | Fail workflow (`::error`) |
+| `checks.githubApp.ready != true` | Critical | Fail workflow (`::error`) |
+| `checks.llm.ready != true` | Degraded | Warn only (`::warning`) |
+| Endpoint unreachable after retry budget | Critical | Fail workflow (`::error`) |
+
+### Retry Policy
+
+- Maximum attempts: 5
+- Backoff: linear (`attempt * 5s`)
+- Per-request timeout: 15s
+
+This keeps core bot availability checks fail-closed while allowing optional LLM readiness to degrade without blocking production deployment.
+
 ## Configuration
 
 Environment variables for customization:

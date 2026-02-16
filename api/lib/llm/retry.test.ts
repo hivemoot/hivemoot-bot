@@ -89,6 +89,22 @@ describe("extractRetryDelay", () => {
     expect(delay).toBe(17_000);
   });
 
+  it("parses retry-after header regardless of header key case", () => {
+    const error = makeAPICallError(429, {
+      responseHeaders: { "ReTrY-AfTeR": "9" },
+    });
+    const delay = extractRetryDelay(error);
+    expect(delay).toBe(9_000);
+  });
+
+  it("trims retry-after header values before parsing", () => {
+    const error = makeAPICallError(429, {
+      responseHeaders: { "retry-after": "  3.5  " },
+    });
+    const delay = extractRetryDelay(error);
+    expect(delay).toBe(3_500);
+  });
+
   it("prefers retry-after header over message regex", () => {
     const error = makeAPICallError(429, {
       responseHeaders: { "retry-after": "5" },

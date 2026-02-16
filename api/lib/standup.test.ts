@@ -352,6 +352,20 @@ describe("formatStandupComment", () => {
     expect(result).not.toContain("Add input|output handling");
   });
 
+  it("should escape existing backslashes before pipe characters in PR titles", () => {
+    const data = createEmptyStandupData({
+      discussionPhase: [{ number: 1, title: "X" }],
+      implementationPRs: [
+        { number: 10, title: String.raw`Add input\\|output handling`, author: "agent-1" },
+      ],
+    });
+
+    const result = formatStandupComment(data);
+
+    // Existing backslashes must be escaped before escaping pipes.
+    expect(result).toContain(String.raw`Add input\\\\\|output handling`);
+  });
+
   it("should format merged PRs", () => {
     const data = createEmptyStandupData({
       discussionPhase: [{ number: 1, title: "X" }],

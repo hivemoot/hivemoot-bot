@@ -19,7 +19,7 @@ import { repairMalformedJsonText } from "./json-repair.js";
 import { createModelFromEnv } from "./provider.js";
 import { withLLMRetry } from "./retry.js";
 import type { ImplementationPlan, IssueContext, LLMConfig } from "./types.js";
-import { ImplementationPlanSchema, LLM_DEFAULTS } from "./types.js";
+import { ImplementationPlanSchema, LLM_DEFAULTS, countUniqueParticipants } from "./types.js";
 
 // ───────────────────────────────────────────────────────────────────────────────
 // Types
@@ -117,13 +117,13 @@ export function buildBlueprintUserPrompt(context: IssueContext): string {
     discussionText = truncateDiscussion(title, body, context.author, comments, MAX_CONTENT_CHARS);
   }
 
-  const uniqueParticipants = new Set(comments.map((c) => c.author));
+  const participantCount = countUniqueParticipants(comments);
 
   return `Extract an implementation blueprint from this GitHub issue discussion.
 
 METADATA:
 - Total comments: ${comments.length}
-- Unique participants: ${uniqueParticipants.size}
+- Unique participants: ${participantCount}
 
 ${discussionText}
 
@@ -177,6 +177,28 @@ export function truncateDiscussion(
   result += includedComments.join("");
 
   return result;
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
+// Minimal Plan Factory
+// ───────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Create a minimal blueprint from issue context alone (no LLM).
+ * Used when there's no meaningful discussion and as the fallback shape.
+ */
+export function createMinimalPlan(context: IssueContext): ImplementationPlan {
+  return {
+    goal: context.title,
+    plan: "",
+    decisions: [],
+    outOfScope: [],
+    openQuestions: [],
+    metadata: {
+      commentCount: context.comments.length,
+      participantCount: countUniqueParticipants(context.comments),
+    },
+  };
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -260,7 +282,7 @@ export class BlueprintGenerator {
 
       // Fail-closed metadata validation: reject if LLM hallucinates counts
       const expectedComments = context.comments.length;
-      const expectedParticipants = new Set(context.comments.map((c) => c.author)).size;
+      const expectedParticipants = countUniqueParticipants(context.comments);
 
       if (
         plan.metadata.commentCount !== expectedComments ||
@@ -284,24 +306,7 @@ export class BlueprintGenerator {
     }
   }
 
-  /**
-   * Create a minimal blueprint for issues with no discussion from others.
-   * Derives metadata from context.comments so the footer reflects reality
-   * (the author may have posted follow-up comments).
-   */
   private createMinimalPlan(context: IssueContext): ImplementationPlan {
-    const participants = new Set(context.comments.map((c) => c.author)).size;
-
-    return {
-      goal: context.title,
-      plan: "",
-      decisions: [],
-      outOfScope: [],
-      openQuestions: [],
-      metadata: {
-        commentCount: context.comments.length,
-        participantCount: participants,
-      },
-    };
+    return createMinimalPlan(context);
   }
 }

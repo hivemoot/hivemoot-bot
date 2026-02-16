@@ -9,7 +9,7 @@
 import { LABELS, SIGNATURE, isLabelMatch } from "../../config.js";
 import { SIGNATURES, buildAlignmentComment } from "../bot-comments.js";
 import { createIssueOperations, createGovernanceService, createPROperations, loadRepositoryConfig } from "../index.js";
-import { BlueprintGenerator } from "../llm/blueprint.js";
+import { BlueprintGenerator, createMinimalPlan } from "../llm/blueprint.js";
 import type { ImplementationPlan, IssueContext } from "../llm/types.js";
 import { evaluatePreflightChecks } from "../merge-readiness.js";
 import type { PreflightCheckItem } from "../merge-readiness.js";
@@ -364,22 +364,7 @@ function buildFallbackBlueprintContent(
   context: IssueContext,
   senderLogin: string,
 ): string {
-  const participants = new Set(context.comments.map((c) => c.author)).size;
-
-  return buildBlueprintContent(
-    {
-      goal: context.title,
-      plan: "",
-      decisions: [],
-      outOfScope: [],
-      openQuestions: [],
-      metadata: {
-        commentCount: context.comments.length,
-        participantCount: participants,
-      },
-    },
-    senderLogin,
-  );
+  return buildBlueprintContent(createMinimalPlan(context), senderLogin);
 }
 
 /**

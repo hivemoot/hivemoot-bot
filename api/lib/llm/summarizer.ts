@@ -19,7 +19,7 @@ import {
 import { createModelFromEnv } from "./provider.js";
 import { withLLMRetry } from "./retry.js";
 import type { DiscussionSummary, IssueContext, LLMConfig } from "./types.js";
-import { DiscussionSummarySchema, LLM_DEFAULTS } from "./types.js";
+import { DiscussionSummarySchema, LLM_DEFAULTS, countUniqueParticipants } from "./types.js";
 
 // ───────────────────────────────────────────────────────────────────────────────
 // Summarizer Service
@@ -115,7 +115,7 @@ export class DiscussionSummarizer {
       // Mismatch indicates the LLM may have hallucinated content, not just metadata.
       // We fail closed to prevent potentially fabricated summary from influencing votes.
       const expectedComments = context.comments.length;
-      const expectedParticipants = new Set(context.comments.map((c) => c.author)).size;
+      const expectedParticipants = countUniqueParticipants(context.comments);
 
       if (
         summary.metadata.commentCount !== expectedComments ||

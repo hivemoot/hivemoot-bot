@@ -13,11 +13,15 @@ vi.mock("../index.js", () => ({
 const { mockBlueprintGenerate } = vi.hoisted(() => ({
   mockBlueprintGenerate: vi.fn(),
 }));
-vi.mock("../llm/blueprint.js", () => ({
-  BlueprintGenerator: class {
-    generate = mockBlueprintGenerate;
-  },
-}));
+vi.mock("../llm/blueprint.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../llm/blueprint.js")>();
+  return {
+    ...actual,
+    BlueprintGenerator: class {
+      generate = mockBlueprintGenerate;
+    },
+  };
+});
 
 let mockIssueOps: Record<string, ReturnType<typeof vi.fn>>;
 let mockGovernance: Record<string, ReturnType<typeof vi.fn>>;

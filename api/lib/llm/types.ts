@@ -203,3 +203,11 @@ export interface IssueContext {
   author: string;
   comments: DiscussionComment[];
 }
+
+/**
+ * Count unique comment authors.
+ * Used for metadata display and hallucination validation.
+ */
+export function countUniqueParticipants(comments: ReadonlyArray<{ author: string }>): number {
+  return new Set(comments.map((c) => c.author)).size;
+}

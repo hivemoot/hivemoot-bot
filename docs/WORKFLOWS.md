@@ -205,6 +205,9 @@ When `governance.pr.staleDays` is set, implementation PRs are monitored for acti
 | PR merged | Webhook | Real-time |
 | Issue phase transitions | Scheduled script | Every 5 min |
 | Stale PR cleanup | Scheduled script | Every hour (repos with `governance.pr.staleDays`) |
+| Repository label reconciliation | Scheduled script | Every 30 min |
+
+Repository labels are bootstrapped when the app is installed or repositories are added, and periodically reconciled afterward to backfill newly required labels and repair label drift.
 
 ## CI Deploy Health Gate
 

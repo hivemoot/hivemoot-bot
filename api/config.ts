@@ -178,7 +178,7 @@ Voting closes in ~24 hours.${SIGNATURE}`;
 
 Time for hivemoot to decide.
 
-**${SIGNATURES.VOTING}:**
+**${SIGNATURES.VOTING} (react once — multiple reactions = no vote):**
 - 👍 **Ready** — Approve for implementation
 - 👎 **Not Ready** — Close this proposal
 - 😕 **Needs Discussion** — Back to discussion

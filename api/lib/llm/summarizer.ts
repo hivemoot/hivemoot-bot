@@ -229,7 +229,7 @@ export function formatVotingMessage(
   lines.push("");
 
   // Voting instructions
-  lines.push(`**${votingSignature}:**`);
+  lines.push(`**${votingSignature} (react once — multiple reactions = no vote):**`);
   lines.push("- 👍 **Ready** — Approve for implementation");
   lines.push("- 👎 **Not Ready** — Close this proposal");
   lines.push("- 😕 **Needs Discussion** — Back to discussion");

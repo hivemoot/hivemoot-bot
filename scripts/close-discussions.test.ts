@@ -677,8 +677,8 @@ describe("close-discussions script", () => {
       await notifyPendingPRs(fakeOctokit, appId, owner, repo, issueNumber);
 
       const commentBody = mockComment.mock.calls[0][1] as string;
-      // issueVotingPassed includes "passed voting"
-      expect(commentBody).toContain("passed voting");
+      // issueVotingPassed includes "is approved and ready"
+      expect(commentBody).toContain("is approved and ready for implementation");
       // issueReadyNeedsUpdate includes "opened before approval" — should NOT appear
       expect(commentBody).not.toContain("opened before approval");
     });

@@ -582,7 +582,7 @@ This PR isn't tracked yet. Try again after a slot opens.${SIGNATURE}`,
   issueNotReadyToImplement: (issueNumber: number) =>
     `# 🐝 Not Ready Yet ⚠️
 
-Issue #${issueNumber} hasn't passed voting. This PR won't be tracked until it does.${SIGNATURE}`,
+Issue #${issueNumber} isn't approved for implementation yet. This PR won't be tracked until it reaches the ready-to-implement phase.${SIGNATURE}`,
 
   /**
    * Posted to a PR when the issue is ready but the PR needs a post-approval update.
@@ -628,7 +628,7 @@ ${prNumbers.length} competing implementations: ${prNumbers.map((n) => `#${n}`).j
 Review and approve the best one.${SIGNATURE}`,
 
   /**
-   * Posted to existing PRs when their linked issue passes voting.
+   * Posted to existing PRs when their linked issue is approved for implementation.
    * Notifies the PR author to push an update so the PR can be considered.
    * Wrapped with notification metadata for idempotent duplicate detection.
    */
@@ -636,7 +636,7 @@ Review and approve the best one.${SIGNATURE}`,
     buildNotificationComment(
       `# 🐝 Issue #${issueNumber} Ready to Implement ✅
 
-Good news @${prAuthor} — Issue #${issueNumber} passed voting and is ready for implementation!
+Good news @${prAuthor} — Issue #${issueNumber} is approved and ready for implementation!
 
 Push a new commit or add a comment to activate it for implementation tracking.${SIGNATURE}`,
       issueNumber,

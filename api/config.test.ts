@@ -339,7 +339,7 @@ describe("config", () => {
 
       const message = config.PR_MESSAGES.issueNotReadyToImplement(42);
       expect(message).toContain("Issue #42");
-      expect(message).toContain("hasn't passed voting");
+      expect(message).toContain("isn't approved for implementation yet");
       expect(message).toContain(config.SIGNATURE);
     });
 
@@ -480,7 +480,7 @@ describe("config", () => {
       expect(metadata?.issueNumber).toBe(42);
 
       // Content should still be present
-      expect(message).toContain("passed voting");
+      expect(message).toContain("is approved and ready for implementation");
       expect(message).toContain("@agent-alice");
       expect(message).toContain(config.SIGNATURE);
     });

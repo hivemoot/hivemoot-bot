@@ -622,7 +622,7 @@ Issue #${issueNumber} hasn't passed voting. This PR won't be tracked until it do
 
 Issue #${issueNumber} passed voting, but this PR was opened before approval and was not automatically activated for implementation tracking.
 
-Pre-ready PRs require a fresh post-vote signal so implementation tracking reflects the approved proposal.
+To prevent gaming the proposal system, PRs require activity after the issue is approved — this ensures implementations respond to the actual approved proposal.
 Depending on this repo's intake rules, activate by adding a new commit/comment or by meeting trusted-reviewer approval requirements.${SIGNATURE}`,
 
   /**

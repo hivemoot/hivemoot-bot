@@ -1183,6 +1183,7 @@ describe("Queen Bot", () => {
       expect(MESSAGES.VOTING_START).toContain("React to THIS comment to vote");
       expect(MESSAGES.VOTING_START).toContain("👍");
       expect(MESSAGES.VOTING_START).toContain("👎");
+      expect(MESSAGES.VOTING_START).toContain("Multiple reactions from the same user will void your vote");
     });
 
     it("should format vote results correctly", () => {

@@ -25,6 +25,7 @@ function createMockOctokit(permission = "admin") {
       },
       issues: {
         createComment: vi.fn().mockResolvedValue({}),
+        updateComment: vi.fn().mockResolvedValue({}),
       },
     },
   };
@@ -65,6 +66,7 @@ describe("executeCommand", () => {
       findVotingCommentId: vi.fn().mockResolvedValue(null),
       countVotingComments: vi.fn().mockResolvedValue(0),
       getIssueContext: vi.fn(),
+      findAlignmentCommentId: vi.fn().mockResolvedValue(null),
     };
     mockGovernance = {
       transitionToVoting: vi.fn().mockResolvedValue(undefined),
@@ -325,6 +327,90 @@ describe("executeCommand", () => {
       const result = await executeCommand(ctx);
 
       expect(result.status).toBe("rejected");
+    });
+  });
+
+  describe("/gather command", () => {
+    it("should create canonical alignment comment when none exists", async () => {
+      mockIssueOps.getIssueContext.mockResolvedValue({
+        title: "Improve onboarding docs",
+        body: "Proposal body",
+        author: "queen",
+        comments: [
+          { author: "alice", body: "Looks good", createdAt: "2026-02-16T00:00:00.000Z" },
+        ],
+      });
+
+      const ctx = createCtx({ verb: "gather" });
+      const result = await executeCommand(ctx);
+
+      expect(result).toEqual({ status: "executed", message: "Created the alignment ledger comment." });
+      expect(mockIssueOps.findAlignmentCommentId).toHaveBeenCalledWith({
+        owner: "test-org",
+        repo: "test-repo",
+        issueNumber: 42,
+      });
+      expect(mockIssueOps.comment).toHaveBeenCalledTimes(1);
+      const body = mockIssueOps.comment.mock.calls[0][1];
+      expect(body).toContain('"type":"alignment"');
+      expect(body).toContain("Colony Alignment Ledger");
+      expect(body).toContain("Triggered by @maintainer via `/gather`.");
+    });
+
+    it("should update existing canonical alignment comment", async () => {
+      mockIssueOps.findAlignmentCommentId.mockResolvedValue(555);
+      mockIssueOps.getIssueContext.mockResolvedValue({
+        title: "Improve onboarding docs",
+        body: "Proposal body",
+        author: "queen",
+        comments: [],
+      });
+
+      const ctx = createCtx({ verb: "gather" });
+      const result = await executeCommand(ctx);
+
+      expect(result).toEqual({ status: "executed", message: "Updated the alignment ledger comment." });
+      expect(ctx.octokit.rest.issues.updateComment).toHaveBeenCalledWith({
+        owner: "test-org",
+        repo: "test-repo",
+        comment_id: 555,
+        body: expect.stringContaining('"type":"alignment"'),
+      });
+      expect(mockIssueOps.comment).not.toHaveBeenCalled();
+    });
+
+    it("should reject /gather on pull requests", async () => {
+      const ctx = createCtx({ verb: "gather", isPullRequest: true });
+      const result = await executeCommand(ctx);
+      expect(result.status).toBe("rejected");
+    });
+
+    it("should reject /gather when issue is not in discussion phase", async () => {
+      const ctx = createCtx({
+        verb: "gather",
+        issueLabels: [{ name: LABELS.VOTING }],
+      });
+      const result = await executeCommand(ctx);
+      expect(result.status).toBe("rejected");
+    });
+
+    it("should preserve existing alignment when refresh context fetch fails", async () => {
+      mockIssueOps.findAlignmentCommentId.mockResolvedValue(555);
+      mockIssueOps.getIssueContext.mockRejectedValue(new Error("upstream timeout"));
+
+      const ctx = createCtx({ verb: "gather" });
+      const result = await executeCommand(ctx);
+
+      expect(result).toEqual({
+        status: "executed",
+        message: "Alignment refresh failed; previous comment preserved.",
+      });
+      expect(ctx.octokit.rest.issues.updateComment).not.toHaveBeenCalled();
+      expect(ctx.octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.stringContaining("Keeping the previous alignment comment unchanged."),
+        }),
+      );
     });
   });
 

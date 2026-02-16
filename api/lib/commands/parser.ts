@@ -35,7 +35,7 @@ const MENTION_NAMES = ["hivemoot"] as const;
  * for dispatch). When the slash is absent, only these verbs are recognized
  * to avoid false-positive matches on regular @mention prose.
  */
-const KNOWN_VERBS = new Set(["vote", "implement", "preflight", "squash"]);
+const KNOWN_VERBS = new Set(["vote", "implement", "preflight", "squash", "gather"]);
 
 /**
  * Line-anchored regex to match @mention + optional-slash + verb.

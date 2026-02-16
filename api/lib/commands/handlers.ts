@@ -7,7 +7,10 @@
  */
 
 import { LABELS, SIGNATURE, isLabelMatch } from "../../config.js";
+import { SIGNATURES, buildAlignmentComment } from "../bot-comments.js";
 import { createIssueOperations, createGovernanceService, createPROperations, loadRepositoryConfig } from "../index.js";
+import { DiscussionSummarizer } from "../llm/summarizer.js";
+import type { DiscussionSummary, IssueContext } from "../llm/types.js";
 import { evaluatePreflightChecks } from "../merge-readiness.js";
 import type { PreflightCheckItem } from "../merge-readiness.js";
 import { CommitMessageGenerator, formatCommitMessage } from "../llm/commit-message.js";
@@ -47,6 +50,12 @@ export interface CommandOctokit {
         owner: string;
         repo: string;
         issue_number: number;
+        body: string;
+      }) => Promise<unknown>;
+      updateComment: (params: {
+        owner: string;
+        repo: string;
+        comment_id: number;
         body: string;
       }) => Promise<unknown>;
     };
@@ -278,6 +287,120 @@ async function handleImplement(ctx: CommandContext): Promise<CommandResult> {
   });
 
   return { status: "executed", message: "Fast-tracked to ready-to-implement." };
+}
+
+function formatAlignmentSection(title: string, items: string[]): string[] {
+  const lines = [title];
+  if (items.length === 0) {
+    lines.push("- None yet.");
+  } else {
+    for (const item of items) {
+      lines.push(`- ${item}`);
+    }
+  }
+  lines.push("");
+  return lines;
+}
+
+function buildAlignmentContent(
+  summary: DiscussionSummary,
+  senderLogin: string,
+): string {
+  const lines: string[] = [];
+  const proposal = summary.proposal?.trim() || "Discussion is gathering signal. Run `/gather` again after more input.";
+  const timestamp = new Date().toISOString();
+
+  lines.push(SIGNATURES.ALIGNMENT);
+  lines.push("");
+  lines.push("## Current Consensus");
+  lines.push(`> ${proposal}`);
+  lines.push("");
+  lines.push(...formatAlignmentSection("### ✅ Where the Colony Aligns", summary.alignedOn));
+  lines.push(...formatAlignmentSection("### 🔶 Open for PR", summary.openForPR));
+  lines.push(...formatAlignmentSection("### ❌ Not Included", summary.notIncluded));
+  lines.push("---");
+  lines.push(
+    `_Updated: ${timestamp} · Comments analyzed: ${summary.metadata.commentCount} · Participants: ${summary.metadata.participantCount} · Triggered by @${senderLogin} via \`/gather\`._`,
+  );
+
+  return lines.join("\n");
+}
+
+function buildFallbackAlignmentContent(
+  context: IssueContext,
+  senderLogin: string,
+): string {
+  const participants = new Set(context.comments.map((c) => c.author)).size;
+
+  return buildAlignmentContent(
+    {
+      proposal: context.title,
+      alignedOn: [],
+      openForPR: [],
+      notIncluded: [],
+      metadata: {
+        commentCount: context.comments.length,
+        participantCount: participants,
+      },
+    },
+    senderLogin,
+  );
+}
+
+/**
+ * Handle /gather command: upsert the canonical alignment comment during discussion.
+ */
+async function handleGather(ctx: CommandContext): Promise<CommandResult> {
+  if (ctx.isPullRequest) {
+    return { status: "rejected", reason: "The `/gather` command can only be used on issues, not pull requests." };
+  }
+
+  if (!hasLabel(ctx, LABELS.DISCUSSION)) {
+    return {
+      status: "rejected",
+      reason: "This issue is not in the discussion phase. The `/gather` command requires `hivemoot:discussion`.",
+    };
+  }
+
+  const ref: IssueRef = { owner: ctx.owner, repo: ctx.repo, issueNumber: ctx.issueNumber };
+  const issues = createIssueOperations(ctx.octokit, { appId: ctx.appId });
+  const existingAlignmentCommentId = await issues.findAlignmentCommentId(ref);
+
+  let alignmentContent: string;
+  try {
+    const context = await issues.getIssueContext(ref);
+    const summarizer = new DiscussionSummarizer();
+    const summaryResult = await summarizer.summarize(context);
+
+    alignmentContent = summaryResult.success
+      ? buildAlignmentContent(summaryResult.summary, ctx.senderLogin)
+      : buildFallbackAlignmentContent(context, ctx.senderLogin);
+  } catch (error) {
+    if (existingAlignmentCommentId) {
+      const reason = error instanceof Error ? error.message : String(error);
+      await reply(
+        ctx,
+        `I couldn't refresh the alignment ledger just now (${reason}). Keeping the previous alignment comment unchanged.\n\nPlease retry \`/gather\` shortly.`,
+      );
+      return { status: "executed", message: "Alignment refresh failed; previous comment preserved." };
+    }
+    throw error;
+  }
+
+  const body = buildAlignmentComment(alignmentContent, ctx.issueNumber);
+
+  if (existingAlignmentCommentId) {
+    await ctx.octokit.rest.issues.updateComment({
+      owner: ctx.owner,
+      repo: ctx.repo,
+      comment_id: existingAlignmentCommentId,
+      body,
+    });
+    return { status: "executed", message: "Updated the alignment ledger comment." };
+  }
+
+  await issues.comment(ref, body);
+  return { status: "executed", message: "Created the alignment ledger comment." };
 }
 
 /**
@@ -589,6 +712,7 @@ async function gatherPRContext(
 const COMMAND_HANDLERS: Record<string, (ctx: CommandContext) => Promise<CommandResult>> = {
   vote: handleVote,
   implement: handleImplement,
+  gather: handleGather,
   preflight: handlePreflight,
   squash: handleSquash,
 };

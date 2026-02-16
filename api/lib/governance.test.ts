@@ -232,6 +232,28 @@ describe("GovernanceService", () => {
         );
       });
 
+      it("should continue without alignment link when lookup fails", async () => {
+        const mockSummarize = vi.fn().mockResolvedValue({
+          success: true,
+          summary: mockSummary,
+        });
+        vi.mocked(DiscussionSummarizer).mockImplementation(function () {
+          return { summarize: mockSummarize };
+        } as any);
+        vi.mocked(mockIssues.findAlignmentCommentId).mockRejectedValue(new Error("lookup failed"));
+
+        await governance.transitionToVoting(testRef);
+
+        expect(formatVotingMessage).toHaveBeenCalledWith(
+          mockSummary,
+          mockContext.title,
+          SIGNATURE,
+          SIGNATURES.VOTING,
+          undefined,
+          undefined
+        );
+      });
+
       it("should fall back to generic message when LLM throws an error", async () => {
         const mockSummarize = vi.fn().mockRejectedValue(new Error("Network error"));
         vi.mocked(DiscussionSummarizer).mockImplementation(function () {

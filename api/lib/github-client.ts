@@ -48,6 +48,7 @@ export interface Reaction {
 export interface IssueCommentWithAuthor extends IssueComment {
   user?: { login: string; type?: string } | null;
   created_at?: string;
+  reactions?: { "+1"?: number; "-1"?: number };
 }
 
 /**
@@ -683,10 +684,17 @@ export class IssueOperations {
           continue;
         }
 
+        // GitHub REST API includes reactions in listComments responses by default
+        // (no special Accept header needed since the squirrel-girl preview graduated).
+        const thumbsUp = toReactionCount(comment.reactions?.["+1"]);
+        const thumbsDown = toReactionCount(comment.reactions?.["-1"]);
+        const hasReactions = thumbsUp > 0 || thumbsDown > 0;
+
         comments.push({
           author: comment.user.login,
           body: comment.body,
           createdAt: comment.created_at ?? new Date().toISOString(),
+          ...(hasReactions && { reactions: { thumbsUp, thumbsDown } }),
         });
       }
     }

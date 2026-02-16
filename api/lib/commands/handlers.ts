@@ -9,8 +9,8 @@
 import { LABELS, SIGNATURE, isLabelMatch } from "../../config.js";
 import { SIGNATURES, buildAlignmentComment } from "../bot-comments.js";
 import { createIssueOperations, createGovernanceService, createPROperations, loadRepositoryConfig } from "../index.js";
-import { DiscussionSummarizer } from "../llm/summarizer.js";
-import type { DiscussionSummary, IssueContext } from "../llm/types.js";
+import { BlueprintGenerator, createMinimalPlan } from "../llm/blueprint.js";
+import type { ImplementationPlan, IssueContext } from "../llm/types.js";
 import { evaluatePreflightChecks } from "../merge-readiness.js";
 import type { PreflightCheckItem } from "../merge-readiness.js";
 import { CommitMessageGenerator, formatCommitMessage } from "../llm/commit-message.js";
@@ -82,6 +82,7 @@ export interface CommandContext {
   appId: number;
   log: {
     info: (...args: unknown[]) => void;
+    warn: (...args: unknown[]) => void;
     error: (...args: unknown[]) => void;
   };
 }
@@ -289,7 +290,24 @@ async function handleImplement(ctx: CommandContext): Promise<CommandResult> {
   return { status: "executed", message: "Fast-tracked to ready-to-implement." };
 }
 
-function pushAlignmentSection(lines: string[], title: string, items: string[]): void {
+/**
+ * Format a human-readable timestamp for blueprint footers.
+ * e.g., "Feb 16, 2026, 14:26 UTC"
+ */
+function formatBlueprintTimestamp(): string {
+  return new Date().toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: "UTC",
+    timeZoneName: "short",
+  });
+}
+
+function pushBlueprintSection(lines: string[], title: string, items: string[]): void {
   if (items.length === 0) {
     return;
   }
@@ -300,60 +318,57 @@ function pushAlignmentSection(lines: string[], title: string, items: string[]): 
   lines.push("");
 }
 
-function buildAlignmentContent(
-  summary: DiscussionSummary,
+function buildBlueprintContent(
+  plan: ImplementationPlan,
   senderLogin: string,
 ): string {
   const lines: string[] = [];
-  const proposal = summary.proposal?.trim() || "Discussion is gathering signal. Run `/gather` again after more input.";
-  const timestamp = new Date().toISOString();
-  const isEarlyDiscussion = summary.metadata.commentCount < 5;
+  const goal = plan.goal?.trim() || "Discussion is gathering signal. Run `/gather` again after more input.";
 
   lines.push(SIGNATURES.ALIGNMENT);
   lines.push("");
-  lines.push("## What We're Building");
-  lines.push(`> ${proposal}`);
+  lines.push(`> ${goal}`);
   lines.push("");
 
-  if (isEarlyDiscussion && summary.alignedOn.length === 0 && summary.openForPR.length === 0) {
-    lines.push("Discussion is still forming. Re-run `/gather` after more feedback to expand this ledger.");
+  // Plan (free-form markdown — only if non-empty)
+  if (plan.plan.trim()) {
+    lines.push("## Plan");
+    lines.push(plan.plan.trim());
     lines.push("");
   }
 
-  pushAlignmentSection(lines, "### ✅ Where the Colony Aligns", summary.alignedOn);
-  pushAlignmentSection(lines, "### 🔶 What's Still Buzzing", summary.openForPR);
-  pushAlignmentSection(lines, "### ❌ Not in This Hive", summary.notIncluded);
+  pushBlueprintSection(lines, "## Decisions", plan.decisions);
+  pushBlueprintSection(lines, "## Out of scope", plan.outOfScope);
+  pushBlueprintSection(lines, "## Open", plan.openQuestions);
+
   lines.push("---");
+  lines.push("");
   lines.push(
-    `_Updated: ${timestamp} · Comments analyzed: ${summary.metadata.commentCount} · Participants: ${summary.metadata.participantCount} · Triggered by @${senderLogin} via \`/gather\`._`,
+    "This plan was gathered from the issue discussion. All participants, please review and comment if you disagree or want to propose changes.",
   );
+  lines.push("");
+
+  const metaParts: string[] = [];
+  metaParts.push(`${plan.metadata.commentCount} comments`);
+  if (plan.metadata.participantCount > 0) {
+    metaParts.push(`${plan.metadata.participantCount} participants`);
+  }
+  metaParts.push(formatBlueprintTimestamp());
+  metaParts.push(`@${senderLogin} via \`/gather\``);
+  lines.push(metaParts.join(" · "));
 
   return lines.join("\n");
 }
 
-function buildFallbackAlignmentContent(
+function buildFallbackBlueprintContent(
   context: IssueContext,
   senderLogin: string,
 ): string {
-  const participants = new Set(context.comments.map((c) => c.author)).size;
-
-  return buildAlignmentContent(
-    {
-      proposal: context.title,
-      alignedOn: [],
-      openForPR: [],
-      notIncluded: [],
-      metadata: {
-        commentCount: context.comments.length,
-        participantCount: participants,
-      },
-    },
-    senderLogin,
-  );
+  return buildBlueprintContent(createMinimalPlan(context), senderLogin);
 }
 
 /**
- * Handle /gather command: upsert the canonical alignment comment during discussion.
+ * Handle /gather command: upsert the canonical blueprint comment during discussion.
  */
 async function handleGather(ctx: CommandContext): Promise<CommandResult> {
   if (ctx.isPullRequest) {
@@ -371,28 +386,31 @@ async function handleGather(ctx: CommandContext): Promise<CommandResult> {
   const issues = createIssueOperations(ctx.octokit, { appId: ctx.appId });
   const existingAlignmentCommentId = await issues.findAlignmentCommentId(ref);
 
-  let alignmentContent: string;
+  let blueprintContent: string;
   try {
     const context = await issues.getIssueContext(ref);
-    const summarizer = new DiscussionSummarizer({ mode: "alignment" });
-    const summaryResult = await summarizer.summarize(context);
+    const generator = new BlueprintGenerator();
+    const result = await generator.generate(context);
 
-    alignmentContent = summaryResult.success
-      ? buildAlignmentContent(summaryResult.summary, ctx.senderLogin)
-      : buildFallbackAlignmentContent(context, ctx.senderLogin);
+    if (result.success) {
+      blueprintContent = buildBlueprintContent(result.plan, ctx.senderLogin);
+    } else {
+      ctx.log.warn(`Using fallback blueprint for #${ctx.issueNumber}: ${result.reason}`);
+      blueprintContent = buildFallbackBlueprintContent(context, ctx.senderLogin);
+    }
   } catch (error) {
     if (existingAlignmentCommentId) {
       const reason = error instanceof Error ? error.message : String(error);
       await reply(
         ctx,
-        `I couldn't refresh the alignment ledger just now (${reason}). Keeping the previous alignment comment unchanged.\n\nPlease retry \`/gather\` shortly.`,
+        `I couldn't refresh the blueprint just now (${reason}). Keeping the previous blueprint comment unchanged.\n\nPlease retry \`/gather\` shortly.`,
       );
-      return { status: "executed", message: "Alignment refresh failed; previous comment preserved." };
+      return { status: "executed", message: "Blueprint refresh failed; previous comment preserved." };
     }
     throw error;
   }
 
-  const body = buildAlignmentComment(alignmentContent, ctx.issueNumber);
+  const body = buildAlignmentComment(blueprintContent, ctx.issueNumber);
 
   if (existingAlignmentCommentId) {
     await ctx.octokit.rest.issues.updateComment({
@@ -401,11 +419,11 @@ async function handleGather(ctx: CommandContext): Promise<CommandResult> {
       comment_id: existingAlignmentCommentId,
       body,
     });
-    return { status: "executed", message: "Updated the alignment ledger comment." };
+    return { status: "executed", message: "Updated the blueprint comment." };
   }
 
   await issues.comment(ref, body);
-  return { status: "executed", message: "Created the alignment ledger comment." };
+  return { status: "executed", message: "Created the blueprint comment." };
 }
 
 /**

@@ -112,6 +112,7 @@ function createPRCtx(overrides: Partial<CommandContext> = {}): CommandContext {
     appId: 12345,
     log: {
       info: vi.fn(),
+      warn: vi.fn(),
       error: vi.fn(),
     },
     ...overrides,

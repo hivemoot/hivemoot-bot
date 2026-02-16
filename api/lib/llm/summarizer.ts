@@ -13,15 +13,13 @@ import type { Logger } from "../logger.js";
 import { logger as defaultLogger } from "../logger.js";
 import { repairMalformedJsonText } from "./json-repair.js";
 import {
-  ALIGNMENT_SYSTEM_PROMPT,
   SUMMARIZATION_SYSTEM_PROMPT,
-  buildAlignmentUserPrompt,
   buildUserPrompt,
 } from "./prompts.js";
 import { createModelFromEnv } from "./provider.js";
 import { withLLMRetry } from "./retry.js";
 import type { DiscussionSummary, IssueContext, LLMConfig } from "./types.js";
-import { DiscussionSummarySchema, LLM_DEFAULTS } from "./types.js";
+import { DiscussionSummarySchema, LLM_DEFAULTS, countUniqueParticipants } from "./types.js";
 
 // ───────────────────────────────────────────────────────────────────────────────
 // Summarizer Service
@@ -29,7 +27,6 @@ import { DiscussionSummarySchema, LLM_DEFAULTS } from "./types.js";
 
 export interface SummarizerConfig {
   logger?: Logger;
-  mode?: "voting" | "alignment";
 }
 
 /**
@@ -45,11 +42,9 @@ export type SummarizationResult =
  */
 export class DiscussionSummarizer {
   private logger: Logger;
-  private mode: "voting" | "alignment";
 
   constructor(config?: SummarizerConfig) {
     this.logger = config?.logger ?? defaultLogger;
-    this.mode = config?.mode ?? "voting";
   }
 
   /**
@@ -88,15 +83,8 @@ export class DiscussionSummarizer {
       }
 
       const { model, config } = modelResult;
-      const systemPrompt = this.mode === "alignment"
-        ? ALIGNMENT_SYSTEM_PROMPT
-        : SUMMARIZATION_SYSTEM_PROMPT;
-      const userPrompt = this.mode === "alignment"
-        ? buildAlignmentUserPrompt(context)
-        : buildUserPrompt(context);
-      const modeLabel = this.mode === "alignment" ? "alignment ledger" : "voting";
       this.logger.info(
-        `Generating ${modeLabel} summary with ${config.provider}/${config.model} for ${context.comments.length} comments`
+        `Generating voting summary with ${config.provider}/${config.model} for ${context.comments.length} comments`
       );
 
       const result = await withLLMRetry(
@@ -104,8 +92,8 @@ export class DiscussionSummarizer {
           generateObject({
             model,
             schema: DiscussionSummarySchema,
-            system: systemPrompt,
-            prompt: userPrompt,
+            system: SUMMARIZATION_SYSTEM_PROMPT,
+            prompt: buildUserPrompt(context),
             experimental_repairText: async (args) => {
               const repaired = await repairMalformedJsonText(args);
               if (repaired !== null) {
@@ -127,7 +115,7 @@ export class DiscussionSummarizer {
       // Mismatch indicates the LLM may have hallucinated content, not just metadata.
       // We fail closed to prevent potentially fabricated summary from influencing votes.
       const expectedComments = context.comments.length;
-      const expectedParticipants = new Set(context.comments.map((c) => c.author)).size;
+      const expectedParticipants = countUniqueParticipants(context.comments);
 
       if (
         summary.metadata.commentCount !== expectedComments ||

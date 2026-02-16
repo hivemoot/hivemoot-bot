@@ -57,7 +57,7 @@ describe("SIGNATURES", () => {
   });
 
   it("should have ALIGNMENT signature", () => {
-    expect(SIGNATURES.ALIGNMENT).toBe("# 🐝 Colony Alignment Ledger");
+    expect(SIGNATURES.ALIGNMENT).toBe("# 🐝 Blueprint");
   });
 
   it("should have HUMAN_HELP signature", () => {
@@ -849,7 +849,7 @@ describe("buildDiscussionComment", () => {
 
 describe("buildAlignmentComment", () => {
   it("should wrap content with alignment metadata", () => {
-    const content = "# 🐝 Colony Alignment Ledger\n\nInitial alignment placeholder.";
+    const content = "# 🐝 Blueprint\n\nInitial alignment placeholder.";
     const result = buildAlignmentComment(content, 42);
 
     expect(result).toContain("hivemoot-metadata:");

@@ -718,6 +718,10 @@ describe("Queen Bot", () => {
           getCollaboratorPermissionLevel: vi.fn().mockResolvedValue({
             data: { permission },
           }),
+          getContent: vi.fn().mockRejectedValue({ status: 404 }),
+          getCombinedStatusForRef: vi.fn().mockResolvedValue({
+            data: { state: "success", total_count: 0, statuses: [] },
+          }),
         },
         reactions: {
           createForIssueComment: vi.fn().mockResolvedValue({}),
@@ -734,9 +738,19 @@ describe("Queen Bot", () => {
           unlock: vi.fn().mockResolvedValue({}),
           listComments: vi.fn().mockResolvedValue({ data: [] }),
           listEventsForTimeline: vi.fn().mockResolvedValue({ data: [] }),
+          listForRepo: vi.fn().mockResolvedValue({ data: [] }),
         },
         pulls: {
           get: vi.fn().mockResolvedValue({ data: {} }),
+          update: vi.fn().mockResolvedValue({}),
+          listReviews: vi.fn().mockResolvedValue({ data: [] }),
+          listCommits: vi.fn().mockResolvedValue({ data: [] }),
+          listReviewComments: vi.fn().mockResolvedValue({ data: [] }),
+        },
+        checks: {
+          listForRef: vi.fn().mockResolvedValue({
+            data: { total_count: 0, check_runs: [] },
+          }),
         },
       },
       paginate: {
@@ -747,7 +761,13 @@ describe("Queen Bot", () => {
         })),
       },
       graphql: vi.fn().mockResolvedValue({
-        resource: { closingIssuesReferences: { nodes: [] } },
+        repository: {
+          pullRequest: {
+            closingIssuesReferences: {
+              nodes: [],
+            },
+          },
+        },
       }),
     });
 
@@ -883,6 +903,165 @@ describe("Queen Bot", () => {
       // Command was dispatched — graphql (getLinkedIssues) should NOT have been called
       // because the handler returns early after command execution
       expect(octokit.graphql).not.toHaveBeenCalled();
+    });
+
+    it("should ignore non-command comments on issues (non-PR)", async () => {
+      const { handlers } = createWebhookHarness();
+      const handler = handlers.get("issue_comment.created")!;
+      const octokit = createCommandOctokit();
+      const log = { info: vi.fn(), error: vi.fn(), warn: vi.fn() };
+
+      await handler({
+        octokit,
+        log,
+        payload: {
+          issue: {
+            number: 11,
+            labels: [{ name: LABELS.DISCUSSION }],
+          },
+          comment: {
+            id: 201,
+            body: "This needs more details before we vote.",
+            user: { login: "maintainer" },
+            performed_via_github_app: null,
+          },
+          repository: {
+            name: "test-repo",
+            full_name: "hivemoot/test-repo",
+            owner: { login: "hivemoot" },
+          },
+        },
+      });
+
+      expect(octokit.graphql).not.toHaveBeenCalled();
+      expect(octokit.rest.repos.getContent).not.toHaveBeenCalled();
+    });
+
+    it("should process non-command comments on PRs through intake path", async () => {
+      const { handlers } = createWebhookHarness();
+      const handler = handlers.get("issue_comment.created")!;
+      const octokit = createCommandOctokit();
+      const log = { info: vi.fn(), error: vi.fn(), warn: vi.fn() };
+
+      await handler({
+        octokit,
+        log,
+        payload: {
+          issue: {
+            number: 12,
+            labels: [{ name: LABELS.DISCUSSION }],
+            pull_request: { url: "https://api.github.com/repos/hivemoot/test-repo/pulls/12" },
+          },
+          comment: {
+            id: 202,
+            body: "Please take another look at this.",
+            user: { login: "maintainer" },
+            performed_via_github_app: null,
+          },
+          repository: {
+            name: "test-repo",
+            full_name: "hivemoot/test-repo",
+            owner: { login: "hivemoot" },
+          },
+        },
+      });
+
+      expect(octokit.graphql).toHaveBeenCalledTimes(1);
+      expect(octokit.rest.repos.getContent).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("issues.opened handler", () => {
+    const createIssuesOpenedOctokit = (discussionExitType: "manual" | "auto" = "manual") => {
+      const configYml = discussionExitType === "auto"
+        ? "version: 1\ngovernance:\n  proposals:\n    discussion:\n      exits:\n        - type: auto\n          afterMinutes: 30\n"
+        : "";
+
+      return {
+        rest: {
+          repos: {
+            getContent: vi.fn().mockImplementation(async () => {
+              if (discussionExitType === "manual") {
+                throw { status: 404 };
+              }
+              return {
+                data: {
+                  type: "file",
+                  content: Buffer.from(configYml, "utf-8").toString("base64"),
+                },
+              };
+            }),
+          },
+          issues: {
+            get: vi.fn().mockResolvedValue({ data: { reactions: { "+1": 0, "-1": 0, confused: 0 } } }),
+            addLabels: vi.fn().mockResolvedValue({}),
+            removeLabel: vi.fn().mockResolvedValue({}),
+            createComment: vi.fn().mockResolvedValue({}),
+            update: vi.fn().mockResolvedValue({}),
+            lock: vi.fn().mockResolvedValue({}),
+            unlock: vi.fn().mockResolvedValue({}),
+            listComments: vi.fn().mockResolvedValue({ data: [] }),
+            listEventsForTimeline: vi.fn().mockResolvedValue({ data: [] }),
+          },
+          reactions: {
+            listForIssueComment: vi.fn().mockResolvedValue({ data: [] }),
+            listForIssue: vi.fn().mockResolvedValue({ data: [] }),
+          },
+        },
+        paginate: {
+          iterator: vi.fn().mockImplementation(() => ({
+            async *[Symbol.asyncIterator]() {
+              yield { data: [] };
+            },
+          })),
+        },
+      };
+    };
+
+    it("should use manual welcome when discussion auto-exit is not configured", async () => {
+      const { handlers } = createWebhookHarness();
+      const handler = handlers.get("issues.opened")!;
+      const octokit = createIssuesOpenedOctokit("manual");
+      const log = { info: vi.fn(), error: vi.fn(), warn: vi.fn() };
+
+      await handler({
+        octokit,
+        log,
+        payload: {
+          issue: { number: 42 },
+          repository: {
+            name: "test-repo",
+            full_name: "hivemoot/test-repo",
+            owner: { login: "hivemoot" },
+          },
+        },
+      });
+
+      const commentBody = octokit.rest.issues.createComment.mock.calls[0][0].body;
+      expect(commentBody).toContain("Nothing moves forward automatically here.");
+    });
+
+    it("should use voting-focused welcome when discussion auto-exit is configured", async () => {
+      const { handlers } = createWebhookHarness();
+      const handler = handlers.get("issues.opened")!;
+      const octokit = createIssuesOpenedOctokit("auto");
+      const log = { info: vi.fn(), error: vi.fn(), warn: vi.fn() };
+
+      await handler({
+        octokit,
+        log,
+        payload: {
+          issue: { number: 43 },
+          repository: {
+            name: "test-repo",
+            full_name: "hivemoot/test-repo",
+            owner: { login: "hivemoot" },
+          },
+        },
+      });
+
+      const commentBody = octokit.rest.issues.createComment.mock.calls[0][0].body;
+      expect(commentBody).toContain("Ready to vote?");
     });
   });
 

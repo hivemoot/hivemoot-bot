@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { DiscussionSummarizer, formatVotingMessage } from "./summarizer.js";
 import type { DiscussionSummary, IssueContext } from "./types.js";
 import type { Logger } from "../logger.js";
+import { ALIGNMENT_SYSTEM_PROMPT } from "./prompts.js";
 
 /**
  * Tests for DiscussionSummarizer
@@ -243,6 +244,57 @@ describe("DiscussionSummarizer", () => {
       expect(repaired).toBe("{\"proposal\":\"Test\"}");
       expect(mockLogger.info).toHaveBeenCalledWith(
         expect.stringContaining("Repaired malformed LLM JSON output")
+      );
+    });
+
+    it("should use alignment prompt when configured in alignment mode", async () => {
+      const mockSummary: DiscussionSummary = {
+        proposal: "Implement `/gather` ledger refresh",
+        alignedOn: ["Use one canonical alignment comment"],
+        openForPR: ["Finalize section naming"],
+        notIncluded: [],
+        metadata: { commentCount: 2, participantCount: 2 },
+      };
+
+      const { createModelFromEnv } = await import("./provider.js");
+      const { generateObject } = await import("ai");
+
+      vi.mocked(createModelFromEnv).mockReturnValue({
+        model: {} as never,
+        config: { provider: "openai", model: "test", maxTokens: 2000 },
+      });
+      vi.mocked(generateObject).mockResolvedValue({
+        object: mockSummary,
+        finishReason: "stop",
+        usage: { promptTokens: 100, completionTokens: 200 },
+        rawResponse: undefined,
+        response: undefined,
+        warnings: undefined,
+        experimental_providerMetadata: undefined,
+        toJsonResponse: () => new Response(),
+      } as never);
+
+      const summarizer = new DiscussionSummarizer({
+        logger: mockLogger,
+        mode: "alignment",
+      });
+      const context: IssueContext = {
+        title: "Add gather command",
+        body: "Need a living ledger",
+        author: "issueAuthor",
+        comments: [
+          { author: "user1", body: "Let's keep it concise", createdAt: "2024-01-01T00:00:00Z" },
+          { author: "user2", body: "And reusable", createdAt: "2024-01-02T00:00:00Z" },
+        ],
+      };
+
+      await summarizer.summarize(context);
+
+      expect(generateObject).toHaveBeenCalledWith(
+        expect.objectContaining({
+          system: ALIGNMENT_SYSTEM_PROMPT,
+          prompt: expect.stringContaining("living alignment ledger"),
+        })
       );
     });
 

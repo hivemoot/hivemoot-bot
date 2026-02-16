@@ -289,17 +289,15 @@ async function handleImplement(ctx: CommandContext): Promise<CommandResult> {
   return { status: "executed", message: "Fast-tracked to ready-to-implement." };
 }
 
-function formatAlignmentSection(title: string, items: string[]): string[] {
-  const lines = [title];
+function pushAlignmentSection(lines: string[], title: string, items: string[]): void {
   if (items.length === 0) {
-    lines.push("- None yet.");
-  } else {
-    for (const item of items) {
-      lines.push(`- ${item}`);
-    }
+    return;
+  }
+  lines.push(title);
+  for (const item of items) {
+    lines.push(`- ${item}`);
   }
   lines.push("");
-  return lines;
 }
 
 function buildAlignmentContent(
@@ -309,15 +307,22 @@ function buildAlignmentContent(
   const lines: string[] = [];
   const proposal = summary.proposal?.trim() || "Discussion is gathering signal. Run `/gather` again after more input.";
   const timestamp = new Date().toISOString();
+  const isEarlyDiscussion = summary.metadata.commentCount < 5;
 
   lines.push(SIGNATURES.ALIGNMENT);
   lines.push("");
-  lines.push("## Current Consensus");
+  lines.push("## What We're Building");
   lines.push(`> ${proposal}`);
   lines.push("");
-  lines.push(...formatAlignmentSection("### ✅ Where the Colony Aligns", summary.alignedOn));
-  lines.push(...formatAlignmentSection("### 🔶 Open for PR", summary.openForPR));
-  lines.push(...formatAlignmentSection("### ❌ Not Included", summary.notIncluded));
+
+  if (isEarlyDiscussion && summary.alignedOn.length === 0 && summary.openForPR.length === 0) {
+    lines.push("Discussion is still forming. Re-run `/gather` after more feedback to expand this ledger.");
+    lines.push("");
+  }
+
+  pushAlignmentSection(lines, "### ✅ Where the Colony Aligns", summary.alignedOn);
+  pushAlignmentSection(lines, "### 🔶 What's Still Buzzing", summary.openForPR);
+  pushAlignmentSection(lines, "### ❌ Not in This Hive", summary.notIncluded);
   lines.push("---");
   lines.push(
     `_Updated: ${timestamp} · Comments analyzed: ${summary.metadata.commentCount} · Participants: ${summary.metadata.participantCount} · Triggered by @${senderLogin} via \`/gather\`._`,
@@ -369,7 +374,7 @@ async function handleGather(ctx: CommandContext): Promise<CommandResult> {
   let alignmentContent: string;
   try {
     const context = await issues.getIssueContext(ref);
-    const summarizer = new DiscussionSummarizer();
+    const summarizer = new DiscussionSummarizer({ mode: "alignment" });
     const summaryResult = await summarizer.summarize(context);
 
     alignmentContent = summaryResult.success

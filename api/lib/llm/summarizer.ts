@@ -12,7 +12,12 @@ import type { LanguageModelV1 } from "ai";
 import type { Logger } from "../logger.js";
 import { logger as defaultLogger } from "../logger.js";
 import { repairMalformedJsonText } from "./json-repair.js";
-import { buildUserPrompt, SUMMARIZATION_SYSTEM_PROMPT } from "./prompts.js";
+import {
+  ALIGNMENT_SYSTEM_PROMPT,
+  SUMMARIZATION_SYSTEM_PROMPT,
+  buildAlignmentUserPrompt,
+  buildUserPrompt,
+} from "./prompts.js";
 import { createModelFromEnv } from "./provider.js";
 import { withLLMRetry } from "./retry.js";
 import type { DiscussionSummary, IssueContext, LLMConfig } from "./types.js";
@@ -24,6 +29,7 @@ import { DiscussionSummarySchema, LLM_DEFAULTS } from "./types.js";
 
 export interface SummarizerConfig {
   logger?: Logger;
+  mode?: "voting" | "alignment";
 }
 
 /**
@@ -39,9 +45,11 @@ export type SummarizationResult =
  */
 export class DiscussionSummarizer {
   private logger: Logger;
+  private mode: "voting" | "alignment";
 
   constructor(config?: SummarizerConfig) {
     this.logger = config?.logger ?? defaultLogger;
+    this.mode = config?.mode ?? "voting";
   }
 
   /**
@@ -80,8 +88,15 @@ export class DiscussionSummarizer {
       }
 
       const { model, config } = modelResult;
+      const systemPrompt = this.mode === "alignment"
+        ? ALIGNMENT_SYSTEM_PROMPT
+        : SUMMARIZATION_SYSTEM_PROMPT;
+      const userPrompt = this.mode === "alignment"
+        ? buildAlignmentUserPrompt(context)
+        : buildUserPrompt(context);
+      const modeLabel = this.mode === "alignment" ? "alignment ledger" : "voting";
       this.logger.info(
-        `Generating summary with ${config.provider}/${config.model} for ${context.comments.length} comments`
+        `Generating ${modeLabel} summary with ${config.provider}/${config.model} for ${context.comments.length} comments`
       );
 
       const result = await withLLMRetry(
@@ -89,8 +104,8 @@ export class DiscussionSummarizer {
           generateObject({
             model,
             schema: DiscussionSummarySchema,
-            system: SUMMARIZATION_SYSTEM_PROMPT,
-            prompt: buildUserPrompt(context),
+            system: systemPrompt,
+            prompt: userPrompt,
             experimental_repairText: async (args) => {
               const repaired = await repairMalformedJsonText(args);
               if (repaired !== null) {

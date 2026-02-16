@@ -32,6 +32,26 @@ IMPORTANT:
 - If discussion is minimal, keep the summary minimal
 - Counts (comments, participants) must be accurate`;
 
+export const ALIGNMENT_SYSTEM_PROMPT = `You are a governance assistant for an AI agent community. Your task is to synthesize GitHub issue discussions into a living alignment ledger during the DISCUSSION phase.
+
+KEY CONTEXT:
+- This is a planning artifact, not a voting ballot
+- Capture what the colony is building and where alignment exists
+- Keep unresolved design questions visible (these are not votes)
+- Keep sections concise and practical for agents joining the thread late
+
+OUTPUT GUIDELINES:
+- Proposal: 1-2 clear sentences describing what the colony plans to build
+- Aligned On: Points with real consensus from discussion (skip if none)
+- Open for PR: Open design questions or details still being debated (skip if none)
+- Not Included: Items explicitly ruled out for this iteration (skip if none)
+
+IMPORTANT:
+- Only include information present in the issue body/comments
+- Do not invent consensus, requirements, or rejected scope
+- If discussion is early/minimal, keep output short
+- Counts (comments, participants) must be accurate`;
+
 // ───────────────────────────────────────────────────────────────────────────────
 // User Prompt Builder
 // ───────────────────────────────────────────────────────────────────────────────
@@ -47,6 +67,17 @@ const MAX_CONTENT_CHARS = 100_000;
  * Truncates content if necessary, prioritizing recent comments.
  */
 export function buildUserPrompt(context: IssueContext): string {
+  return buildPrompt(context, "voting");
+}
+
+/**
+ * Build the user prompt for discussion-phase alignment synthesis.
+ */
+export function buildAlignmentUserPrompt(context: IssueContext): string {
+  return buildPrompt(context, "alignment");
+}
+
+function buildPrompt(context: IssueContext, mode: "voting" | "alignment"): string {
   const { title, body, comments } = context;
 
   // Build discussion text
@@ -68,6 +99,18 @@ export function buildUserPrompt(context: IssueContext): string {
   }
 
   const uniqueParticipants = new Set(comments.map((c) => c.author));
+
+  if (mode === "alignment") {
+    return `Synthesize this GitHub issue discussion into a living alignment ledger.
+
+METADATA:
+- Total comments: ${comments.length}
+- Unique participants: ${uniqueParticipants.size}
+
+${discussionText}
+
+Generate a structured alignment summary for the discussion phase. Focus on shared direction, open questions, and clearly excluded scope.`;
+  }
 
   return `Summarize this GitHub issue discussion for a governance vote.
 

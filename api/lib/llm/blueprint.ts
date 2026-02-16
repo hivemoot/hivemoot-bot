@@ -33,26 +33,28 @@ export type BlueprintResult =
 // System Prompt
 // ───────────────────────────────────────────────────────────────────────────────
 
-export const BLUEPRINT_SYSTEM_PROMPT = `You are an implementation architect. Extract a concrete implementation blueprint from this GitHub issue discussion.
+export const BLUEPRINT_SYSTEM_PROMPT = `You are an implementation architect. Extract a brief, actionable blueprint from a GitHub issue discussion.
 
-KEY CONTEXT:
-- Your output is for an engineer who has NOT read the discussion thread
-- Focus on WHAT to build and HOW, not on summarizing the conversation
-- Promote heavily-endorsed comments (marked with 👍 counts) to concrete plan steps
-- The issue author's comments carry the original intent — weight them accordingly
+<context>
+- The reader has NOT read the discussion thread
+- 👍/👎 counts on comments indicate community endorsement or pushback
+- Comments marked "(author)" carry the original intent
+</context>
 
-OUTPUT GUIDELINES:
-- goal: 1-2 sentences describing what will be built. Be specific and actionable.
-- plan: Free-form markdown. Use numbered steps, tables, code blocks, and inline code. Write a step-by-step implementation plan that an engineer can follow.
-- decisions: Concrete design choices extracted from the discussion (e.g., "Use PostgreSQL, not SQLite" or "API versioning via URL path prefix").
-- outOfScope: Items explicitly excluded — these were discussed and ruled out. An implementer must NOT build these.
-- openQuestions: Unresolved questions AND active disagreements. These need resolution before or during implementation.
+<output>
+- goal: 1-2 sentences — what will be built
+- plan: Concise numbered steps an engineer can follow. Use code snippets only when essential.
+- decisions: Design choices from the discussion (keep each to one line)
+- outOfScope: Items explicitly ruled out
+- openQuestions: Unresolved items or active disagreements
+</output>
 
-IMPORTANT:
-- Only include information that appears in the discussion
-- Do not hallucinate requirements, decisions, or scope exclusions
-- If discussion is minimal, keep the output minimal
-- Counts (comments, participants) must be accurate`;
+<rules>
+- Only include information present in the discussion
+- Keep every section as short as possible — brevity over completeness
+- Empty sections are fine; omit rather than pad
+- Metadata counts must be accurate
+</rules>`;
 
 // ───────────────────────────────────────────────────────────────────────────────
 // User Prompt Builder
@@ -65,11 +67,31 @@ IMPORTANT:
 const MAX_CONTENT_CHARS = 100_000;
 
 /**
+ * Build an author label with role and reaction signals.
+ * e.g. **@alice (author) [👍 3] [👎 1]**
+ */
+function formatAuthorLabel(
+  author: string,
+  issueAuthor: string,
+  reactions?: { thumbsUp: number; thumbsDown: number },
+): string {
+  const parts = [`@${author}`];
+  if (author === issueAuthor) parts.push("(author)");
+  if (reactions?.thumbsUp && reactions.thumbsUp > 0) {
+    parts.push(`[👍 ${reactions.thumbsUp}]`);
+  }
+  if (reactions?.thumbsDown && reactions.thumbsDown > 0) {
+    parts.push(`[👎 ${reactions.thumbsDown}]`);
+  }
+  return `**${parts.join(" ")}**`;
+}
+
+/**
  * Build the user prompt with enriched comment formatting.
  *
  * Enrichments over the voting prompt:
  * - Author's comments marked: **@alice (author)**
- * - Reaction signal shown: **@scout [👍 3]** (only when thumbsUp > 0)
+ * - Reaction signals: **@scout [👍 3] [👎 1]**
  */
 export function buildBlueprintUserPrompt(context: IssueContext): string {
   const { title, body, comments } = context;
@@ -82,13 +104,7 @@ export function buildBlueprintUserPrompt(context: IssueContext): string {
   } else {
     discussionText += "### Discussion\n\n";
     for (const comment of comments) {
-      const parts = [`@${comment.author}`];
-      if (comment.author === context.author) parts.push("(author)");
-      if (comment.reactions?.thumbsUp && comment.reactions.thumbsUp > 0) {
-        parts.push(`[👍 ${comment.reactions.thumbsUp}]`);
-      }
-      const authorLabel = `**${parts.join(" ")}**`;
-
+      const authorLabel = formatAuthorLabel(comment.author, context.author, comment.reactions);
       discussionText += `${authorLabel} (${comment.createdAt}):\n${comment.body}\n\n---\n\n`;
     }
   }
@@ -137,13 +153,7 @@ export function truncateDiscussion(
 
   for (let i = comments.length - 1; i >= 0; i--) {
     const comment = comments[i];
-    const parts = [`@${comment.author}`];
-    if (comment.author === author) parts.push("(author)");
-    if (comment.reactions?.thumbsUp && comment.reactions.thumbsUp > 0) {
-      parts.push(`[👍 ${comment.reactions.thumbsUp}]`);
-    }
-    const authorLabel = `**${parts.join(" ")}**`;
-
+    const authorLabel = formatAuthorLabel(comment.author, author, comment.reactions);
     const commentText = `${authorLabel} (${comment.createdAt}):\n${comment.body}\n\n---\n\n`;
 
     if (usedChars + commentText.length <= availableForComments) {

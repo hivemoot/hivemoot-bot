@@ -518,9 +518,29 @@ describe("buildBlueprintUserPrompt", () => {
     const prompt = buildBlueprintUserPrompt(context);
 
     expect(prompt).toContain("**@bob [👍 5]**");
-    // thumbsDown-only should NOT show a signal (only thumbsUp is shown)
+    // thumbsDown-only shows just 👎 (no zero 👍)
     expect(prompt).not.toContain("[👍 0]");
-    expect(prompt).toContain("**@carol**");
+    expect(prompt).toContain("**@carol [👎 2]**");
+  });
+
+  it("should show both thumbsUp and thumbsDown when both are present", () => {
+    const context: IssueContext = {
+      title: "Test",
+      body: "Body",
+      author: "alice",
+      comments: [
+        {
+          author: "bob",
+          body: "Controversial take",
+          createdAt: "2024-01-01T00:00:00Z",
+          reactions: { thumbsUp: 4, thumbsDown: 2 },
+        },
+      ],
+    };
+
+    const prompt = buildBlueprintUserPrompt(context);
+
+    expect(prompt).toContain("**@bob [👍 4] [👎 2]**");
   });
 });
 
@@ -585,7 +605,7 @@ describe("truncateDiscussion", () => {
         author: "alice",
         body: "My idea",
         createdAt: "2024-01-01T00:00:00Z",
-        reactions: { thumbsUp: 7, thumbsDown: 0 },
+        reactions: { thumbsUp: 7, thumbsDown: 2 },
       },
       { author: "bob", body: "Comment", createdAt: "2024-01-02T00:00:00Z" },
     ];
@@ -593,6 +613,7 @@ describe("truncateDiscussion", () => {
     const result = truncateDiscussion("Test", "Body", "alice", commentsWithReactions, 10_000);
 
     expect(result).toContain("[👍 7]");
+    expect(result).toContain("[👎 2]");
   });
 
   it("should show fallback when body is empty", () => {

@@ -82,17 +82,12 @@ function buildBlueprintUserPrompt(context: IssueContext): string {
   } else {
     discussionText += "### Discussion\n\n";
     for (const comment of comments) {
-      // Author marking
-      const isAuthor = comment.author === context.author;
-      let authorLabel = `**@${comment.author}`;
-      if (isAuthor) {
-        authorLabel += " (author)";
-      }
-      // Reaction signal
+      const parts = [`@${comment.author}`];
+      if (comment.author === context.author) parts.push("(author)");
       if (comment.reactions?.thumbsUp && comment.reactions.thumbsUp > 0) {
-        authorLabel += ` [👍 ${comment.reactions.thumbsUp}]`;
+        parts.push(`[👍 ${comment.reactions.thumbsUp}]`);
       }
-      authorLabel += "**";
+      const authorLabel = `**${parts.join(" ")}**`;
 
       discussionText += `${authorLabel} (${comment.createdAt}):\n${comment.body}\n\n---\n\n`;
     }
@@ -142,13 +137,12 @@ function truncateDiscussion(
 
   for (let i = comments.length - 1; i >= 0; i--) {
     const comment = comments[i];
-    const isAuthor = comment.author === author;
-    let authorLabel = `**@${comment.author}`;
-    if (isAuthor) authorLabel += " (author)";
+    const parts = [`@${comment.author}`];
+    if (comment.author === author) parts.push("(author)");
     if (comment.reactions?.thumbsUp && comment.reactions.thumbsUp > 0) {
-      authorLabel += ` [👍 ${comment.reactions.thumbsUp}]`;
+      parts.push(`[👍 ${comment.reactions.thumbsUp}]`);
     }
-    authorLabel += "**";
+    const authorLabel = `**${parts.join(" ")}**`;
 
     const commentText = `${authorLabel} (${comment.createdAt}):\n${comment.body}\n\n---\n\n`;
 

@@ -406,9 +406,12 @@ async function handleGather(ctx: CommandContext): Promise<CommandResult> {
     const generator = new BlueprintGenerator();
     const result = await generator.generate(context);
 
-    blueprintContent = result.success
-      ? buildBlueprintContent(result.plan, ctx.senderLogin)
-      : buildFallbackBlueprintContent(context, ctx.senderLogin);
+    if (result.success) {
+      blueprintContent = buildBlueprintContent(result.plan, ctx.senderLogin);
+    } else {
+      ctx.log.info(`Using fallback blueprint for #${ctx.issueNumber}: ${result.reason}`);
+      blueprintContent = buildFallbackBlueprintContent(context, ctx.senderLogin);
+    }
   } catch (error) {
     if (existingAlignmentCommentId) {
       const reason = error instanceof Error ? error.message : String(error);

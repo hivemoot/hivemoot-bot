@@ -684,6 +684,8 @@ export class IssueOperations {
           continue;
         }
 
+        // GitHub REST API includes reactions in listComments responses by default
+        // (no special Accept header needed since the squirrel-girl preview graduated).
         const thumbsUp = toReactionCount(comment.reactions?.["+1"]);
         const thumbsDown = toReactionCount(comment.reactions?.["-1"]);
         const hasReactions = thumbsUp > 0 || thumbsDown > 0;

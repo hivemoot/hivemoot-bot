@@ -42,6 +42,7 @@ describe("GovernanceService", () => {
       unlock: vi.fn().mockResolvedValue(undefined),
       getVoteCounts: vi.fn().mockResolvedValue({ thumbsUp: 0, thumbsDown: 0, confused: 0, eyes: 0 }),
       findVotingCommentId: vi.fn().mockResolvedValue(12345),
+      findAlignmentCommentId: vi.fn().mockResolvedValue(null),
       getValidatedVoteCounts: vi.fn().mockResolvedValue({ votes: { thumbsUp: 0, thumbsDown: 0, confused: 0, eyes: 0 }, voters: [], participants: [] }),
       countVotingComments: vi.fn().mockResolvedValue(0),
       hasHumanHelpComment: vi.fn().mockResolvedValue(false),
@@ -181,6 +182,7 @@ describe("GovernanceService", () => {
           mockContext.title,
           SIGNATURE,
           SIGNATURES.VOTING,
+          undefined,
           undefined
         );
         // Verify comment includes both metadata and LLM message
@@ -206,6 +208,28 @@ describe("GovernanceService", () => {
           addLabel: LABELS.VOTING,
           comment: expect.stringContaining(MESSAGES.VOTING_START),
         });
+      });
+
+      it("should pass alignment comment URL to voting formatter when available", async () => {
+        const mockSummarize = vi.fn().mockResolvedValue({
+          success: true,
+          summary: mockSummary,
+        });
+        vi.mocked(DiscussionSummarizer).mockImplementation(function () {
+          return { summarize: mockSummarize };
+        } as any);
+        vi.mocked(mockIssues.findAlignmentCommentId).mockResolvedValue(987654321);
+
+        await governance.transitionToVoting(testRef);
+
+        expect(formatVotingMessage).toHaveBeenCalledWith(
+          mockSummary,
+          mockContext.title,
+          SIGNATURE,
+          SIGNATURES.VOTING,
+          undefined,
+          "https://github.com/test-org/test-repo/issues/42#issuecomment-987654321"
+        );
       });
 
       it("should fall back to generic message when LLM throws an error", async () => {

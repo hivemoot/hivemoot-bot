@@ -57,6 +57,7 @@ export interface IssueData {
   body?: string | null;
   user?: { login: string } | null;
   reactions?: { "+1": number; "-1": number; confused: number; eyes?: number };
+  labels?: Array<string | { name?: string }>;
 }
 
 export interface GitHubClient {
@@ -603,6 +604,19 @@ export class IssueOperations {
       body: data.body ?? "",
       author: data.user?.login ?? "",
     };
+  }
+
+  /**
+   * Get issue labels.
+   */
+  async getIssueLabels(ref: IssueRef): Promise<string[]> {
+    const { data } = await this.client.rest.issues.get({
+      owner: ref.owner,
+      repo: ref.repo,
+      issue_number: ref.issueNumber,
+    });
+
+    return (data.labels ?? []).map((label) => (typeof label === "string" ? label : label.name ?? ""));
   }
 
   /**

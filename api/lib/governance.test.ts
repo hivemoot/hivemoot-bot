@@ -49,6 +49,7 @@ describe("GovernanceService", () => {
       transition: vi.fn().mockResolvedValue(undefined),
       // getIssueContext should NOT be called when LLM is not configured
       getIssueContext: vi.fn(),
+      getIssueLabels: vi.fn().mockResolvedValue([]),
     } as unknown as IssueOperations;
 
     governance = new GovernanceService(mockIssues);
@@ -179,7 +180,8 @@ describe("GovernanceService", () => {
           mockSummary,
           mockContext.title,
           SIGNATURE,
-          SIGNATURES.VOTING
+          SIGNATURES.VOTING,
+          undefined
         );
         // Verify comment includes both metadata and LLM message
         const callArgs = vi.mocked(mockIssues.transition).mock.calls[0][1];

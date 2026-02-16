@@ -175,12 +175,14 @@ export function formatVotingMessage(
   summary: DiscussionSummary,
   issueTitle: string,
   signature: string,
-  votingSignature: string
+  votingSignature: string,
+  priority?: "high" | "medium" | "low"
 ): string {
   const lines: string[] = [];
 
   // Header
-  lines.push(`🐝 **Voting Phase**`);
+  const priorityHeader = priority ? ` (${priority.toUpperCase()} PRIORITY)` : "";
+  lines.push(`🐝 **Voting Phase${priorityHeader}**`);
   lines.push("");
   lines.push(`# ${issueTitle}`);
   lines.push("");
@@ -189,6 +191,12 @@ export function formatVotingMessage(
   lines.push("## Proposal");
   lines.push(`> ${summary.proposal}`);
   lines.push("");
+
+  // Priority reminder (if present)
+  if (priority) {
+    lines.push(`This issue is marked **${priority}-priority** — your timely vote is appreciated.`);
+    lines.push("");
+  }
 
   // Aligned On (only if non-empty)
   if (summary.alignedOn.length > 0) {

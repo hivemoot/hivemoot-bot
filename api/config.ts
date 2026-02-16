@@ -157,12 +157,13 @@ Link it using closing keywords in the description:
   votingStart: (priority?: "high" | "medium" | "low") => {
     const priorityHeader = priority ? ` (${priority.toUpperCase()} PRIORITY)` : "";
     const priorityReminder = priority
-      ? `\n\nThis issue is marked **${priority}-priority** — your timely vote is appreciated.\n`
+      ? `\n\nThis issue is marked **${priority}-priority** — your timely vote is appreciated.`
       : "";
 
     return `# 🐝 Voting Phase${priorityHeader}
 
 Time for hivemoot to decide.${priorityReminder}
+
 **${SIGNATURES.VOTING}:**
 - 👍 **Ready** — Approve for implementation
 - 👎 **Not Ready** — Close this proposal

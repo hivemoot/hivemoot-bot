@@ -391,6 +391,62 @@ describe("Implementation Intake", () => {
     );
   });
 
+  it("should close PR and comment when PR limit reached on opened trigger", async () => {
+    const mockOctokit = createMockOctokit();
+
+    const readyIssue: LinkedIssue = {
+      number: 7,
+      title: "Ready issue",
+      state: "OPEN",
+      labels: { nodes: [{ name: LABELS.READY_TO_IMPLEMENT }] },
+    };
+
+    const existingPR = { number: 50, title: "Existing", state: "OPEN" as const, author: { login: "other" } };
+
+    // getLinkedIssues is called both for PR #101 (from processImplementationIntake)
+    // and for PR #50 (from getImplementationPRsByIssue). Both link to issue #7.
+    vi.mocked(getLinkedIssues).mockResolvedValue([readyIssue]);
+
+    const issues = {
+      getLabelAddedTime: vi.fn().mockResolvedValue(new Date("2026-02-01T00:00:00Z")),
+      comment: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const prs = {
+      get: vi.fn().mockResolvedValue({
+        createdAt: new Date("2026-02-01T00:00:00Z"),
+        state: "open",
+        merged: false,
+        author: "other",
+      }),
+      getLabels: vi.fn().mockResolvedValue([]),
+      getLatestAuthorActivityDate: vi.fn().mockResolvedValue(new Date("2026-02-02T00:00:00Z")),
+      findPRsWithLabel: vi.fn().mockResolvedValue([existingPR]),
+      addLabels: vi.fn().mockResolvedValue(undefined),
+      comment: vi.fn().mockResolvedValue(undefined),
+      close: vi.fn().mockResolvedValue(undefined),
+      hasNotificationComment: vi.fn().mockResolvedValue(false),
+    };
+
+    await processImplementationIntake({
+      octokit: mockOctokit,
+      issues,
+      prs,
+      log: { info: vi.fn(), warn: vi.fn() },
+      owner: "hivemoot",
+      repo: "colony",
+      prNumber: 101,
+      linkedIssues: [readyIssue],
+      trigger: "opened",
+      maxPRsPerIssue: 1,
+    });
+
+    // Should comment about limit reached AND close the PR
+    expect(prs.comment).toHaveBeenCalled();
+    expect(prs.close).toHaveBeenCalled();
+    expect(prs.addLabels).not.toHaveBeenCalled();
+  });
+
   it("should post no-room comment (not close) when PR limit reached on edited trigger", async () => {
     const mockOctokit = createMockOctokit();
 
@@ -1114,6 +1170,56 @@ describe("Leaderboard race condition fix", () => {
       (body: string) => body.includes("#101")
     );
     expect(leaderboardPosted).toBe(true);
+  });
+
+  it("should skip leaderboard recalculation when no linked issues are ready-to-implement", async () => {
+    const mockOctokit = createMockOctokit();
+
+    const discussionIssue: LinkedIssue = {
+      number: 7,
+      title: "Discussion issue",
+      state: "OPEN",
+      labels: { nodes: [{ name: LABELS.DISCUSSION }] },
+    };
+
+    vi.mocked(getLinkedIssues).mockResolvedValue([discussionIssue]);
+
+    const logSpy = { info: vi.fn() };
+
+    await recalculateLeaderboardForPR(
+      mockOctokit,
+      logSpy,
+      "hivemoot",
+      "colony",
+      101
+    );
+
+    // No leaderboard comment should be created or updated
+    expect(mockOctokit.rest.issues.createComment).not.toHaveBeenCalled();
+    expect(mockOctokit.rest.issues.updateComment).not.toHaveBeenCalled();
+    // No log about leaderboard update
+    expect(logSpy.info).not.toHaveBeenCalled();
+  });
+
+  it("should skip leaderboard recalculation when linked issues list is empty", async () => {
+    const mockOctokit = createMockOctokit();
+
+    vi.mocked(getLinkedIssues).mockResolvedValue([]);
+
+    const logSpy = { info: vi.fn() };
+
+    await recalculateLeaderboardForPR(
+      mockOctokit,
+      logSpy,
+      "hivemoot",
+      "colony",
+      101
+    );
+
+    // No leaderboard comment should be created or updated
+    expect(mockOctokit.rest.issues.createComment).not.toHaveBeenCalled();
+    expect(mockOctokit.rest.issues.updateComment).not.toHaveBeenCalled();
+    expect(logSpy.info).not.toHaveBeenCalled();
   });
 
   it("should not duplicate PR when label search includes it", async () => {

@@ -518,16 +518,25 @@ export const PR_MESSAGES = {
    * Posted when a PR is opened that links to a phase:ready-to-implement issue.
    * Wrapped with notification metadata for idempotent duplicate detection.
    */
-  IMPLEMENTATION_WELCOME: (issueNumber: number, priority?: "high" | "medium" | "low") => {
+  IMPLEMENTATION_WELCOME: (
+    issueNumber: number,
+    priority?: "high" | "medium" | "low",
+    slotInfo?: { current: number; max: number }
+  ) => {
     const priorityHeader = priority ? ` (${priority.toUpperCase()} PRIORITY)` : "";
     const priorityReminder = priority
       ? `\n\nThis issue is marked **${priority}-priority** — timely implementation and review are especially appreciated.\n`
       : "";
 
+    const competitionStatus = slotInfo
+      ? `\n\n**Competition status:** ${slotInfo.current} of ${slotInfo.max} slots filled`
+      : "";
+
     return buildNotificationComment(
       `# 🐝 Implementation PR${priorityHeader}
 
-Multiple implementations for #${issueNumber} may compete — may the best code win.${priorityReminder}
+Multiple implementations for #${issueNumber} may compete — may the best code win.${priorityReminder}${competitionStatus}
+
 Focus on a clean implementation and quick responses to reviews to stay in the lead.${SIGNATURE}`,
       issueNumber,
       NOTIFICATION_TYPES.IMPLEMENTATION_WELCOME

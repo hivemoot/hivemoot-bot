@@ -82,6 +82,7 @@ export interface CommandContext {
   appId: number;
   log: {
     info: (...args: unknown[]) => void;
+    warn: (...args: unknown[]) => void;
     error: (...args: unknown[]) => void;
   };
 }
@@ -409,7 +410,7 @@ async function handleGather(ctx: CommandContext): Promise<CommandResult> {
     if (result.success) {
       blueprintContent = buildBlueprintContent(result.plan, ctx.senderLogin);
     } else {
-      ctx.log.info(`Using fallback blueprint for #${ctx.issueNumber}: ${result.reason}`);
+      ctx.log.warn(`Using fallback blueprint for #${ctx.issueNumber}: ${result.reason}`);
       blueprintContent = buildFallbackBlueprintContent(context, ctx.senderLogin);
     }
   } catch (error) {

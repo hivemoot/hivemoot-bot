@@ -57,6 +57,7 @@ function createCtx(overrides: Partial<CommandContext> = {}): CommandContext {
     appId: 12345,
     log: {
       info: vi.fn(),
+      warn: vi.fn(),
       error: vi.fn(),
     },
     ...overrides,
@@ -424,7 +425,7 @@ describe("executeCommand", () => {
       const ctx = createCtx({ verb: "gather" });
       await executeCommand(ctx);
 
-      expect(ctx.log.info).toHaveBeenCalledWith(
+      expect(ctx.log.warn).toHaveBeenCalledWith(
         "Using fallback blueprint for #42: LLM not configured"
       );
     });

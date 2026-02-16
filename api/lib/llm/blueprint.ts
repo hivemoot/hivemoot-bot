@@ -50,6 +50,9 @@ export const BLUEPRINT_SYSTEM_PROMPT = `You are an implementation architect. Ext
 </output>
 
 <rules>
+- Be objective — report what the discussion concluded, do not inject your own opinions
+- When the discussion is ambiguous or lacks consensus, lean towards the author's original proposal
+- When participants clearly disagree, list the disagreement under openQuestions rather than picking a side
 - Only include information present in the discussion
 - Keep every section as short as possible — brevity over completeness
 - Empty sections are fine; omit rather than pad
@@ -283,8 +286,12 @@ export class BlueprintGenerator {
 
   /**
    * Create a minimal blueprint for issues with no discussion from others.
+   * Derives metadata from context.comments so the footer reflects reality
+   * (the author may have posted follow-up comments).
    */
   private createMinimalPlan(context: IssueContext): ImplementationPlan {
+    const participants = new Set(context.comments.map((c) => c.author)).size;
+
     return {
       goal: context.title,
       plan: "",
@@ -292,8 +299,8 @@ export class BlueprintGenerator {
       outOfScope: [],
       openQuestions: [],
       metadata: {
-        commentCount: 0,
-        participantCount: 0,
+        commentCount: context.comments.length,
+        participantCount: participants,
       },
     };
   }

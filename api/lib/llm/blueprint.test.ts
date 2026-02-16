@@ -102,7 +102,7 @@ describe("BlueprintGenerator", () => {
       );
     });
 
-    it("should return minimal blueprint when all comments are from issue author", async () => {
+    it("should return minimal blueprint with accurate metadata when all comments are from issue author", async () => {
       const generator = new BlueprintGenerator({ logger: mockLogger });
       const context: IssueContext = {
         title: "Add dark mode support",
@@ -119,8 +119,8 @@ describe("BlueprintGenerator", () => {
       expect(result.success).toBe(true);
       if (result.success) {
         expect(result.plan.goal).toBe("Add dark mode support");
-        expect(result.plan.metadata.commentCount).toBe(0);
-        expect(result.plan.metadata.participantCount).toBe(0);
+        expect(result.plan.metadata.commentCount).toBe(2);
+        expect(result.plan.metadata.participantCount).toBe(1);
       }
     });
   });

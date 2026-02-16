@@ -298,6 +298,7 @@ describe("config", () => {
       expect(message).toContain("# 🐝 Voting Phase (HIGH PRIORITY)");
       expect(message).toContain("**high-priority**");
       expect(message).toContain("timely vote is appreciated");
+      expect(message).toContain("Multiple reactions from the same user will void your vote");
       expect(message).toContain(config.SIGNATURE);
     });
 
@@ -308,6 +309,7 @@ describe("config", () => {
       expect(message).toContain("# 🐝 Voting Phase (MEDIUM PRIORITY)");
       expect(message).toContain("**medium-priority**");
       expect(message).toContain("timely vote is appreciated");
+      expect(message).toContain("Multiple reactions from the same user will void your vote");
       expect(message).toContain(config.SIGNATURE);
     });
 
@@ -318,6 +320,7 @@ describe("config", () => {
       expect(message).toContain("# 🐝 Voting Phase (LOW PRIORITY)");
       expect(message).toContain("**low-priority**");
       expect(message).toContain("timely vote is appreciated");
+      expect(message).toContain("Multiple reactions from the same user will void your vote");
       expect(message).toContain(config.SIGNATURE);
     });
 

@@ -218,7 +218,7 @@ export class GovernanceService {
     try {
       const labels = await this.issues.getIssueLabels(ref);
       priority = getIssuePriority({ labels });
-    } catch (error) {
+    } catch {
       this.logger.debug(`Failed to fetch labels for issue #${ref.issueNumber}, continuing without priority`);
     }
 

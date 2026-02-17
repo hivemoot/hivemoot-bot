@@ -979,12 +979,20 @@ describe("executeCommand", () => {
 
     it("should paginate eyes reactions and skip when bot is found on later page", async () => {
       const octokit = createMockOctokit();
+      octokit.rest.issues.listComments.mockResolvedValue({
+        data: [
+          {
+            user: { login: "hivemoot[bot]" },
+            performed_via_github_app: { id: 12345, name: "Hivemoot" },
+          },
+        ],
+      });
       octokit.rest.reactions.listForIssueComment
         .mockResolvedValueOnce({
           data: Array.from({ length: 100 }, (_, i) => ({ user: { login: `human-${i}` } })),
         })
         .mockResolvedValueOnce({
-          data: [{ user: { login: "hivemoot-bot[bot]" } }],
+          data: [{ user: { login: "hivemoot[bot]" } }],
         });
 
       const ctx = createCtx({ octokit });

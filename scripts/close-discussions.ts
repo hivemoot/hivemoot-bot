@@ -443,7 +443,7 @@ export async function processIssuePhase(
 // ───────────────────────────────────────────────────────────────────────────────
 
 /**
- * Notify existing PRs that a linked issue has passed voting.
+ * Notify existing PRs that a linked issue is approved for implementation.
  *
  * Intentionally notification-only — does NOT auto-tag PRs with the
  * `implementation` label. PR authors must push a new commit after

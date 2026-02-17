@@ -368,6 +368,47 @@ describe("/squash command", () => {
     expect(body).toContain("stale head");
   });
 
+  it("blocks merge when branch refresh does not advance the head SHA", async () => {
+    vi.useFakeTimers();
+    const octokit = createMockOctokit();
+    let pullsGetCalls = 0;
+    octokit.rest.pulls.get.mockImplementation(async () => {
+      pullsGetCalls += 1;
+      if (pullsGetCalls === 2) {
+        return {
+          data: {
+            title: "Add merge helper",
+            body: "PR description",
+            mergeable_state: "behind",
+            head: { sha: "abc123" },
+          },
+        };
+      }
+      return {
+        data: {
+          title: "Add merge helper",
+          body: "PR description",
+          mergeable_state: "clean",
+          head: { sha: "abc123" },
+        },
+      };
+    });
+    const ctx = createPRCtx({ octokit });
+
+    const resultPromise = executeCommand(ctx);
+    await vi.runAllTimersAsync();
+    const result = await resultPromise;
+    vi.useRealTimers();
+
+    expect(result.status).toBe("rejected");
+    expect(octokit.rest.pulls.updateBranch).toHaveBeenCalledTimes(1);
+    expect(octokit.rest.pulls.merge).not.toHaveBeenCalled();
+    const body = (octokit.rest.issues.createComment.mock.calls[0][0] as { body: string }).body;
+    expect(body).toContain("Branch Refresh");
+    expect(body).toContain("head SHA did not advance");
+    expect(body).toContain("stale head");
+  });
+
   it("uses PR fallback commit body when generator returns an empty body", async () => {
     const { CommitMessageGenerator } = await import("../llm/commit-message.js");
     vi.mocked(CommitMessageGenerator).mockImplementationOnce(

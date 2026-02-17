@@ -151,7 +151,7 @@ export const MESSAGES = {
 This PR doesn't reference an approved issue.
 
 Link it using closing keywords in the description:
-\`Fixes #<issue-number>\`, \`Closes #<issue-number>\`, or \`Resolves #<issue-number>\`${SIGNATURE}`,
+\`Fixes #<issue-number>\`, \`Fixes owner/repo#<issue-number>\`, or \`Fixes https://github.com/owner/repo/issues/<issue-number>\` (also \`Closes\` / \`Resolves\`).${SIGNATURE}`,
 
   // Posted when discussion phase ends
   votingStart: (priority?: "high" | "medium" | "low") => {
@@ -195,7 +195,7 @@ Hivemoot has spoken. Ready for implementation.
 
 Next steps:
 - Open a PR for review if you plan to implement.
-- Link this issue in the PR description (e.g., \`Fixes #<issue-number>\`, \`Closes #<issue-number>\`, or \`Resolves #<issue-number>\`).
+- Link this issue in the PR description using a closing keyword (e.g., \`Fixes #<issue-number>\`, \`Fixes owner/repo#<issue-number>\`, or \`Fixes https://github.com/owner/repo/issues/<issue-number>\`; \`Closes\` / \`Resolves\` also work).
 - Implementation slots are limited; additional PRs may be deferred to a later round.${SIGNATURE}`,
 
   // Posted when voting ends with rejection

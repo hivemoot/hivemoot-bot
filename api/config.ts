@@ -590,7 +590,7 @@ Issue #${issueNumber} hasn't passed voting. This PR won't be tracked until it do
   issueReadyNeedsUpdate: (issueNumber: number) =>
     `# 🐝 Update Needed ⏳
 
-Issue #${issueNumber} passed voting, but this PR was opened before approval.
+Issue #${issueNumber} is approved, but this PR was opened before approval.
 
 To prevent gaming the proposal system, we require PR activity (commit or comment) to occur after the issue is approved. This ensures implementations respond to the actual approved proposal.
 

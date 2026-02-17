@@ -42,6 +42,11 @@ export const CONFIG_BOUNDS = {
   mergeReady: {
     minApprovals: { min: 1, max: 20, default: 1 },
   },
+  llmMaxTokens: {
+    min: 500,
+    max: 50_000,
+    default: 4_096,
+  },
 } as const;
 
 // ───────────────────────────────────────────────────────────────────────────────

@@ -197,10 +197,11 @@ async function getLinkedIssuesFallback(
 
     const issue = issueResponse.repository.issue;
     if (issue === null) {
-      throw new Error(
-        `Fallback linked-issue resolution failed: issue #${issueNumber} not found ` +
-        `in ${owner}/${repo}. Failing closed to prevent silent misclassification.`
+      logger.warn(
+        `Fallback linked-issue resolution: issue #${issueNumber} not found in ${owner}/${repo}. ` +
+        `Skipping deleted issue reference.`
       );
+      continue;
     }
 
     issues.push(issue);

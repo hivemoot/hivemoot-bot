@@ -220,7 +220,7 @@ describe("getLinkedIssues", () => {
     ).rejects.toThrow("Bad credentials");
   });
 
-  it("should fail closed when a fallback issue lookup returns null", async () => {
+  it("should skip deleted issues in fallback without throwing", async () => {
     vi.mocked(mockClient.graphql).mockImplementation(async (query: string) => {
       if (query.includes("closingIssuesReferences")) {
         throw new Error("Cannot query field 'closingIssuesReferences'");
@@ -240,9 +240,9 @@ describe("getLinkedIssues", () => {
       throw new Error("Unexpected query");
     });
 
-    await expect(
-      getLinkedIssues(mockClient, "owner", "repo", 1)
-    ).rejects.toThrow("Fallback linked-issue resolution failed: issue #999 not found");
+    const result = await getLinkedIssues(mockClient, "owner", "repo", 1);
+
+    expect(result).toEqual([]);
   });
 
   it("should return empty array when fallback PR has no body", async () => {

@@ -1515,7 +1515,7 @@ describe("IssueOperations", () => {
       });
     });
 
-    it("should filter out Queen bot comments (performed_via_github_app)", async () => {
+    it("should filter out Hivemoot bot comments (performed_via_github_app)", async () => {
       mockClient.paginate.iterator = vi.fn().mockReturnValue({
         async *[Symbol.asyncIterator]() {
           yield {

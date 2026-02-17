@@ -64,7 +64,7 @@ vi.mock("../../lib/index.js", async () => {
 });
 
 /**
- * Tests for Queen Bot webhook handlers
+ * Tests for Hivemoot Bot webhook handlers
  *
  * These tests verify:
  * 1. GovernanceService integration for issue handling
@@ -156,7 +156,7 @@ function createInstallationOctokit(options?: {
   };
 }
 
-describe("Queen Bot", () => {
+describe("Hivemoot Bot", () => {
   describe("Installation label bootstrap handlers", () => {
     it("should bootstrap labels from installation.created payload repositories", async () => {
       const { handlers } = createWebhookHarness();

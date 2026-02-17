@@ -598,6 +598,31 @@ describe("executeCommand", () => {
 
       expect(result.status).toBe("executed");
     });
+
+    it("should paginate eyes reactions and skip when bot is found on later page", async () => {
+      const octokit = createMockOctokit();
+      octokit.rest.reactions.listForIssueComment
+        .mockResolvedValueOnce({
+          data: Array.from({ length: 100 }, (_, i) => ({ user: { login: `human-${i}` } })),
+        })
+        .mockResolvedValueOnce({
+          data: [{ user: { login: "hivemoot-bot[bot]" } }],
+        });
+
+      const ctx = createCtx({ octokit });
+      const result = await executeCommand(ctx);
+
+      expect(result).toEqual({ status: "ignored" });
+      expect(octokit.rest.reactions.listForIssueComment).toHaveBeenCalledTimes(2);
+      expect(octokit.rest.reactions.listForIssueComment).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ per_page: 100, page: 1 }),
+      );
+      expect(octokit.rest.reactions.listForIssueComment).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ per_page: 100, page: 2 }),
+      );
+    });
   });
 
   describe("reply signature", () => {

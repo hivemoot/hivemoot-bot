@@ -1,8 +1,10 @@
 name: close-discussions
 
 on:
+  schedule:
+    - cron: "0,30 * * * *"  # Every 30 minutes
   workflow_dispatch:
-    # Manual trigger for testing (scheduled runs only on main hivemoot/hivemoot-bot repo)
+    # Manual trigger for testing
 
 # Prevent overlapping runs of this workflow
 concurrency:
@@ -13,6 +15,7 @@ jobs:
   close-discussions:
     name: Close Expired Discussions & Voting
     runs-on: ubuntu-latest
+    if: github.repository == 'hivemoot/hivemoot-bot'
 
     steps:
       - name: Checkout code

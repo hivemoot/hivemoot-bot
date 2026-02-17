@@ -1,8 +1,10 @@
 name: cleanup-stale-prs
 
 on:
+  schedule:
+    - cron: "10,40 * * * *"  # Every 30 minutes (staggered +10)
   workflow_dispatch:
-    # Manual trigger for testing (scheduled runs only on main hivemoot/hivemoot-bot repo)
+    # Manual trigger for testing
 
 # Prevent overlapping runs of this workflow
 concurrency:
@@ -13,6 +15,7 @@ jobs:
   cleanup-stale-prs:
     name: Cleanup Stale Implementation PRs
     runs-on: ubuntu-latest
+    if: github.repository == 'hivemoot/hivemoot-bot'
 
     steps:
       - name: Checkout code

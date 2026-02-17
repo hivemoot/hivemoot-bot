@@ -53,6 +53,7 @@ export interface CommandOctokit {
         comment_id: number;
         content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
         per_page?: number;
+        page?: number;
       }) => Promise<{ data: Array<{ user: { login: string } | null }> }>;
     };
     issues: {
@@ -312,20 +313,33 @@ async function alreadyProcessed(ctx: CommandContext): Promise<boolean> {
       return false;
     }
 
-    const { data: reactions } = await ctx.octokit.rest.reactions.listForIssueComment({
-      owner: ctx.owner,
-      repo: ctx.repo,
-      comment_id: ctx.commentId,
-      content: "eyes",
-      per_page: 100,
-    });
+    const perPage = 100;
+    let page = 1;
 
-    // Only skip if THIS app's bot left the eyes reaction
-    const processedByUs = reactions.some((r) => r.user?.login === botLogin);
-    if (processedByUs) {
-      ctx.log.info({ botLogin, reactionCount: reactions.length }, "Found our own eyes reaction — already processed");
+    while (true) {
+      const { data: reactions } = await ctx.octokit.rest.reactions.listForIssueComment({
+        owner: ctx.owner,
+        repo: ctx.repo,
+        comment_id: ctx.commentId,
+        content: "eyes",
+        per_page: perPage,
+        page,
+      });
+
+      // Only skip if THIS app's bot left the eyes reaction.
+      const processedByUs = reactions.some((r) => r.user?.login === botLogin);
+      if (processedByUs) {
+        ctx.log.info({ botLogin, reactionCount: reactions.length, page }, "Found our own eyes reaction — already processed");
+        return true;
+      }
+
+      // Last page reached.
+      if (reactions.length < perPage) {
+        return false;
+      }
+
+      page += 1;
     }
-    return processedByUs;
   } catch (error) {
     // If we can't check reactions, proceed with execution to avoid
     // silently dropping commands due to transient API failures.

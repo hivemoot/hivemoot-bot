@@ -11,6 +11,7 @@
 import {
   parseMetadata,
   isVotingComment,
+  isAlignmentComment,
   isHumanHelpComment,
   isNotificationComment,
   selectCurrentVotingComment,
@@ -47,6 +48,7 @@ export interface Reaction {
 export interface IssueCommentWithAuthor extends IssueComment {
   user?: { login: string; type?: string } | null;
   created_at?: string;
+  reactions?: { "+1"?: number; "-1"?: number };
 }
 
 /**
@@ -57,6 +59,7 @@ export interface IssueData {
   body?: string | null;
   user?: { login: string } | null;
   reactions?: { "+1": number; "-1": number; confused: number; eyes?: number };
+  labels?: Array<string | { name?: string }>;
 }
 
 export interface GitHubClient {
@@ -399,6 +402,33 @@ export class IssueOperations {
   }
 
   /**
+   * Find the canonical alignment comment on an issue.
+   *
+   * Returns the first alignment comment authored by this app, or null when absent.
+   */
+  async findAlignmentCommentId(ref: IssueRef): Promise<number | null> {
+    const iterator = this.client.paginate.iterator<IssueComment>(
+      this.client.rest.issues.listComments,
+      {
+        owner: ref.owner,
+        repo: ref.repo,
+        issue_number: ref.issueNumber,
+        per_page: 100,
+      }
+    );
+
+    for await (const { data: comments } of iterator) {
+      for (const comment of comments) {
+        if (isAlignmentComment(comment.body, this.appId, comment.performed_via_github_app?.id)) {
+          return comment.id;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
    * Check if a human help comment with a specific error code exists on an issue.
    * Used for idempotent error posting - avoids duplicate warnings.
    */
@@ -606,6 +636,19 @@ export class IssueOperations {
   }
 
   /**
+   * Get issue labels.
+   */
+  async getIssueLabels(ref: IssueRef): Promise<string[]> {
+    const { data } = await this.client.rest.issues.get({
+      owner: ref.owner,
+      repo: ref.repo,
+      issue_number: ref.issueNumber,
+    });
+
+    return (data.labels ?? []).map((label) => (typeof label === "string" ? label : label.name ?? ""));
+  }
+
+  /**
    * Get discussion comments for summarization.
    *
    * Filters out:
@@ -641,10 +684,17 @@ export class IssueOperations {
           continue;
         }
 
+        // GitHub REST API includes reactions in listComments responses by default
+        // (no special Accept header needed since the squirrel-girl preview graduated).
+        const thumbsUp = toReactionCount(comment.reactions?.["+1"]);
+        const thumbsDown = toReactionCount(comment.reactions?.["-1"]);
+        const hasReactions = thumbsUp > 0 || thumbsDown > 0;
+
         comments.push({
           author: comment.user.login,
           body: comment.body,
           createdAt: comment.created_at ?? new Date().toISOString(),
+          ...(hasReactions && { reactions: { thumbsUp, thumbsDown } }),
         });
       }
     }

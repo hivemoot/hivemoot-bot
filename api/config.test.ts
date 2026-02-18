@@ -141,7 +141,8 @@ describe("config", () => {
       const config = await import("./config.js");
 
       const labelNames = new Set(config.REQUIRED_REPOSITORY_LABELS.map((label) => label.name));
-      expect(labelNames).toEqual(new Set(Object.values(config.LABELS)));
+      const allLabels = new Set([...Object.values(config.LABELS), ...Object.values(config.PRIORITY_LABELS)]);
+      expect(labelNames).toEqual(allLabels);
 
       for (const label of config.REQUIRED_REPOSITORY_LABELS) {
         expect(label.color).toMatch(/^[0-9a-f]{6}$/);
@@ -274,6 +275,64 @@ describe("config", () => {
     });
   });
 
+  describe("MESSAGES.votingStart", () => {
+    it("should return basic voting message without priority", async () => {
+      const config = await import("./config.js");
+
+      const message = config.MESSAGES.votingStart();
+      expect(message).toContain("# 🐝 Voting Phase");
+      expect(message).not.toContain("PRIORITY");
+      expect(message).not.toContain("priority");
+      expect(message).toContain(SIGNATURES.VOTING);
+      expect(message).toContain("👍");
+      expect(message).toContain("👎");
+      expect(message).toContain("😕");
+      expect(message).toContain("👀");
+      expect(message).toContain(config.SIGNATURE);
+    });
+
+    it("should include HIGH PRIORITY header and reminder for high priority", async () => {
+      const config = await import("./config.js");
+
+      const message = config.MESSAGES.votingStart("high");
+      expect(message).toContain("# 🐝 Voting Phase (HIGH PRIORITY)");
+      expect(message).toContain("**high-priority**");
+      expect(message).toContain("timely vote is appreciated");
+      expect(message).toContain(config.SIGNATURE);
+    });
+
+    it("should include MEDIUM PRIORITY header and reminder for medium priority", async () => {
+      const config = await import("./config.js");
+
+      const message = config.MESSAGES.votingStart("medium");
+      expect(message).toContain("# 🐝 Voting Phase (MEDIUM PRIORITY)");
+      expect(message).toContain("**medium-priority**");
+      expect(message).toContain("timely vote is appreciated");
+      expect(message).toContain(config.SIGNATURE);
+    });
+
+    it("should include LOW PRIORITY header and reminder for low priority", async () => {
+      const config = await import("./config.js");
+
+      const message = config.MESSAGES.votingStart("low");
+      expect(message).toContain("# 🐝 Voting Phase (LOW PRIORITY)");
+      expect(message).toContain("**low-priority**");
+      expect(message).toContain("timely vote is appreciated");
+      expect(message).toContain(config.SIGNATURE);
+    });
+
+    it("should still include all voting reactions when priority is set", async () => {
+      const config = await import("./config.js");
+
+      const message = config.MESSAGES.votingStart("high");
+      expect(message).toContain("👍");
+      expect(message).toContain("👎");
+      expect(message).toContain("😕");
+      expect(message).toContain("👀");
+      expect(message).toContain(SIGNATURES.VOTING);
+    });
+  });
+
   describe("PR_MESSAGES", () => {
     it("should format issueNotReadyToImplement correctly", async () => {
       const config = await import("./config.js");
@@ -360,6 +419,32 @@ describe("config", () => {
       expect(message).toContain("Implementation PR");
       expect(message).toContain("#42");
       expect(message).toContain(config.SIGNATURE);
+    });
+
+    it("should include priority in IMPLEMENTATION_WELCOME when provided", async () => {
+      const config = await import("./config.js");
+
+      const highMessage = config.PR_MESSAGES.IMPLEMENTATION_WELCOME(42, "high");
+      expect(highMessage).toContain("# 🐝 Implementation PR (HIGH PRIORITY)");
+      expect(highMessage).toContain("**high-priority**");
+      expect(highMessage).toContain("timely implementation and review");
+
+      const mediumMessage = config.PR_MESSAGES.IMPLEMENTATION_WELCOME(42, "medium");
+      expect(mediumMessage).toContain("# 🐝 Implementation PR (MEDIUM PRIORITY)");
+      expect(mediumMessage).toContain("**medium-priority**");
+
+      const lowMessage = config.PR_MESSAGES.IMPLEMENTATION_WELCOME(42, "low");
+      expect(lowMessage).toContain("# 🐝 Implementation PR (LOW PRIORITY)");
+      expect(lowMessage).toContain("**low-priority**");
+    });
+
+    it("should not include priority in IMPLEMENTATION_WELCOME when not provided", async () => {
+      const config = await import("./config.js");
+
+      const message = config.PR_MESSAGES.IMPLEMENTATION_WELCOME(42);
+      expect(message).not.toContain("PRIORITY");
+      expect(message).not.toContain("priority");
+      expect(message).toContain("# 🐝 Implementation PR");
     });
 
     it("should embed notification metadata in issueNewPR", async () => {

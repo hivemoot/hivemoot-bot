@@ -142,6 +142,25 @@ describe("getLinkedIssues", () => {
     );
   });
 
+  it("should propagate GraphQL network errors to caller", async () => {
+    vi.mocked(mockClient.graphql).mockRejectedValue(
+      new Error("request to https://api.github.com/graphql failed, reason: connect ECONNRESET")
+    );
+
+    await expect(
+      getLinkedIssues(mockClient, "owner", "repo", 42)
+    ).rejects.toThrow("ECONNRESET");
+  });
+
+  it("should propagate rate limit errors to caller", async () => {
+    const rateLimitError = Object.assign(new Error("API rate limit exceeded"), { status: 403 });
+    vi.mocked(mockClient.graphql).mockRejectedValue(rateLimitError);
+
+    await expect(
+      getLinkedIssues(mockClient, "owner", "repo", 42)
+    ).rejects.toThrow("API rate limit exceeded");
+  });
+
   it("should handle issues with multiple labels", async () => {
     vi.mocked(mockClient.graphql).mockResolvedValue({
       repository: {
@@ -257,6 +276,16 @@ describe("getPRBodyLastEditedAt", () => {
       expect.stringContaining("getPRBodyLastEdited"),
       { owner: "test-owner", repo: "test-repo", pr: 123 }
     );
+  });
+
+  it("should propagate GraphQL network errors to caller", async () => {
+    vi.mocked(mockClient.graphql).mockRejectedValue(
+      new Error("request to https://api.github.com/graphql failed, reason: connect ECONNRESET")
+    );
+
+    await expect(
+      getPRBodyLastEditedAt(mockClient, "owner", "repo", 42)
+    ).rejects.toThrow("ECONNRESET");
   });
 });
 
@@ -1070,6 +1099,16 @@ describe("getOpenPRsForIssue", () => {
     await expect(
       getOpenPRsForIssue(mockClient, "owner", "repo", 123)
     ).rejects.toThrow("All 2 PR closing-syntax verification(s) failed");
+  });
+
+  it("should propagate errors from initial cross-reference query", async () => {
+    vi.mocked(mockClient.graphql).mockRejectedValue(
+      new Error("502 Bad Gateway")
+    );
+
+    await expect(
+      getOpenPRsForIssue(mockClient, "owner", "repo", 123)
+    ).rejects.toThrow("502 Bad Gateway");
   });
 
   it("should return empty when candidates exist but none close the issue", async () => {

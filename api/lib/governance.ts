@@ -34,6 +34,7 @@ import type {
   VotingOutcome,
   LockReason,
 } from "./types.js";
+import { getIssuePriority } from "./priority.js";
 
 /**
  * Configuration for GovernanceService
@@ -212,6 +213,15 @@ export class GovernanceService {
    * Falls back to generic message on any failure.
    */
   private async generateVotingMessage(ref: IssueRef): Promise<string> {
+    // Fetch labels first to extract priority
+    let priority: "high" | "medium" | "low" | undefined;
+    try {
+      const labels = await this.issues.getIssueLabels(ref);
+      priority = getIssuePriority({ labels });
+    } catch {
+      this.logger.debug(`Failed to fetch labels for issue #${ref.issueNumber}, continuing without priority`);
+    }
+
     // Validate LLM is fully configured (including API key) BEFORE any GitHub calls.
     // createModelFromEnv() returns null if provider/model not set, or throws if API key missing.
     let modelResult: ReturnType<typeof createModelFromEnv>;
@@ -223,14 +233,14 @@ export class GovernanceService {
       this.logger.debug(
         `LLM not fully configured for issue #${ref.issueNumber}: ${message}`,
       );
-      return MESSAGES.VOTING_START;
+      return MESSAGES.votingStart(priority);
     }
 
     if (!modelResult) {
       this.logger.debug(
         `LLM not configured, using generic voting message for issue #${ref.issueNumber}`,
       );
-      return MESSAGES.VOTING_START;
+      return MESSAGES.votingStart(priority);
     }
 
     try {
@@ -248,6 +258,7 @@ export class GovernanceService {
           context.title,
           SIGNATURE,
           SIGNATURES.VOTING,
+          priority,
         );
       }
 
@@ -255,14 +266,14 @@ export class GovernanceService {
       this.logger.debug(
         `Using generic voting message for issue #${ref.issueNumber}: ${result.reason}`,
       );
-      return MESSAGES.VOTING_START;
+      return MESSAGES.votingStart(priority);
     } catch (error) {
       // Any unexpected error, fail open with generic message
       const message = error instanceof Error ? error.message : String(error);
       this.logger.warn(
         `Failed to generate voting summary for issue #${ref.issueNumber}: ${message}. Using generic message.`,
       );
-      return MESSAGES.VOTING_START;
+      return MESSAGES.votingStart(priority);
     }
   }
 

@@ -165,6 +165,42 @@ describe("LLM Provider", () => {
       expect(negativeConfig?.maxTokens).toBe(4_096);
     });
 
+    it("should clamp LLM_MAX_TOKENS below minimum to minimum", () => {
+      process.env.LLM_PROVIDER = "anthropic";
+      process.env.LLM_MODEL = "claude-3-haiku";
+      process.env.LLM_MAX_TOKENS = "499";
+
+      const config = getLLMConfig();
+      expect(config?.maxTokens).toBe(500);
+    });
+
+    it("should clamp LLM_MAX_TOKENS above maximum to maximum", () => {
+      process.env.LLM_PROVIDER = "anthropic";
+      process.env.LLM_MODEL = "claude-3-haiku";
+      process.env.LLM_MAX_TOKENS = "50001";
+
+      const config = getLLMConfig();
+      expect(config?.maxTokens).toBe(32_768);
+    });
+
+    it("should allow LLM_MAX_TOKENS at exact minimum boundary", () => {
+      process.env.LLM_PROVIDER = "anthropic";
+      process.env.LLM_MODEL = "claude-3-haiku";
+      process.env.LLM_MAX_TOKENS = "500";
+
+      const config = getLLMConfig();
+      expect(config?.maxTokens).toBe(500);
+    });
+
+    it("should allow LLM_MAX_TOKENS at exact maximum boundary", () => {
+      process.env.LLM_PROVIDER = "anthropic";
+      process.env.LLM_MODEL = "claude-3-haiku";
+      process.env.LLM_MAX_TOKENS = "32768";
+
+      const config = getLLMConfig();
+      expect(config?.maxTokens).toBe(32_768);
+    });
+
   });
 
   describe("createModel", () => {

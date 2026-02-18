@@ -570,7 +570,7 @@ async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
   if (pr.merged || pr.state !== "open") {
     return { status: "rejected", reason: "This pull request is already closed or merged." };
   }
-  const expectedHeadSha = pr.headSha;
+  let mergeHeadSha = pr.headSha;
 
   const repoInfo = await octokit.rest.repos.get({ owner: ctx.owner, repo: ctx.repo });
   if (!repoInfo?.data?.allow_squash_merge) {
@@ -638,6 +638,21 @@ async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
     return { status: "rejected", reason: body };
   }
 
+  const refreshedHead = await refreshHeadIfBehindBase(ctx, mergeHeadSha);
+  if (!refreshedHead.success) {
+    body += `### Branch Refresh\n\n`;
+    body += `${refreshedHead.reason}\n\n`;
+    body += `Squash merge was blocked to avoid merging a stale head.`;
+    return { status: "rejected", reason: body };
+  }
+  if (refreshedHead.updated) {
+    mergeHeadSha = refreshedHead.headSha;
+    body += "### Branch Refresh\n\n";
+    body += `Branch was behind base and refreshed to \`${mergeHeadSha}\`. Running final checks on the updated head.\n\n`;
+  } else {
+    mergeHeadSha = refreshedHead.headSha;
+  }
+
   const freshPreflight = await evaluatePreflightChecks({
     prs,
     ref,
@@ -657,7 +672,7 @@ async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
       owner: ctx.owner,
       repo: ctx.repo,
       pull_number: ctx.issueNumber,
-      sha: expectedHeadSha,
+      sha: mergeHeadSha,
       merge_method: "squash",
       commit_title: commitTitle,
       commit_message: commitBody,

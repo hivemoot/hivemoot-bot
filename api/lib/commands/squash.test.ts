@@ -86,8 +86,14 @@ function createMockOctokit(permission = "admin") {
       },
       pulls: {
         get: vi.fn().mockResolvedValue({
-          data: { title: "Add merge helper", body: "PR description" },
+          data: {
+            title: "Add merge helper",
+            body: "PR description",
+            mergeable_state: "clean",
+            head: { sha: "abc123" },
+          },
         }),
+        updateBranch: vi.fn().mockResolvedValue({}),
         listCommits: vi.fn().mockResolvedValue({
           data: [{ commit: { message: "initial commit" } }],
         }),

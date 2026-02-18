@@ -579,7 +579,7 @@ describe("close-discussions script", () => {
     const issueNumber = 42;
 
     beforeEach(() => {
-      // Freeze time so metadata timestamps in issueVotingPassed are deterministic
+      // Freeze time so metadata timestamps in issueReadyToImplement are deterministic
       vi.useFakeTimers();
       vi.setSystemTime(new Date("2024-01-20T12:00:00.000Z"));
       vi.clearAllMocks();
@@ -602,11 +602,11 @@ describe("close-discussions script", () => {
       expect(mockComment).toHaveBeenCalledTimes(2);
       expect(mockComment).toHaveBeenCalledWith(
         { owner, repo, prNumber: 10 },
-        PR_MESSAGES.issueVotingPassed(issueNumber, "agent-alice")
+        PR_MESSAGES.issueReadyToImplement(issueNumber, "agent-alice")
       );
       expect(mockComment).toHaveBeenCalledWith(
         { owner, repo, prNumber: 20 },
-        PR_MESSAGES.issueVotingPassed(issueNumber, "agent-bob")
+        PR_MESSAGES.issueReadyToImplement(issueNumber, "agent-bob")
       );
     });
 
@@ -624,7 +624,7 @@ describe("close-discussions script", () => {
       expect(mockComment).toHaveBeenCalledTimes(1);
       expect(mockComment).toHaveBeenCalledWith(
         { owner, repo, prNumber: 20 },
-        PR_MESSAGES.issueVotingPassed(issueNumber, "agent-bob")
+        PR_MESSAGES.issueReadyToImplement(issueNumber, "agent-bob")
       );
     });
 
@@ -665,11 +665,11 @@ describe("close-discussions script", () => {
       expect(mockComment).toHaveBeenCalledTimes(1);
       expect(mockComment).toHaveBeenCalledWith(
         { owner, repo, prNumber: 20 },
-        PR_MESSAGES.issueVotingPassed(issueNumber, "agent-bob")
+        PR_MESSAGES.issueReadyToImplement(issueNumber, "agent-bob")
       );
     });
 
-    it("should use issueVotingPassed message, not issueReadyNeedsUpdate", async () => {
+    it("should use issueReadyToImplement message, not issueReadyNeedsUpdate", async () => {
       mockGetOpenPRsForIssue.mockResolvedValue([
         { number: 10, title: "My PR", state: "OPEN", author: { login: "agent-alice" } },
       ]);
@@ -677,8 +677,8 @@ describe("close-discussions script", () => {
       await notifyPendingPRs(fakeOctokit, appId, owner, repo, issueNumber);
 
       const commentBody = mockComment.mock.calls[0][1] as string;
-      // issueVotingPassed includes "passed voting"
-      expect(commentBody).toContain("passed voting");
+      // issueReadyToImplement includes "is ready for implementation"
+      expect(commentBody).toContain("is ready for implementation");
       // issueReadyNeedsUpdate includes "opened before approval" — should NOT appear
       expect(commentBody).not.toContain("opened before approval");
     });

@@ -2,7 +2,7 @@
  * Scheduled PR Notification Reconciliation
  *
  * Catches missed PR notifications by sweeping all hivemoot:ready-to-implement
- * issues and posting voting-passed notifications to un-notified PRs.
+ * issues and posting ready-to-implement notifications to un-notified PRs.
  *
  * Covers two gaps:
  * 1. Backfill — Issues already in ready-to-implement before the live trigger deployed
@@ -35,10 +35,13 @@ import type { PROperations } from "../api/lib/pr-operations.js";
 import type { IssueOperations } from "../api/lib/github-client.js";
 
 /**
- * Legacy signature for pre-metadata voting-passed notifications.
- * Must stay in sync with the phrasing in PR_MESSAGES.issueVotingPassed.
+ * Legacy/plaintext signatures for pre-metadata ready notifications.
+ * Keep both old and new phrasing for backward compatibility in fallback detection.
  */
-const VOTING_PASSED_LEGACY_SIGNATURE = "passed voting and is ready for implementation";
+const READY_TO_IMPLEMENT_LEGACY_SIGNATURES = [
+  "passed voting and is ready for implementation",
+  "is ready for implementation!\n\nPush a new commit or add a comment to activate it for implementation tracking.",
+] as const;
 
 /**
  * Parse all "Issue #N" tokens and require exact numeric equality.
@@ -84,10 +87,11 @@ export async function hasVotingPassedNotification(
   // These contain the legacy signature + "Issue #N".
   // We scan comment bodies to detect them without requiring metadata.
   for (const comment of comments) {
+    const body = comment.body;
     if (
-      comment.body &&
-      comment.body.includes(VOTING_PASSED_LEGACY_SIGNATURE) &&
-      hasLegacyIssueNumberMatch(comment.body, issueNumber)
+      body &&
+      READY_TO_IMPLEMENT_LEGACY_SIGNATURES.some((signature) => body.includes(signature)) &&
+      hasLegacyIssueNumberMatch(body, issueNumber)
     ) {
       return true;
     }
@@ -138,7 +142,7 @@ export async function reconcileIssue(
     if (!alreadyNotified) {
       await prs.comment(
         ref,
-        PR_MESSAGES.issueVotingPassed(issueNumber, linkedPR.author.login)
+        PR_MESSAGES.issueReadyToImplement(issueNumber, linkedPR.author.login)
       );
       logger.info(`Reconciled: notified PR #${linkedPR.number} (@${linkedPR.author.login}) that issue #${issueNumber} is ready`);
       notified++;

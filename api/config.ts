@@ -628,15 +628,15 @@ ${prNumbers.length} competing implementations: ${prNumbers.map((n) => `#${n}`).j
 Review and approve the best one.${SIGNATURE}`,
 
   /**
-   * Posted to existing PRs when their linked issue passes voting.
+   * Posted to existing PRs when their linked issue is ready to implement.
    * Notifies the PR author to push an update so the PR can be considered.
    * Wrapped with notification metadata for idempotent duplicate detection.
    */
-  issueVotingPassed: (issueNumber: number, prAuthor: string) =>
+  issueReadyToImplement: (issueNumber: number, prAuthor: string) =>
     buildNotificationComment(
       `# 🐝 Issue #${issueNumber} Ready to Implement ✅
 
-Good news @${prAuthor} — Issue #${issueNumber} passed voting and is ready for implementation!
+Good news @${prAuthor} — Issue #${issueNumber} is ready for implementation!
 
 Push a new commit or add a comment to activate it for implementation tracking.${SIGNATURE}`,
       issueNumber,

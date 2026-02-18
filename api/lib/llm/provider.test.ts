@@ -180,7 +180,7 @@ describe("LLM Provider", () => {
       process.env.LLM_MAX_TOKENS = "50001";
 
       const config = getLLMConfig();
-      expect(config?.maxTokens).toBe(50_000);
+      expect(config?.maxTokens).toBe(32_768);
     });
 
     it("should allow LLM_MAX_TOKENS at exact minimum boundary", () => {
@@ -195,10 +195,10 @@ describe("LLM Provider", () => {
     it("should allow LLM_MAX_TOKENS at exact maximum boundary", () => {
       process.env.LLM_PROVIDER = "anthropic";
       process.env.LLM_MODEL = "claude-3-haiku";
-      process.env.LLM_MAX_TOKENS = "50000";
+      process.env.LLM_MAX_TOKENS = "32768";
 
       const config = getLLMConfig();
-      expect(config?.maxTokens).toBe(50_000);
+      expect(config?.maxTokens).toBe(32_768);
     });
 
   });

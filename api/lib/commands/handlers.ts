@@ -102,6 +102,16 @@ export type CommandResult =
 const AUTHORIZED_PERMISSIONS = new Set(["admin", "maintain", "write"]);
 const BRANCH_REFRESH_MAX_POLLS = 10;
 const BRANCH_REFRESH_POLL_INTERVAL_MS = 3000;
+const MERGEABLE_STATE_RESOLUTION_MAX_POLLS = 10;
+const MERGEABLE_STATE_RESOLUTION_INTERVAL_MS = 1500;
+const RESOLVED_MERGEABLE_STATES = new Set([
+  "behind",
+  "clean",
+  "dirty",
+  "blocked",
+  "unstable",
+  "has_hooks",
+]);
 
 /**
  * Check if the sender has sufficient repo permissions to run commands.
@@ -684,20 +694,50 @@ type BranchRefreshResult =
   | { success: true; updated: boolean; headSha: string }
   | { success: false; reason: string };
 
+async function resolveMergeability(
+  ctx: CommandContext,
+): Promise<{ resolved: true; mergeableState: string; headSha: string } | { resolved: false; headSha: string }> {
+  const octokit = ctx.octokit as any; // Full Probot client at runtime
+  let latestHeadSha = "";
+
+  for (let attempt = 0; attempt < MERGEABLE_STATE_RESOLUTION_MAX_POLLS; attempt++) {
+    const pull = await octokit.rest.pulls.get({
+      owner: ctx.owner,
+      repo: ctx.repo,
+      pull_number: ctx.issueNumber,
+    });
+    const mergeableState = pull?.data?.mergeable_state;
+    latestHeadSha = pull?.data?.head?.sha ?? latestHeadSha;
+
+    if (typeof mergeableState === "string" && RESOLVED_MERGEABLE_STATES.has(mergeableState)) {
+      return { resolved: true, mergeableState, headSha: latestHeadSha };
+    }
+
+    if (attempt < MERGEABLE_STATE_RESOLUTION_MAX_POLLS - 1) {
+      await new Promise((resolve) => setTimeout(resolve, MERGEABLE_STATE_RESOLUTION_INTERVAL_MS));
+    }
+  }
+
+  return { resolved: false, headSha: latestHeadSha };
+}
+
 async function refreshHeadIfBehindBase(
   ctx: CommandContext,
   currentHeadSha: string,
 ): Promise<BranchRefreshResult> {
   const octokit = ctx.octokit as any; // Full Probot client at runtime
 
-  const pull = await octokit.rest.pulls.get({
-    owner: ctx.owner,
-    repo: ctx.repo,
-    pull_number: ctx.issueNumber,
-  });
-  const mergeableState = pull?.data?.mergeable_state;
-  const baselineSha = pull?.data?.head?.sha ?? currentHeadSha;
-  if (mergeableState !== "behind") {
+  const resolvedMergeability = await resolveMergeability(ctx);
+  const baselineSha = resolvedMergeability.headSha || currentHeadSha;
+
+  if (!resolvedMergeability.resolved) {
+    return {
+      success: false,
+      reason: "Couldn't determine mergeability state yet (GitHub is still calculating). Retry `/squash` shortly to avoid merging a stale head.",
+    };
+  }
+
+  if (resolvedMergeability.mergeableState !== "behind") {
     return { success: true, updated: false, headSha: baselineSha };
   }
 

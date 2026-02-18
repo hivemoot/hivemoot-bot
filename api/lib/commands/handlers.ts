@@ -100,6 +100,18 @@ export type CommandResult =
  * Per issue #81: "only repo maintainers should use these commands"
  */
 const AUTHORIZED_PERMISSIONS = new Set(["admin", "maintain", "write"]);
+const BRANCH_REFRESH_MAX_POLLS = 10;
+const BRANCH_REFRESH_POLL_INTERVAL_MS = 3000;
+const MERGEABLE_STATE_MAX_POLLS = 5;
+const MERGEABLE_STATE_POLL_INTERVAL_MS = 1500;
+const RESOLVED_MERGEABLE_STATES = new Set([
+  "behind",
+  "clean",
+  "dirty",
+  "blocked",
+  "unstable",
+  "has_hooks",
+]);
 
 /**
  * Check if the sender has sufficient repo permissions to run commands.
@@ -663,6 +675,94 @@ async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
   return { status: "executed", message: "Squash merge completed." };
 }
 
+type BranchRefreshResult =
+  | { success: true; updated: boolean; headSha: string }
+  | { success: false; reason: string };
+
+async function refreshHeadIfBehindBase(
+  ctx: CommandContext,
+  currentHeadSha: string,
+): Promise<BranchRefreshResult> {
+  const octokit = ctx.octokit as any; // Full Probot client at runtime
+
+  let mergeableState: string | null = null;
+  let baselineSha = currentHeadSha;
+  for (let attempt = 0; attempt < MERGEABLE_STATE_MAX_POLLS; attempt++) {
+    let pull: { data?: { mergeable_state?: string | null; head?: { sha?: string } } } | undefined;
+    try {
+      pull = await octokit.rest.pulls.get({
+        owner: ctx.owner,
+        repo: ctx.repo,
+        pull_number: ctx.issueNumber,
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      ctx.log.error({ err: error }, `Failed to fetch PR mergeability for /squash: ${reason}`);
+      return {
+        success: false,
+        reason: "Unable to determine branch mergeability. Wait a moment and retry `/squash`.",
+      };
+    }
+
+    mergeableState = pull?.data?.mergeable_state ?? null;
+    baselineSha = pull?.data?.head?.sha ?? baselineSha;
+    if (mergeableState && RESOLVED_MERGEABLE_STATES.has(mergeableState)) {
+      break;
+    }
+
+    if (attempt < MERGEABLE_STATE_MAX_POLLS - 1) {
+      await new Promise((resolve) => setTimeout(resolve, MERGEABLE_STATE_POLL_INTERVAL_MS));
+    }
+  }
+
+  if (!mergeableState || !RESOLVED_MERGEABLE_STATES.has(mergeableState)) {
+    return {
+      success: false,
+      reason: "GitHub mergeability is still recalculating for this PR. Wait for checks to settle, then retry `/squash`.",
+    };
+  }
+
+  if (mergeableState !== "behind") {
+    return { success: true, updated: false, headSha: baselineSha };
+  }
+
+  try {
+    await octokit.rest.pulls.updateBranch({
+      owner: ctx.owner,
+      repo: ctx.repo,
+      pull_number: ctx.issueNumber,
+      expected_head_sha: baselineSha,
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    ctx.log.error({ err: error }, `Failed to refresh stale branch for /squash: ${reason}`);
+    return {
+      success: false,
+      reason: "Branch is behind base and couldn't be refreshed automatically. Rebase/update the branch, wait for CI, then retry `/squash`.",
+    };
+  }
+
+  for (let attempt = 0; attempt < BRANCH_REFRESH_MAX_POLLS; attempt++) {
+    const refreshed = await octokit.rest.pulls.get({
+      owner: ctx.owner,
+      repo: ctx.repo,
+      pull_number: ctx.issueNumber,
+    });
+    const refreshedSha = refreshed?.data?.head?.sha ?? baselineSha;
+    if (refreshedSha !== baselineSha) {
+      return { success: true, updated: true, headSha: refreshedSha };
+    }
+
+    if (attempt < BRANCH_REFRESH_MAX_POLLS - 1) {
+      await new Promise((resolve) => setTimeout(resolve, BRANCH_REFRESH_POLL_INTERVAL_MS));
+    }
+  }
+
+  return {
+    success: false,
+    reason: "Branch refresh started but the head SHA did not advance yet. Wait for the update and CI to finish, then retry `/squash`.",
+  };
+}
 /**
  * Format a single preflight check item as a markdown line.
  */

@@ -40,7 +40,7 @@ import type { IssueOperations } from "../api/lib/github-client.js";
  */
 const READY_TO_IMPLEMENT_LEGACY_SIGNATURES = [
   "passed voting and is ready for implementation",
-  "is ready for implementation",
+  "is ready for implementation!\n\nPush a new commit or add a comment to activate it for implementation tracking.",
 ];
 
 /**

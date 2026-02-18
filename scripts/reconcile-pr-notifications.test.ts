@@ -160,6 +160,20 @@ describe("reconcile-pr-notifications", () => {
       expect(result).toBe(true);
     });
 
+    it("should return true when generic ready wording matches (fallback)", async () => {
+      mockHasNotificationCommentInComments.mockReturnValue(false);
+      mockListCommentsWithBody.mockResolvedValue([
+        {
+          id: 1,
+          body: "# 🐝 Issue #42 Ready to Implement ✅\n\nGood news @agent — Issue #42 is ready for implementation!\n\nPush a new commit or add a comment to activate it for implementation tracking.",
+        },
+      ]);
+
+      const result = await hasReadyToImplementNotification(mockPRs, ref, 42);
+
+      expect(result).toBe(true);
+    });
+
     it("should return false when no matching comments exist", async () => {
       mockHasNotificationCommentInComments.mockReturnValue(false);
       mockListCommentsWithBody.mockResolvedValue([]);

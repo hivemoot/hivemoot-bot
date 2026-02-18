@@ -41,6 +41,7 @@ import type {
 } from "../api/lib/index.js";
 import type { IssueOperations } from "../api/lib/github-client.js";
 import type { GovernanceService } from "../api/lib/governance.js";
+import type { InstallationContext } from "./shared/run-installations.js";
 
 /**
  * Represents an issue that was skipped due to missing voting comment.
@@ -59,6 +60,17 @@ interface AccessIssue {
   issueNumber: number;
   status?: number;
   reason: AccessIssueReason;
+}
+
+function createIssueRef(
+  owner: string,
+  repoName: string,
+  issueNumber: number,
+  installationId?: number
+): IssueRef {
+  return installationId !== undefined
+    ? { owner, repo: repoName, issueNumber, installationId }
+    : { owner, repo: repoName, issueNumber };
 }
 
 /**
@@ -558,6 +570,7 @@ export async function reconcileMissingVotingComments(
   owner: string,
   repoName: string,
   governance: GovernanceService,
+  installationId?: number,
 ): Promise<number> {
   let reconciledCount = 0;
   const seen = new Set<number>();
@@ -573,7 +586,7 @@ export async function reconcileMissingVotingComments(
         if ('pull_request' in issue) continue;
         if (seen.has(issue.number)) continue;
         seen.add(issue.number);
-        const ref: IssueRef = { owner, repo: repoName, issueNumber: issue.number };
+        const ref = createIssueRef(owner, repoName, issue.number, installationId);
         try {
           const result = await governance.postVotingComment(ref);
           if (result === "posted") {
@@ -618,6 +631,7 @@ async function processPhaseIssues(
   octokit: InstanceType<typeof Octokit>,
   owner: string,
   repoName: string,
+  installationId: number | undefined,
   issues: IssueOperations,
   governance: GovernanceService,
   phase: PhaseConfig,
@@ -644,7 +658,7 @@ async function processPhaseIssues(
         }
         if (seen.has(issue.number)) continue;
         seen.add(issue.number);
-        const ref: IssueRef = { owner, repo: repoName, issueNumber: issue.number };
+        const ref = createIssueRef(owner, repoName, issue.number, installationId);
         await processIssuePhase(
           issues,
           governance,
@@ -673,10 +687,12 @@ async function processPhaseIssues(
 export async function processRepository(
   octokit: InstanceType<typeof Octokit>,
   repo: Repository,
-  appId: number
+  appId: number,
+  installation?: InstallationContext
 ): Promise<{ skippedIssues: SkippedIssue[]; accessIssues: AccessIssue[] }> {
   const owner = repo.owner.login;
   const repoName = repo.name;
+  const installationId = installation?.installationId;
   const skippedIssues: SkippedIssue[] = [];
   const accessIssues: AccessIssue[] = [];
 
@@ -691,7 +707,13 @@ export async function processRepository(
     // ── Reconciliation (always runs, even for manual-only repos) ──
     // Best-effort: do not let reconciliation failures block phase transitions.
     try {
-      const reconciled = await reconcileMissingVotingComments(octokit, owner, repoName, governance);
+      const reconciled = await reconcileMissingVotingComments(
+        octokit,
+        owner,
+        repoName,
+        governance,
+        installationId
+      );
       if (reconciled > 0) {
         logger.info(`[${repo.full_name}] Reconciled ${reconciled} missing voting comment(s)`);
       }
@@ -827,7 +849,7 @@ export async function processRepository(
 
     for (const phase of phases) {
       await processPhaseIssues(
-        octokit, owner, repoName, issues, governance, phase, trackAccessIssue
+        octokit, owner, repoName, installationId, issues, governance, phase, trackAccessIssue
       );
     }
 

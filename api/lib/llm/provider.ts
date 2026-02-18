@@ -21,6 +21,7 @@ import type { LanguageModelV1 } from "ai";
 
 import type { LLMConfig, LLMProvider, LLMReadiness } from "./types.js";
 import { LLM_DEFAULTS } from "./types.js";
+import { CONFIG_BOUNDS } from "../../config.js";
 
 // ───────────────────────────────────────────────────────────────────────────────
 // Environment Parsing
@@ -88,7 +89,8 @@ function parseRequestedMaxTokensFromEnv(): number {
   const hasExplicitPositiveValue = Number.isFinite(parsedMaxTokens) && parsedMaxTokens > 0;
 
   if (hasExplicitPositiveValue) {
-    return parsedMaxTokens;
+    const { min, max } = CONFIG_BOUNDS.llmMaxTokens;
+    return Math.max(min, Math.min(max, parsedMaxTokens));
   }
 
   return LLM_DEFAULTS.maxTokens;

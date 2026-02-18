@@ -275,8 +275,12 @@ export function app(probotApp: Probot): void {
       );
       const issueWelcomeMessage =
         hasAutomaticDiscussion ? MESSAGES.ISSUE_WELCOME_VOTING : MESSAGES.ISSUE_WELCOME_MANUAL;
+      const installationId = context.payload.installation?.id;
 
-      await governance.startDiscussion({ owner, repo, issueNumber: number }, issueWelcomeMessage);
+      await governance.startDiscussion(
+        { owner, repo, issueNumber: number, installationId },
+        issueWelcomeMessage
+      );
     } catch (error) {
       context.log.error({ err: error, issue: number, repo: fullName }, "Failed to process issue");
       throw error;
@@ -493,6 +497,7 @@ export function app(probotApp: Probot): void {
           owner,
           repo,
           issueNumber: issue.number,
+          installationId: context.payload.installation?.id,
           commentId: comment.id,
           senderLogin: comment.user.login,
           verb: parsed.verb,
@@ -893,8 +898,9 @@ export function app(probotApp: Probot): void {
       const appId = getAppId();
       const issues = createIssueOperations(context.octokit, { appId });
       const governance = createGovernanceService(issues);
+      const installationId = context.payload.installation?.id;
       const result = await governance.postVotingComment({
-        owner, repo, issueNumber: issue.number,
+        owner, repo, issueNumber: issue.number, installationId,
       });
       context.log.info(`Voting comment for issue #${issue.number}: ${result}`);
     } catch (error) {

@@ -70,6 +70,7 @@ export interface CommandContext {
   owner: string;
   repo: string;
   issueNumber: number;
+  installationId?: number;
   commentId: number;
   senderLogin: string;
   verb: string;
@@ -243,7 +244,12 @@ async function handleVote(ctx: CommandContext): Promise<CommandResult> {
     return { status: "rejected", reason: "This issue is not in the discussion phase. The `/vote` command requires `hivemoot:discussion`." };
   }
 
-  const ref: IssueRef = { owner: ctx.owner, repo: ctx.repo, issueNumber: ctx.issueNumber };
+  const ref: IssueRef = {
+    owner: ctx.owner,
+    repo: ctx.repo,
+    issueNumber: ctx.issueNumber,
+    installationId: ctx.installationId,
+  };
   const issues = createIssueOperations(ctx.octokit, { appId: ctx.appId });
   const governance = createGovernanceService(issues);
 
@@ -271,7 +277,12 @@ async function handleImplement(ctx: CommandContext): Promise<CommandResult> {
     return { status: "rejected", reason: "This issue has been rejected." };
   }
 
-  const ref: IssueRef = { owner: ctx.owner, repo: ctx.repo, issueNumber: ctx.issueNumber };
+  const ref: IssueRef = {
+    owner: ctx.owner,
+    repo: ctx.repo,
+    issueNumber: ctx.issueNumber,
+    installationId: ctx.installationId,
+  };
   const issues = createIssueOperations(ctx.octokit, { appId: ctx.appId });
 
   // Determine which phase label to remove
@@ -394,7 +405,12 @@ async function handleGather(ctx: CommandContext): Promise<CommandResult> {
     };
   }
 
-  const ref: IssueRef = { owner: ctx.owner, repo: ctx.repo, issueNumber: ctx.issueNumber };
+  const ref: IssueRef = {
+    owner: ctx.owner,
+    repo: ctx.repo,
+    issueNumber: ctx.issueNumber,
+    installationId: ctx.installationId,
+  };
   const issues = createIssueOperations(ctx.octokit, { appId: ctx.appId });
   const existingAlignmentCommentId = await issues.findAlignmentCommentId(ref);
 
@@ -458,7 +474,12 @@ async function handlePreflight(ctx: CommandContext): Promise<CommandResult> {
   const prs = createPROperations(octokit, { appId: ctx.appId });
   const repoConfig = await loadRepositoryConfig(octokit, ctx.owner, ctx.repo);
 
-  const ref: PRRef = { owner: ctx.owner, repo: ctx.repo, prNumber: ctx.issueNumber };
+  const ref: PRRef = {
+    owner: ctx.owner,
+    repo: ctx.repo,
+    prNumber: ctx.issueNumber,
+    installationId: ctx.installationId,
+  };
   const currentLabels = ctx.issueLabels.map(l => l.name);
 
   // Run shared preflight checks (same signals as merge-ready label)
@@ -563,7 +584,12 @@ async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
   const octokit = ctx.octokit as any; // Full Probot client at runtime
   const prs = createPROperations(octokit, { appId: ctx.appId });
   const repoConfig = await loadRepositoryConfig(octokit, ctx.owner, ctx.repo);
-  const ref: PRRef = { owner: ctx.owner, repo: ctx.repo, prNumber: ctx.issueNumber };
+  const ref: PRRef = {
+    owner: ctx.owner,
+    repo: ctx.repo,
+    prNumber: ctx.issueNumber,
+    installationId: ctx.installationId,
+  };
   const currentLabels = ctx.issueLabels.map((l) => l.name);
 
   const pr = await prs.get(ref);

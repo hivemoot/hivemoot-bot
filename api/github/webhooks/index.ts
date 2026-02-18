@@ -597,8 +597,8 @@ export function app(probotApp: Probot): void {
         for (const competingPR of competingPRs) {
           if (competingPR.number !== number) {
             const prRef = { owner, repo, prNumber: competingPR.number };
-            await prs.comment(prRef, PR_MESSAGES.prSuperseded(number));
             await prs.close(prRef);
+            await prs.comment(prRef, PR_MESSAGES.prSuperseded(number));
             await prs.removeGovernanceLabels(prRef);
             context.log.info(`Closed competing PR #${competingPR.number}`);
           }

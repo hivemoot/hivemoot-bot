@@ -50,7 +50,8 @@ Run all checks before opening or updating a PR.
 
 - Governance state is GitHub-native (labels/comments/reactions), not a separate database.
 - Webhook paths must remain idempotent under GitHub redelivery.
-- Implementation PR linking only counts closing keywords: `Fixes #N`, `Closes #N`, `Resolves #N`.
+- Implementation PR linking requires closing-keyword references parsed by `api/lib/closing-keywords.ts`.
+  Canonical examples: `Fixes #N`, `Closes #N`, `Resolves #N` (other close/fix/resolve variants, same-repo URLs, and `owner/repo#N` are also supported).
 - LLM features are optional; core governance behavior must work without LLM configuration.
 - Per-repo policy comes from `.github/hivemoot.yml` with global defaults/bounds in `api/config.ts`.
 
@@ -90,3 +91,9 @@ PR checks are expected to include:
 ## Contribution pointer
 
 Read `CONTRIBUTING.md` before opening a PR, and only implement issues labeled `hivemoot:ready-to-implement`.
+
+This repository uses a fork-based PR flow:
+
+1. Fork `hivemoot/hivemoot-bot`.
+2. Push your branch to your fork.
+3. Open a PR from `YOUR_GITHUB_LOGIN:branch` into `hivemoot/hivemoot-bot:main`.

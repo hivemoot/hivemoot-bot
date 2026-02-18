@@ -16,6 +16,15 @@ import { getAppConfig } from "../../api/lib/env-validation.js";
 import type { Repository } from "../../api/lib/index.js";
 
 /**
+ * Installation context passed to per-repository script handlers.
+ * Enables installation-scoped logic (for example, BYOK routing) in scheduled jobs.
+ */
+export interface InstallationContext {
+  installationId: number;
+  installationLogin: string | null;
+}
+
+/**
  * Configuration for the shared script runner.
  */
 export interface RunnerConfig<TResult = void> {
@@ -27,7 +36,8 @@ export interface RunnerConfig<TResult = void> {
   processRepository: (
     octokit: InstanceType<typeof Octokit>,
     repo: Repository,
-    appId: number
+    appId: number,
+    installation: InstallationContext
   ) => Promise<TResult>;
   /** Called after all repos processed, before error handling. Use for aggregate reporting. */
   afterAll?: (context: {
@@ -79,6 +89,10 @@ export async function runForAllRepositories<TResult = void>(
 
     try {
       const octokit = await app.getInstallationOctokit(installation.id);
+      const installationContext: InstallationContext = {
+        installationId: installation.id,
+        installationLogin: installation.account?.login ?? null,
+      };
 
       const repos = await octokit.paginate(
         octokit.rest.apps.listReposAccessibleToInstallation,
@@ -87,7 +101,12 @@ export async function runForAllRepositories<TResult = void>(
 
       for (const repo of repos as Repository[]) {
         try {
-          const result = await config.processRepository(octokit, repo, appConfig.appId);
+          const result = await config.processRepository(
+            octokit,
+            repo,
+            appConfig.appId,
+            installationContext
+          );
           results.push({ repo: repo.full_name, result });
         } catch (error) {
           hasErrors = true;

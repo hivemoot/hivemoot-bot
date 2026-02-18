@@ -126,6 +126,43 @@ describe("run-installations shared runner", () => {
     );
   });
 
+  it("passes installation context to each repository callback", async () => {
+    setupAppMock({
+      installations: [
+        { id: 1, account: { login: "org-one" } },
+        { id: 2, account: { login: "org-two" } },
+      ],
+      installationRepos: {
+        1: [{ full_name: "org-one/repo-a", owner: { login: "org-one" }, name: "repo-a" }],
+        2: [{ full_name: "org-two/repo-b", owner: { login: "org-two" }, name: "repo-b" }],
+      },
+    });
+
+    const processRepository = vi.fn(
+      async (
+        _octokit: unknown,
+        _repo: MockRepo,
+        _appId: number,
+        _installation: { installationId: number; installationLogin: string | null }
+      ) => undefined
+    );
+
+    await runForAllRepositories({
+      scriptName: "test-runner",
+      processRepository,
+    });
+
+    expect(processRepository).toHaveBeenCalledTimes(2);
+    expect(processRepository.mock.calls[0]?.[3]).toEqual({
+      installationId: 1,
+      installationLogin: "org-one",
+    });
+    expect(processRepository.mock.calls[1]?.[3]).toEqual({
+      installationId: 2,
+      installationLogin: "org-two",
+    });
+  });
+
   it("isolates repo failures, continues processing, then fails with repo summary", async () => {
     setupAppMock({
       installations: [{ id: 1, account: { login: "org" } }],

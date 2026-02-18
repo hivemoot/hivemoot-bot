@@ -59,7 +59,7 @@ function hasLegacyIssueNumberMatch(body: string, issueNumber: number): boolean {
 }
 
 /**
- * Check if a PR already has a voting-passed notification for this issue.
+ * Check if a PR already has a ready-to-implement notification for this issue.
  *
  * Single-pass detection:
  * 1. Fetch comments once
@@ -68,7 +68,7 @@ function hasLegacyIssueNumberMatch(body: string, issueNumber: number): boolean {
  *
  * Exported for testing.
  */
-export async function hasVotingPassedNotification(
+export async function hasReadyToImplementNotification(
   prs: PROperations,
   ref: PRRef,
   issueNumber: number
@@ -138,7 +138,7 @@ export async function reconcileIssue(
     const ref: PRRef = { owner, repo, prNumber: linkedPR.number };
 
     // Concern 1: Notification (skip if already posted)
-    const alreadyNotified = await hasVotingPassedNotification(prs, ref, issueNumber);
+    const alreadyNotified = await hasReadyToImplementNotification(prs, ref, issueNumber);
     if (!alreadyNotified) {
       await prs.comment(
         ref,

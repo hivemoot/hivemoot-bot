@@ -100,6 +100,8 @@ export type CommandResult =
  * Per issue #81: "only repo maintainers should use these commands"
  */
 const AUTHORIZED_PERMISSIONS = new Set(["admin", "maintain", "write"]);
+const BRANCH_REFRESH_MAX_POLLS = 10;
+const BRANCH_REFRESH_POLL_INTERVAL_MS = 3000;
 
 /**
  * Check if the sender has sufficient repo permissions to run commands.
@@ -558,7 +560,7 @@ async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
   if (pr.merged || pr.state !== "open") {
     return { status: "rejected", reason: "This pull request is already closed or merged." };
   }
-  const expectedHeadSha = pr.headSha;
+  let mergeHeadSha = pr.headSha;
 
   const repoInfo = await octokit.rest.repos.get({ owner: ctx.owner, repo: ctx.repo });
   if (!repoInfo?.data?.allow_squash_merge) {
@@ -626,6 +628,21 @@ async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
     return { status: "rejected", reason: body };
   }
 
+  const refreshedHead = await refreshHeadIfBehindBase(ctx, mergeHeadSha);
+  if (!refreshedHead.success) {
+    body += "### Branch Refresh\n\n";
+    body += `${refreshedHead.reason}\n\n`;
+    body += "Squash merge was blocked to avoid merging a stale head.";
+    return { status: "rejected", reason: body };
+  }
+  if (refreshedHead.updated) {
+    mergeHeadSha = refreshedHead.headSha;
+    body += "### Branch Refresh\n\n";
+    body += `Branch was behind base and refreshed to \`${mergeHeadSha}\`. Running final checks on the updated head.\n\n`;
+  } else {
+    mergeHeadSha = refreshedHead.headSha;
+  }
+
   const freshPreflight = await evaluatePreflightChecks({
     prs,
     ref,
@@ -645,7 +662,7 @@ async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
       owner: ctx.owner,
       repo: ctx.repo,
       pull_number: ctx.issueNumber,
-      sha: expectedHeadSha,
+      sha: mergeHeadSha,
       merge_method: "squash",
       commit_title: commitTitle,
       commit_message: commitBody,
@@ -661,6 +678,93 @@ async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
   body += `**${hardPassed}/${hardCount} hard checks passed.** Squash merge completed successfully.`;
   await reply(ctx, body);
   return { status: "executed", message: "Squash merge completed." };
+}
+
+type BranchRefreshResult =
+  | { success: true; updated: boolean; headSha: string }
+  | { success: false; reason: string };
+
+function isResolvedMergeableState(
+  mergeableState: unknown,
+): mergeableState is string {
+  return typeof mergeableState === "string" && mergeableState !== "unknown";
+}
+
+async function refreshHeadIfBehindBase(
+  ctx: CommandContext,
+  currentHeadSha: string,
+): Promise<BranchRefreshResult> {
+  const octokit = ctx.octokit as any; // Full Probot client at runtime
+
+  let resolvedHeadSha = currentHeadSha;
+  let resolvedMergeableState: string | null = null;
+
+  for (let attempt = 0; attempt < BRANCH_REFRESH_MAX_POLLS; attempt++) {
+    const pull = await octokit.rest.pulls.get({
+      owner: ctx.owner,
+      repo: ctx.repo,
+      pull_number: ctx.issueNumber,
+    });
+    const mergeableState = pull?.data?.mergeable_state;
+    resolvedHeadSha = pull?.data?.head?.sha ?? resolvedHeadSha;
+
+    if (isResolvedMergeableState(mergeableState)) {
+      resolvedMergeableState = mergeableState;
+      break;
+    }
+
+    if (attempt < BRANCH_REFRESH_MAX_POLLS - 1) {
+      await new Promise((resolve) => setTimeout(resolve, BRANCH_REFRESH_POLL_INTERVAL_MS));
+    }
+  }
+
+  if (!resolvedMergeableState) {
+    return {
+      success: false,
+      reason: "GitHub has not finished computing mergeability for this PR yet. Wait for checks to settle, then retry `/squash`.",
+    };
+  }
+
+  if (resolvedMergeableState !== "behind") {
+    return { success: true, updated: false, headSha: resolvedHeadSha };
+  }
+
+  try {
+    await octokit.rest.pulls.updateBranch({
+      owner: ctx.owner,
+      repo: ctx.repo,
+      pull_number: ctx.issueNumber,
+      expected_head_sha: resolvedHeadSha,
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    ctx.log.error({ err: error }, `Failed to refresh stale branch for /squash: ${reason}`);
+    return {
+      success: false,
+      reason: "Branch is behind base and couldn't be refreshed automatically. Rebase/update the branch, wait for CI, then retry `/squash`.",
+    };
+  }
+
+  for (let attempt = 0; attempt < BRANCH_REFRESH_MAX_POLLS; attempt++) {
+    const refreshed = await octokit.rest.pulls.get({
+      owner: ctx.owner,
+      repo: ctx.repo,
+      pull_number: ctx.issueNumber,
+    });
+    const refreshedSha = refreshed?.data?.head?.sha ?? resolvedHeadSha;
+    if (refreshedSha !== resolvedHeadSha) {
+      return { success: true, updated: true, headSha: refreshedSha };
+    }
+
+    if (attempt < BRANCH_REFRESH_MAX_POLLS - 1) {
+      await new Promise((resolve) => setTimeout(resolve, BRANCH_REFRESH_POLL_INTERVAL_MS));
+    }
+  }
+
+  return {
+    success: false,
+    reason: "Branch refresh started but the head SHA did not advance yet. Wait for the update and CI to finish, then retry `/squash`.",
+  };
 }
 
 /**

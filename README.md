@@ -174,7 +174,7 @@ The bot supports optional AI-powered discussion summarization via the [Vercel AI
 |---|---|---|
 | `LLM_PROVIDER` | - | LLM provider: `anthropic`, `openai`, `google`/`gemini`, or `mistral` |
 | `LLM_MODEL` | - | Model name (e.g. `claude-3-haiku-20240307`, `gpt-4o-mini`) |
-| `LLM_MAX_TOKENS` | `4096` | Output-token budget; falls back to `4096` when unset/invalid/non-positive |
+| `LLM_MAX_TOKENS` | `4096` | Output-token budget; clamped to `[500, 32768]`, falls back to `4096` when unset/invalid/non-positive |
 | `ANTHROPIC_API_KEY` | - | API key (required when provider is `anthropic`) |
 | `OPENAI_API_KEY` | - | API key (required when provider is `openai`) |
 | `GOOGLE_API_KEY` / `GOOGLE_GENERATIVE_AI_API_KEY` | - | API key (required when provider is `google`; `GOOGLE_API_KEY` takes priority) |

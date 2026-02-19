@@ -12,11 +12,14 @@ import type { LanguageModelV1 } from "ai";
 import type { Logger } from "../logger.js";
 import { logger as defaultLogger } from "../logger.js";
 import { repairMalformedJsonText } from "./json-repair.js";
-import { buildUserPrompt, SUMMARIZATION_SYSTEM_PROMPT } from "./prompts.js";
+import {
+  SUMMARIZATION_SYSTEM_PROMPT,
+  buildUserPrompt,
+} from "./prompts.js";
 import { createModelFromEnv } from "./provider.js";
 import { withLLMRetry } from "./retry.js";
 import type { DiscussionSummary, IssueContext, LLMConfig } from "./types.js";
-import { DiscussionSummarySchema, LLM_DEFAULTS } from "./types.js";
+import { DiscussionSummarySchema, LLM_DEFAULTS, countUniqueParticipants } from "./types.js";
 
 // ───────────────────────────────────────────────────────────────────────────────
 // Summarizer Service
@@ -81,7 +84,7 @@ export class DiscussionSummarizer {
 
       const { model, config } = modelResult;
       this.logger.info(
-        `Generating summary with ${config.provider}/${config.model} for ${context.comments.length} comments`
+        `Generating voting summary with ${config.provider}/${config.model} for ${context.comments.length} comments`
       );
 
       const result = await withLLMRetry(
@@ -112,7 +115,7 @@ export class DiscussionSummarizer {
       // Mismatch indicates the LLM may have hallucinated content, not just metadata.
       // We fail closed to prevent potentially fabricated summary from influencing votes.
       const expectedComments = context.comments.length;
-      const expectedParticipants = new Set(context.comments.map((c) => c.author)).size;
+      const expectedParticipants = countUniqueParticipants(context.comments);
 
       if (
         summary.metadata.commentCount !== expectedComments ||
@@ -175,12 +178,14 @@ export function formatVotingMessage(
   summary: DiscussionSummary,
   issueTitle: string,
   signature: string,
-  votingSignature: string
+  votingSignature: string,
+  priority?: "high" | "medium" | "low"
 ): string {
   const lines: string[] = [];
 
   // Header
-  lines.push(`🐝 **Voting Phase**`);
+  const priorityHeader = priority ? ` (${priority.toUpperCase()} PRIORITY)` : "";
+  lines.push(`🐝 **Voting Phase${priorityHeader}**`);
   lines.push("");
   lines.push(`# ${issueTitle}`);
   lines.push("");
@@ -189,6 +194,12 @@ export function formatVotingMessage(
   lines.push("## Proposal");
   lines.push(`> ${summary.proposal}`);
   lines.push("");
+
+  // Priority reminder (if present)
+  if (priority) {
+    lines.push(`This issue is marked **${priority}-priority** — your timely vote is appreciated.`);
+    lines.push("");
+  }
 
   // Aligned On (only if non-empty)
   if (summary.alignedOn.length > 0) {
@@ -221,7 +232,7 @@ export function formatVotingMessage(
   lines.push("");
 
   // Voting instructions
-  lines.push(`**${votingSignature}:**`);
+  lines.push(`**${votingSignature} (react once — multiple reactions = no vote):**`);
   lines.push("- 👍 **Ready** — Approve for implementation");
   lines.push("- 👎 **Not Ready** — Close this proposal");
   lines.push("- 😕 **Needs Discussion** — Back to discussion");

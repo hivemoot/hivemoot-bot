@@ -49,6 +49,7 @@ describe("GovernanceService", () => {
       transition: vi.fn().mockResolvedValue(undefined),
       // getIssueContext should NOT be called when LLM is not configured
       getIssueContext: vi.fn(),
+      getIssueLabels: vi.fn().mockResolvedValue([]),
     } as unknown as IssueOperations;
 
     governance = new GovernanceService(mockIssues);
@@ -102,7 +103,7 @@ describe("GovernanceService", () => {
       expect(mockIssues.transition).toHaveBeenCalledWith(testRef, {
         removeLabel: LABELS.DISCUSSION,
         addLabel: LABELS.VOTING,
-        comment: expect.stringContaining(MESSAGES.VOTING_START),
+        comment: expect.stringContaining(MESSAGES.votingStart()),
       });
       // Verify metadata is prepended
       const callArgs = vi.mocked(mockIssues.transition).mock.calls[0][1];
@@ -125,7 +126,7 @@ describe("GovernanceService", () => {
       expect(mockIssues.transition).toHaveBeenCalledWith(testRef, {
         removeLabel: LABELS.DISCUSSION,
         addLabel: LABELS.VOTING,
-        comment: expect.stringContaining(MESSAGES.VOTING_START),
+        comment: expect.stringContaining(MESSAGES.votingStart()),
       });
     });
 
@@ -179,7 +180,8 @@ describe("GovernanceService", () => {
           mockSummary,
           mockContext.title,
           SIGNATURE,
-          SIGNATURES.VOTING
+          SIGNATURES.VOTING,
+          undefined
         );
         // Verify comment includes both metadata and LLM message
         const callArgs = vi.mocked(mockIssues.transition).mock.calls[0][1];
@@ -202,7 +204,7 @@ describe("GovernanceService", () => {
         expect(mockIssues.transition).toHaveBeenCalledWith(testRef, {
           removeLabel: LABELS.DISCUSSION,
           addLabel: LABELS.VOTING,
-          comment: expect.stringContaining(MESSAGES.VOTING_START),
+          comment: expect.stringContaining(MESSAGES.votingStart()),
         });
       });
 
@@ -218,7 +220,7 @@ describe("GovernanceService", () => {
         expect(mockIssues.transition).toHaveBeenCalledWith(testRef, {
           removeLabel: LABELS.DISCUSSION,
           addLabel: LABELS.VOTING,
-          comment: expect.stringContaining(MESSAGES.VOTING_START),
+          comment: expect.stringContaining(MESSAGES.votingStart()),
         });
       });
 
@@ -231,7 +233,7 @@ describe("GovernanceService", () => {
         expect(mockIssues.transition).toHaveBeenCalledWith(testRef, {
           removeLabel: LABELS.DISCUSSION,
           addLabel: LABELS.VOTING,
-          comment: expect.stringContaining(MESSAGES.VOTING_START),
+          comment: expect.stringContaining(MESSAGES.votingStart()),
         });
       });
 
@@ -243,7 +245,7 @@ describe("GovernanceService", () => {
         expect(mockIssues.transition).toHaveBeenCalledWith(testRef, {
           removeLabel: LABELS.DISCUSSION,
           addLabel: LABELS.VOTING,
-          comment: expect.stringContaining(MESSAGES.VOTING_START),
+          comment: expect.stringContaining(MESSAGES.votingStart()),
         });
       });
     });
@@ -261,7 +263,7 @@ describe("GovernanceService", () => {
       // Should contain voting metadata
       const commentBody = vi.mocked(mockIssues.comment).mock.calls[0][1];
       expect(commentBody).toContain('"type":"voting"');
-      expect(commentBody).toContain(MESSAGES.VOTING_START);
+      expect(commentBody).toContain(MESSAGES.votingStart());
     });
 
     it("should skip when voting comment already exists", async () => {

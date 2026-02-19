@@ -267,6 +267,30 @@ describe("close-discussions script", () => {
       expect(count).toBe(0);
       expect(mockGovernance.postVotingComment).not.toHaveBeenCalled();
     });
+
+    it("should include installationId when provided", async () => {
+      const mockGovernance = {
+        postVotingComment: vi.fn().mockResolvedValue("posted"),
+      } as any;
+
+      const fakeOctokit = {
+        rest: { issues: { listForRepo: vi.fn() } },
+        paginate: {
+          iterator: vi.fn().mockReturnValue(
+            buildIterator([[{ number: 10 }]])
+          ),
+        },
+      } as any;
+
+      await reconcileMissingVotingComments(fakeOctokit, owner, repoName, mockGovernance, 999);
+
+      expect(mockGovernance.postVotingComment).toHaveBeenCalledWith({
+        owner,
+        repo: repoName,
+        issueNumber: 10,
+        installationId: 999,
+      });
+    });
   });
 
   describe("processRepository gating", () => {
@@ -362,6 +386,52 @@ describe("close-discussions script", () => {
       expect(mockIterator.mock.calls.length).toBeGreaterThan(1);
       // No skipped or access issues from the empty iterator
       expect(result).toEqual({ skippedIssues: [], accessIssues: [] });
+    });
+
+    it("should thread installationId through reconciliation and transitions", async () => {
+      const mockGovernance = {
+        postVotingComment: vi.fn().mockResolvedValue("posted"),
+        transitionToVoting: vi.fn().mockResolvedValue(undefined),
+      } as any;
+      mockCreateGovernanceService.mockReturnValue(mockGovernance);
+
+      const discussionOnlyAutoConfig = makeRepoConfig("manual");
+      discussionOnlyAutoConfig.governance.proposals.discussion.exits = [
+        { type: "auto", afterMs: 60_000, minReady: 0, requiredReady: { minCount: 0, users: [] } },
+      ];
+
+      const mockIssues = {
+        getLabelAddedTime: vi.fn().mockResolvedValue(new Date(Date.now() - 120_000)),
+        getDiscussionReadiness: vi.fn().mockResolvedValue(new Set<string>()),
+      } as any;
+      mockCreateIssueOperations.mockReturnValue(mockIssues);
+
+      const fakeOctokit = {
+        rest: {
+          issues: {
+            listForRepo: vi.fn(),
+          },
+        },
+        paginate: {
+          iterator: vi.fn().mockReturnValue(buildIterator([[{ number: 42 }]])),
+        },
+      } as any;
+      mockLoadRepositoryConfig.mockResolvedValue(discussionOnlyAutoConfig);
+
+      await processRepository(fakeOctokit, repo, appId, { installationId: 321 });
+
+      expect(mockGovernance.postVotingComment).toHaveBeenCalledWith({
+        owner: "test-org",
+        repo: "test-repo",
+        issueNumber: 42,
+        installationId: 321,
+      });
+      expect(mockGovernance.transitionToVoting).toHaveBeenCalledWith({
+        owner: "test-org",
+        repo: "test-repo",
+        issueNumber: 42,
+        installationId: 321,
+      });
     });
   });
 
@@ -579,7 +649,7 @@ describe("close-discussions script", () => {
     const issueNumber = 42;
 
     beforeEach(() => {
-      // Freeze time so metadata timestamps in issueVotingPassed are deterministic
+      // Freeze time so metadata timestamps in issueReadyToImplement are deterministic
       vi.useFakeTimers();
       vi.setSystemTime(new Date("2024-01-20T12:00:00.000Z"));
       vi.clearAllMocks();
@@ -602,11 +672,11 @@ describe("close-discussions script", () => {
       expect(mockComment).toHaveBeenCalledTimes(2);
       expect(mockComment).toHaveBeenCalledWith(
         { owner, repo, prNumber: 10 },
-        PR_MESSAGES.issueVotingPassed(issueNumber, "agent-alice")
+        PR_MESSAGES.issueReadyToImplement(issueNumber, "agent-alice")
       );
       expect(mockComment).toHaveBeenCalledWith(
         { owner, repo, prNumber: 20 },
-        PR_MESSAGES.issueVotingPassed(issueNumber, "agent-bob")
+        PR_MESSAGES.issueReadyToImplement(issueNumber, "agent-bob")
       );
     });
 
@@ -624,7 +694,7 @@ describe("close-discussions script", () => {
       expect(mockComment).toHaveBeenCalledTimes(1);
       expect(mockComment).toHaveBeenCalledWith(
         { owner, repo, prNumber: 20 },
-        PR_MESSAGES.issueVotingPassed(issueNumber, "agent-bob")
+        PR_MESSAGES.issueReadyToImplement(issueNumber, "agent-bob")
       );
     });
 
@@ -665,11 +735,11 @@ describe("close-discussions script", () => {
       expect(mockComment).toHaveBeenCalledTimes(1);
       expect(mockComment).toHaveBeenCalledWith(
         { owner, repo, prNumber: 20 },
-        PR_MESSAGES.issueVotingPassed(issueNumber, "agent-bob")
+        PR_MESSAGES.issueReadyToImplement(issueNumber, "agent-bob")
       );
     });
 
-    it("should use issueVotingPassed message, not issueReadyNeedsUpdate", async () => {
+    it("should use issueReadyToImplement message, not issueReadyNeedsUpdate", async () => {
       mockGetOpenPRsForIssue.mockResolvedValue([
         { number: 10, title: "My PR", state: "OPEN", author: { login: "agent-alice" } },
       ]);
@@ -677,8 +747,8 @@ describe("close-discussions script", () => {
       await notifyPendingPRs(fakeOctokit, appId, owner, repo, issueNumber);
 
       const commentBody = mockComment.mock.calls[0][1] as string;
-      // issueVotingPassed includes "passed voting"
-      expect(commentBody).toContain("passed voting");
+      // issueReadyToImplement includes "is ready for implementation"
+      expect(commentBody).toContain("is ready for implementation");
       // issueReadyNeedsUpdate includes "opened before approval" — should NOT appear
       expect(commentBody).not.toContain("opened before approval");
     });

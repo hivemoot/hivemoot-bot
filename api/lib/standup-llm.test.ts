@@ -122,4 +122,52 @@ describe("generateStandupLLMContent", () => {
     });
     expect(repaired).toBe("{\"narrative\":\"Test\"}");
   });
+
+  it("forwards installation context to model resolution", async () => {
+    const { generateObject } = await import("ai");
+    const { createModelFromEnv } = await import("./llm/provider.js");
+    const { generateStandupLLMContent } = await import("./standup.js");
+
+    vi.mocked(createModelFromEnv).mockReturnValue({
+      model: {} as never,
+      config: {
+        provider: "google",
+        model: "gemini-3-flash-preview",
+        maxTokens: 500,
+      },
+    });
+    vi.mocked(generateObject).mockResolvedValue({
+      object: {
+        narrative: "Colony progressed with one implementation and no blockers.",
+        keyUpdates: ["Implementation PR #10 advanced through review."],
+        queensTake: {
+          wentWell: "Review turnaround was quick.",
+          focusAreas: "Move one proposal from voting to implementation.",
+          needsAttention: "No urgent risks detected.",
+        },
+      },
+      finishReason: "stop",
+      usage: { promptTokens: 100, completionTokens: 50 },
+      rawResponse: undefined,
+      response: undefined,
+      warnings: undefined,
+      experimental_providerMetadata: undefined,
+      toJsonResponse: () => new Response(),
+    } as never);
+
+    const data: StandupData = {
+      discussionPhase: [],
+      votingPhase: [],
+      extendedVoting: [],
+      readyToImplement: [{ number: 1, title: "Feature A" }],
+      implementationPRs: [{ number: 10, title: "PR #10", author: "agent" }],
+      repoFullName: "hivemoot/colony",
+      reportDate: "2026-02-06",
+      dayNumber: 42,
+    };
+
+    await generateStandupLLMContent(data, { installationId: 77 });
+
+    expect(createModelFromEnv).toHaveBeenCalledWith({ installationId: 77 });
+  });
 });

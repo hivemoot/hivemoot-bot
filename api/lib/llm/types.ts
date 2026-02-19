@@ -138,6 +138,49 @@ export type LLMReadiness =
   | { ready: false; reason: "not_configured" | "api_key_missing" };
 
 // ───────────────────────────────────────────────────────────────────────────────
+// Implementation Plan Schema
+// ───────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Schema for LLM-generated implementation blueprint.
+ * Produced by /gather — designed for an implementing agent, not a voter.
+ */
+export const ImplementationPlanSchema = z.object({
+  /** 1-2 sentence actionable goal */
+  goal: z.string().describe(
+    "1-2 sentence actionable goal describing what will be built or changed. Be specific."
+  ),
+
+  /** Free-form markdown implementation plan (numbered steps, tables, code blocks) */
+  plan: z.string().describe(
+    "Free-form markdown implementation plan. Use numbered steps, tables, code blocks, and inline code as appropriate. Write for an engineer who has NOT read the discussion thread."
+  ),
+
+  /** Concrete design choices made during discussion */
+  decisions: z.array(z.string()).describe(
+    "Concrete design decisions made during discussion. Each should be a clear statement of what was decided."
+  ),
+
+  /** Items explicitly excluded from scope */
+  outOfScope: z.array(z.string()).describe(
+    "Items explicitly excluded from scope. These were discussed and ruled out — do NOT implement them."
+  ),
+
+  /** Unresolved questions and active disagreements */
+  openQuestions: z.array(z.string()).describe(
+    "Unresolved questions AND active disagreements from the discussion. These need resolution before or during implementation."
+  ),
+
+  /** Metadata for display and validation */
+  metadata: z.object({
+    commentCount: z.number().describe("Total number of comments analyzed"),
+    participantCount: z.number().describe("Number of unique participants"),
+  }),
+});
+
+export type ImplementationPlan = z.infer<typeof ImplementationPlanSchema>;
+
+// ───────────────────────────────────────────────────────────────────────────────
 // Issue Context for Summarization
 // ───────────────────────────────────────────────────────────────────────────────
 
@@ -148,6 +191,7 @@ export interface DiscussionComment {
   author: string;
   body: string;
   createdAt: string;
+  reactions?: { thumbsUp: number; thumbsDown: number };
 }
 
 /**
@@ -158,4 +202,12 @@ export interface IssueContext {
   body: string;
   author: string;
   comments: DiscussionComment[];
+}
+
+/**
+ * Count unique comment authors.
+ * Used for metadata display and hallucination validation.
+ */
+export function countUniqueParticipants(comments: ReadonlyArray<{ author: string }>): number {
+  return new Set(comments.map((c) => c.author)).size;
 }

@@ -26,6 +26,7 @@ import type { LinkedIssue, PRWithApprovals, PullRequest } from "./types.js";
 import { filterByLabel, hasLabel } from "./types.js";
 import { getAppId } from "./env-validation.js";
 import { logger } from "./logger.js";
+import { getIssuePriority } from "./priority.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -391,7 +392,10 @@ export async function processImplementationIntake(params: {
         linkedIssue.number
       );
       if (!alreadyWelcomed) {
-        await prs.comment(prRef, PR_MESSAGES.IMPLEMENTATION_WELCOME(linkedIssue.number));
+        // Extract labels from LinkedIssue structure to match IssueWithLabels interface
+        const labels = linkedIssue.labels.nodes.filter((l): l is { name: string } => l !== null);
+        const priority = getIssuePriority({ labels });
+        await prs.comment(prRef, PR_MESSAGES.IMPLEMENTATION_WELCOME(linkedIssue.number, priority));
         welcomed = true;
       }
     }

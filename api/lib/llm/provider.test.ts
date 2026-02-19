@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createCipheriv, randomBytes } from "node:crypto";
 import { isLLMConfigured, getLLMConfig, createModel, createModelFromEnv, getLLMReadiness } from "./provider.js";
-import type { LLMConfig } from "./types.js";
+import type { LLMConfig, LLMProvider } from "./types.js";
 
 /**
  * Tests for LLM Provider Factory
@@ -256,6 +256,18 @@ describe("LLM Provider", () => {
 
       expect(() => createModel(config)).toThrow(
         "MISTRAL_API_KEY environment variable is not set"
+      );
+    });
+
+    it("should throw when provider is unsupported at runtime", () => {
+      const config: LLMConfig = {
+        provider: "unsupported-provider" as LLMProvider,
+        model: "model-id",
+        maxTokens: 1000,
+      };
+
+      expect(() => createModel(config)).toThrow(
+        "Unsupported LLM provider: unsupported-provider",
       );
     });
 
@@ -581,6 +593,54 @@ describe("LLM Provider", () => {
       await expect(createModelFromEnv({ installationId: 42 })).rejects.toThrow(
         "BYOK key material could not be decrypted",
       );
+    });
+
+    it("should throw when BYOK model is missing and LLM_MODEL is unset", async () => {
+      const masterKey = randomBytes(32);
+      const { ciphertext, iv, tag } = encryptPayload(
+        { apiKey: "sk-byok", provider: "openai" },
+        masterKey,
+      );
+
+      process.env.BYOK_REDIS_REST_URL = "https://example-redis.upstash.io";
+      process.env.BYOK_REDIS_REST_TOKEN = "byok-token";
+      process.env.BYOK_MASTER_KEYS_JSON = JSON.stringify({
+        v1: masterKey.toString("base64"),
+      });
+      delete process.env.LLM_MODEL;
+
+      mockRedisLookup(
+        JSON.stringify({
+          ciphertext,
+          iv,
+          tag,
+          keyVersion: "v1",
+          status: "active",
+        }),
+      );
+
+      await expect(createModelFromEnv({ installationId: 42 })).rejects.toThrow(
+        "BYOK record for installation 42 does not include a model and LLM_MODEL is not set",
+      );
+    });
+
+    it("should throw when BYOK returns an unsupported provider at runtime", async () => {
+      vi.resetModules();
+      vi.doMock("./byok.js", () => ({
+        resolveInstallationBYOKConfig: vi.fn().mockResolvedValue({
+          provider: "unsupported-provider",
+          model: "model-id",
+          apiKey: "sk-byok",
+        }),
+      }));
+
+      const { createModelFromEnv: createModelFromEnvWithMock } = await import("./provider.js");
+
+      await expect(
+        createModelFromEnvWithMock({ installationId: 42 }),
+      ).rejects.toThrow("Unsupported LLM provider: unsupported-provider");
+
+      vi.doUnmock("./byok.js");
     });
   });
 });

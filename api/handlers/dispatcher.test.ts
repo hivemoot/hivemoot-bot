@@ -84,4 +84,39 @@ describe("registerHandlerDispatcher", () => {
     expect(firstCall[0].name).toBe("pull_request.opened");
     expect(firstCall[1]).toEqual({});
   });
+
+  it("creates a fresh default context object for each dispatched event", async () => {
+    const handler: Handler = {
+      name: "fresh-default-context",
+      handle: vi.fn(async () => {}),
+    };
+
+    let callback: ((context: unknown) => Promise<void>) | undefined;
+    const probotApp = {
+      on: vi.fn((_event: string, registered: (context: unknown) => Promise<void>) => {
+        callback = registered;
+      }),
+    };
+
+    registerHandlerDispatcher(probotApp as never, {
+      eventMap: {
+        "issues.opened": [handler],
+      },
+    });
+
+    await callback?.({ payload: { issue: { number: 1 } } });
+
+    expect(handler.handle).toHaveBeenCalledTimes(1);
+    const firstContext = vi.mocked(handler.handle).mock.calls[0][1];
+    firstContext.flag = true;
+
+    await callback?.({ payload: { issue: { number: 2 } } });
+
+    expect(handler.handle).toHaveBeenCalledTimes(2);
+    const secondContext = vi.mocked(handler.handle).mock.calls[1][1];
+
+    expect(firstContext).not.toBe(secondContext);
+    expect(firstContext).toHaveProperty("flag", true);
+    expect(secondContext).not.toHaveProperty("flag");
+  });
 });

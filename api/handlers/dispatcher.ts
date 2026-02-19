@@ -13,13 +13,11 @@ interface ProbotLike {
   on(event: string | string[], handler: (context: unknown) => Promise<void>): void;
 }
 
-const EMPTY_CONTEXT = {};
-
 export function registerHandlerDispatcher(
   probotApp: ProbotLike,
   options: DispatcherOptions,
 ): void {
-  const createContext = options.createContext ?? (() => EMPTY_CONTEXT);
+  const createContext = options.createContext ?? (() => ({}));
 
   for (const [eventName, handlers] of Object.entries(options.eventMap)) {
     if (handlers.length === 0) {

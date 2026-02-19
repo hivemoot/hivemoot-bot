@@ -534,6 +534,42 @@ describe("executeCommand", () => {
       expect(octokit.rest.reactions.createForIssueComment).not.toHaveBeenCalled();
     });
 
+    it("should paginate issue comments to resolve app bot login on later pages", async () => {
+      const octokit = createMockOctokit();
+      octokit.rest.issues.listComments
+        .mockResolvedValueOnce({
+          data: Array.from({ length: 100 }, (_, i) => ({
+            user: { login: `human-${i}` },
+            performed_via_github_app: { id: 99999, name: "Other App" },
+          })),
+        })
+        .mockResolvedValueOnce({
+          data: [
+            {
+              user: { login: "hivemoot[bot]" },
+              performed_via_github_app: { id: 12345, name: "Hivemoot" },
+            },
+          ],
+        });
+      octokit.rest.reactions.listForIssueComment.mockResolvedValue({
+        data: [{ user: { login: "hivemoot[bot]" } }],
+      });
+
+      const ctx = createCtx({ octokit });
+      const result = await executeCommand(ctx);
+
+      expect(result).toEqual({ status: "ignored" });
+      expect(octokit.rest.issues.listComments).toHaveBeenCalledTimes(2);
+      expect(octokit.rest.issues.listComments).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ per_page: 100, page: 1 }),
+      );
+      expect(octokit.rest.issues.listComments).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ per_page: 100, page: 2 }),
+      );
+    });
+
     it("should not skip when eyes reaction is from a different bot", async () => {
       const octokit = createMockOctokit();
       // Mock that this app authored a comment

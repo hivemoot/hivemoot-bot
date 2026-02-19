@@ -64,6 +64,7 @@ export interface CommandOctokit {
         repo: string;
         issue_number: number;
         per_page?: number;
+        page?: number;
       }) => Promise<{
         data: Array<{
           user: { login: string } | null;
@@ -243,25 +244,36 @@ async function alreadyProcessed(ctx: CommandContext): Promise<boolean> {
  */
 async function resolveAppBotLogin(ctx: CommandContext): Promise<string | undefined> {
   try {
-    const { data: comments } = await ctx.octokit.rest.issues.listComments({
-      owner: ctx.owner,
-      repo: ctx.repo,
-      issue_number: ctx.issueNumber,
-      per_page: 100,
-    });
+    const perPage = 100;
+    let page = 1;
 
-    // Find a comment authored by this GitHub App (via performed_via_github_app)
-    // The API response includes performed_via_github_app.id when the app authored the comment
-    for (const comment of comments) {
-      const app = comment.performed_via_github_app;
-      if (app && typeof app === "object" && "id" in app && app.id === ctx.appId) {
-        // The author field contains the bot user
-        if (comment.user) {
-          return comment.user.login;
+    while (true) {
+      const { data: comments } = await ctx.octokit.rest.issues.listComments({
+        owner: ctx.owner,
+        repo: ctx.repo,
+        issue_number: ctx.issueNumber,
+        per_page: perPage,
+        page,
+      });
+
+      // Find a comment authored by this GitHub App (via performed_via_github_app)
+      // The API response includes performed_via_github_app.id when the app authored the comment
+      for (const comment of comments) {
+        const app = comment.performed_via_github_app;
+        if (app && typeof app === "object" && "id" in app && app.id === ctx.appId) {
+          // The author field contains the bot user
+          if (comment.user) {
+            return comment.user.login;
+          }
         }
       }
+
+      if (comments.length < perPage) {
+        return undefined;
+      }
+
+      page += 1;
     }
-    return undefined;
   } catch (error) {
     ctx.log.error(
       { err: error, issue: ctx.issueNumber },

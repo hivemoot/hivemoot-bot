@@ -7,6 +7,7 @@ const REDIS_URL_ENV_CANDIDATES = ["BYOK_REDIS_REST_URL", "UPSTASH_REDIS_REST_URL
 const REDIS_TOKEN_ENV_CANDIDATES = ["BYOK_REDIS_REST_TOKEN", "UPSTASH_REDIS_REST_TOKEN"] as const;
 const MASTER_KEYS_ENV = "BYOK_MASTER_KEYS_JSON";
 const REDIS_KEY_PREFIX_ENV = "BYOK_REDIS_KEY_PREFIX";
+const REDIS_FETCH_TIMEOUT_MS = 5000;
 
 // Cached at module load time — env vars are frozen per Vercel serverless container.
 let _masterKeysCache: ReadonlyMap<string, Buffer> | undefined;
@@ -254,13 +255,22 @@ async function fetchEnvelope(
   const key = `${runtimeConfig.keyPrefix}:${installationId}`;
   const endpoint = `${runtimeConfig.url}/get/${encodeURIComponent(key)}`;
 
-  const response = await fetch(endpoint, {
-    method: "GET",
-    headers: {
-      Authorization: `Bearer ${runtimeConfig.token}`,
-      "Content-Type": "application/json",
-    },
-  });
+  let response: Response;
+  try {
+    response = await fetch(endpoint, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${runtimeConfig.token}`,
+        "Content-Type": "application/json",
+      },
+      signal: AbortSignal.timeout(REDIS_FETCH_TIMEOUT_MS),
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(`BYOK Redis lookup timed out after ${REDIS_FETCH_TIMEOUT_MS}ms`);
+    }
+    throw error;
+  }
 
   if (!response.ok) {
     throw new Error(`BYOK Redis lookup failed with HTTP ${response.status}`);
@@ -305,12 +315,14 @@ export async function resolveInstallationBYOKConfig(
     return null;
   }
 
-  if (envelope.status && envelope.status !== "active") {
-    if (envelope.status === "revoked") {
-      return null;
-    }
+  if (envelope.status === "revoked") {
+    return null;
+  }
+
+  if (envelope.status !== "active") {
+    const status = envelope.status ?? "missing";
     throw new Error(
-      `BYOK record for installation ${installationId} is not active (status=${envelope.status})`
+      `BYOK record for installation ${installationId} is not active (status=${status})`
     );
   }
 
@@ -319,8 +331,7 @@ export async function resolveInstallationBYOKConfig(
 
   return {
     apiKey: decrypted.apiKey,
-    provider: parseProvider(decrypted.provider ?? envelope.provider),
-    model: normalizeEnvString(decrypted.model ?? envelope.model),
+    provider: parseProvider(decrypted.provider),
+    model: normalizeEnvString(decrypted.model),
   };
 }
-

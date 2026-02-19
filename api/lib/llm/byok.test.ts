@@ -152,6 +152,17 @@ describe("resolveInstallationBYOKConfig", () => {
     );
   });
 
+  it("throws when Redis lookup times out", async () => {
+    setRedisEnv();
+    const abortError = new Error("Request aborted");
+    abortError.name = "AbortError";
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(abortError) as unknown as typeof fetch);
+
+    await expect(resolveInstallationBYOKConfig(2)).rejects.toThrow(
+      "BYOK Redis lookup timed out after 5000ms",
+    );
+  });
+
   it("throws when Redis returns an explicit error field", async () => {
     setRedisEnv();
     stubRedisResponse({ error: "forbidden", result: null });
@@ -208,6 +219,38 @@ describe("resolveInstallationBYOKConfig", () => {
 
     await expect(resolveInstallationBYOKConfig(3)).rejects.toThrow(
       "BYOK record for installation 3 is not active (status=pending)",
+    );
+  });
+
+  it("throws when BYOK record status is missing", async () => {
+    const masterKey = randomBytes(32);
+    setRedisEnv();
+    setMasterKeys({ v1: masterKey.toString("base64") });
+    const envelope = JSON.parse(
+      buildEnvelope({ apiKey: "sk", provider: "openai" }, masterKey),
+    ) as Record<string, unknown>;
+    delete envelope.status;
+    stubRedisResponse({ result: JSON.stringify(envelope) });
+
+    await expect(resolveInstallationBYOKConfig(3)).rejects.toThrow(
+      "BYOK record for installation 3 is not active (status=missing)",
+    );
+  });
+
+  it("throws when BYOK record status is blank", async () => {
+    const masterKey = randomBytes(32);
+    setRedisEnv();
+    setMasterKeys({ v1: masterKey.toString("base64") });
+    stubRedisResponse({
+      result: buildEnvelope(
+        { apiKey: "sk", provider: "openai" },
+        masterKey,
+        { status: " " },
+      ),
+    });
+
+    await expect(resolveInstallationBYOKConfig(3)).rejects.toThrow(
+      "BYOK record for installation 3 is not active (status= )",
     );
   });
 
@@ -374,17 +417,40 @@ describe("resolveInstallationBYOKConfig", () => {
     );
   });
 
-  it("throws when provider is missing from payload and envelope", async () => {
+  it("throws when provider is missing from decrypted payload", async () => {
     const masterKey = randomBytes(32);
     setRedisEnv();
     setMasterKeys({ v1: masterKey.toString("base64") });
     stubRedisResponse({
-      result: buildEnvelope({ apiKey: "sk-only" }, masterKey),
+      result: buildEnvelope(
+        { apiKey: "sk-only" },
+        masterKey,
+        { provider: "openai", model: "gpt-4o-mini" },
+      ),
     });
 
     await expect(resolveInstallationBYOKConfig(7)).rejects.toThrow(
       "BYOK provider is missing",
     );
+  });
+
+  it("ignores unauthenticated envelope model metadata", async () => {
+    const masterKey = randomBytes(32);
+    setRedisEnv();
+    setMasterKeys({ v1: masterKey.toString("base64") });
+    stubRedisResponse({
+      result: buildEnvelope(
+        { apiKey: "sk", provider: "openai" },
+        masterKey,
+        { model: "gpt-4o-mini" },
+      ),
+    });
+
+    await expect(resolveInstallationBYOKConfig(7)).resolves.toEqual({
+      apiKey: "sk",
+      provider: "openai",
+      model: undefined,
+    });
   });
 
   it("throws when provider is unsupported", async () => {

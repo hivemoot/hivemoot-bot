@@ -77,12 +77,20 @@ function getRuntimeEnvVarsFromSource(): Set<string> {
 
 function getDocumentedEnvVarsFromReadme(readmeContent: string): Set<string> {
   const vars = new Set<string>();
-  const rowPattern = /^\|\s*`([A-Z0-9_]+)`\s*\|/gm;
+  // Match the first cell of each table row (everything before the second `|`).
+  const rowPattern = /^\|([^|]+)\|/gm;
+  // Extract every backtick-wrapped ALL_CAPS identifier from the cell.
+  const varPattern = /`([A-Z][A-Z0-9_]*)`/g;
 
-  for (const match of readmeContent.matchAll(rowPattern)) {
-    const envVar = match[1];
-    if (envVar) {
-      vars.add(envVar);
+  for (const rowMatch of readmeContent.matchAll(rowPattern)) {
+    const cell = rowMatch[1];
+    if (cell) {
+      for (const varMatch of cell.matchAll(varPattern)) {
+        const envVar = varMatch[1];
+        if (envVar) {
+          vars.add(envVar);
+        }
+      }
     }
   }
 

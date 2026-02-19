@@ -55,4 +55,33 @@ describe("registerHandlerDispatcher", () => {
     expect(firstCall[0].name).toBe("issues.opened");
     expect(firstCall[1]).toBe(sharedContext);
   });
+
+  it("skips events without handlers and uses default context factory", async () => {
+    const handler: Handler = {
+      name: "default-context",
+      handle: vi.fn(async () => {}),
+    };
+
+    let callback: ((context: unknown) => Promise<void>) | undefined;
+    const probotApp = {
+      on: vi.fn((event: string, registered: (context: unknown) => Promise<void>) => {
+        expect(event).toBe("pull_request.opened");
+        callback = registered;
+      }),
+    };
+
+    registerHandlerDispatcher(probotApp as never, {
+      eventMap: {
+        "issues.opened": [],
+        "pull_request.opened": [handler],
+      },
+    });
+
+    expect(probotApp.on).toHaveBeenCalledTimes(1);
+    await callback?.({ payload: { pull_request: { number: 10 } } });
+
+    const firstCall = vi.mocked(handler.handle).mock.calls[0];
+    expect(firstCall[0].name).toBe("pull_request.opened");
+    expect(firstCall[1]).toEqual({});
+  });
 });

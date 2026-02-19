@@ -443,11 +443,11 @@ export async function processIssuePhase(
 // ───────────────────────────────────────────────────────────────────────────────
 
 /**
- * Notify existing PRs that a linked issue has passed voting.
+ * Notify existing PRs that a linked issue is ready to implement.
  *
  * Intentionally notification-only — does NOT auto-tag PRs with the
  * `implementation` label. PR authors must push a new commit after
- * voting passes to activate their PR. This prevents gaming where an
+ * an issue becomes ready to implement to activate their PR. This prevents gaming where an
  * agent pre-creates an empty PR during discussion/voting to auto-claim
  * an implementation slot when voting passes.
  *
@@ -499,7 +499,7 @@ export async function notifyPendingPRs(
 
       await prs.comment(
         ref,
-        PR_MESSAGES.issueVotingPassed(issueNumber, linkedPR.author.login)
+        PR_MESSAGES.issueReadyToImplement(issueNumber, linkedPR.author.login)
       );
       logger.info(`Notified PR #${linkedPR.number} (@${linkedPR.author.login}) that issue #${issueNumber} is ready`);
 

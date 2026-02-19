@@ -45,6 +45,12 @@ vi.mock("../../lib/index.js", async () => {
     ...actual,
     loadRepositoryConfig: vi.fn().mockResolvedValue({
       governance: {
+        proposals: {
+          discussion: {
+            exits: [{ type: "manual" }],
+            durationMs: 0,
+          },
+        },
         pr: {
           maxPRsPerIssue: 3,
           trustedReviewers: [],
@@ -966,8 +972,7 @@ describe("Queen Bot", () => {
         },
       });
 
-      expect(octokit.graphql).toHaveBeenCalledTimes(1);
-      expect(octokit.rest.repos.getContent).toHaveBeenCalledTimes(1);
+      expect(processImplementationIntake).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -1019,6 +1024,19 @@ describe("Queen Bot", () => {
     };
 
     it("should use manual welcome when discussion auto-exit is not configured", async () => {
+      vi.mocked(loadRepositoryConfig).mockResolvedValueOnce({
+        governance: {
+          proposals: {
+            discussion: { exits: [{ type: "manual" }], durationMs: 0 },
+            voting: { exits: [{ type: "manual" }], durationMs: 0 },
+            extendedVoting: { exits: [{ type: "manual" }], durationMs: 0 },
+          },
+          pr: { staleDays: 14, maxPRsPerIssue: 3, trustedReviewers: [], intake: [{ method: "update" }], mergeReady: null },
+        },
+        version: 1,
+        standup: { enabled: false, category: "" },
+      });
+
       const { handlers } = createWebhookHarness();
       const handler = handlers.get("issues.opened")!;
       const octokit = createIssuesOpenedOctokit("manual");
@@ -1042,6 +1060,22 @@ describe("Queen Bot", () => {
     });
 
     it("should use voting-focused welcome when discussion auto-exit is configured", async () => {
+      vi.mocked(loadRepositoryConfig).mockResolvedValueOnce({
+        governance: {
+          proposals: {
+            discussion: {
+              exits: [{ type: "auto", afterMs: 1_800_000, minReady: 0, requiredReady: { minCount: 0, users: [] } }],
+              durationMs: 1_800_000,
+            },
+            voting: { exits: [{ type: "manual" }], durationMs: 0 },
+            extendedVoting: { exits: [{ type: "manual" }], durationMs: 0 },
+          },
+          pr: { staleDays: 14, maxPRsPerIssue: 3, trustedReviewers: [], intake: [{ method: "update" }], mergeReady: null },
+        },
+        version: 1,
+        standup: { enabled: false, category: "" },
+      });
+
       const { handlers } = createWebhookHarness();
       const handler = handlers.get("issues.opened")!;
       const octokit = createIssuesOpenedOctokit("auto");

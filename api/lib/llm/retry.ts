@@ -25,12 +25,28 @@ export interface LLMRetryConfig {
   maxRetryDelayMs: number;
   /** Fallback delay when server doesn't suggest one (ms) */
   defaultRetryDelayMs: number;
+  /**
+   * Wall-clock budget for the entire retry sequence (ms).
+   * When set, the loop aborts before starting a retry whose delay would
+   * exceed the remaining budget. Prevents unbounded total elapsed time
+   * in serverless environments (e.g. Vercel function timeouts).
+   * `undefined` means no total-time limit (attempt-count only).
+   */
+  maxTotalElapsedMs?: number;
 }
 
 export const LLM_RETRY_DEFAULTS: LLMRetryConfig = {
   maxRetries: 3,
   maxRetryDelayMs: 60_000,
   defaultRetryDelayMs: 5_000,
+  // 45s leaves ~15s headroom within a 60s Vercel function budget for
+  // GitHub API calls around the LLM invocation.
+  //
+  // ⚠️  Budget alignment (update together):
+  //   vercel.json  maxDuration .............. 60s  (hard ceiling)
+  //   retry.ts     maxTotalElapsedMs ........ 45s  (retry sequence budget)
+  //   types.ts     perCallTimeoutMs ......... 15s  (single LLM call)
+  maxTotalElapsedMs: 45_000,
 };
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -94,6 +110,8 @@ export function extractRetryDelay(error: unknown): number | null {
  *
  * - On rate-limit (429): waits the server-suggested delay (capped), then retries
  * - On any other error: throws immediately — no retry
+ * - Respects a wall-clock budget (maxTotalElapsedMs) to prevent unbounded
+ *   total duration in serverless environments
  * - Logs each retry with delay info via the optional logger
  */
 export async function withLLMRetry<T>(
@@ -101,11 +119,12 @@ export async function withLLMRetry<T>(
   config?: Partial<LLMRetryConfig>,
   logger?: Logger
 ): Promise<T> {
-  const { maxRetries, maxRetryDelayMs, defaultRetryDelayMs } = {
+  const { maxRetries, maxRetryDelayMs, defaultRetryDelayMs, maxTotalElapsedMs } = {
     ...LLM_RETRY_DEFAULTS,
     ...config,
   };
 
+  const startTime = Date.now();
   let lastError: unknown;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -126,6 +145,19 @@ export async function withLLMRetry<T>(
 
       const suggestedDelay = extractRetryDelay(error);
       const delay = Math.min(suggestedDelay ?? defaultRetryDelayMs, maxRetryDelayMs);
+
+      // Check wall-clock budget before sleeping
+      if (maxTotalElapsedMs !== undefined) {
+        const elapsed = Date.now() - startTime;
+        if (elapsed + delay > maxTotalElapsedMs) {
+          logger?.warn(
+            `Rate-limited but total elapsed ${(elapsed / 1000).toFixed(1)}s + ` +
+              `${(delay / 1000).toFixed(1)}s delay would exceed ` +
+              `${(maxTotalElapsedMs / 1000).toFixed(1)}s budget — aborting`
+          );
+          break;
+        }
+      }
 
       logger?.info(
         `Rate-limited (attempt ${attempt + 1}/${maxRetries + 1}), ` +

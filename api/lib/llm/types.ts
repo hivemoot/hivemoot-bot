@@ -127,6 +127,20 @@ export const LLM_DEFAULTS = {
   // structured JSON in practice without depending on provider-specific limits.
   maxTokens: 4_096,
   temperature: 0.3,
+  // Per-call timeout for individual LLM API requests (ms).
+  // Bounds each generateObject() invocation independently of the retry
+  // wrapper's total budget. 15s is generous for structured-output calls
+  // (typical 2-8s) while leaving headroom within a 60s serverless budget
+  // after retry delays and GitHub API calls.
+  //
+  // ⚠️  Budget alignment (update together):
+  //   vercel.json  maxDuration .............. 60s  (hard ceiling)
+  //   retry.ts     maxTotalElapsedMs ........ 45s  (retry sequence budget)
+  //   types.ts     perCallTimeoutMs ......... 15s  (single LLM call)
+  //
+  // Vercel function limits as of Feb 2026:
+  //   https://vercel.com/docs/functions/configuring-functions/duration
+  perCallTimeoutMs: 15_000,
 } as const;
 
 /**

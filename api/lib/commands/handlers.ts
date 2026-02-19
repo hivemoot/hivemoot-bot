@@ -9,8 +9,8 @@
 import { LABELS, SIGNATURE, isLabelMatch } from "../../config.js";
 import { SIGNATURES, buildAlignmentComment } from "../bot-comments.js";
 import { createIssueOperations, createGovernanceService, createPROperations, loadRepositoryConfig } from "../index.js";
-import { DiscussionSummarizer } from "../llm/summarizer.js";
-import type { DiscussionSummary, IssueContext } from "../llm/types.js";
+import { BlueprintGenerator, createMinimalPlan } from "../llm/blueprint.js";
+import type { ImplementationPlan, IssueContext } from "../llm/types.js";
 import { evaluatePreflightChecks } from "../merge-readiness.js";
 import type { PreflightCheckItem } from "../merge-readiness.js";
 import { CommitMessageGenerator, formatCommitMessage } from "../llm/commit-message.js";
@@ -70,6 +70,7 @@ export interface CommandContext {
   owner: string;
   repo: string;
   issueNumber: number;
+  installationId?: number;
   commentId: number;
   senderLogin: string;
   verb: string;
@@ -82,6 +83,7 @@ export interface CommandContext {
   appId: number;
   log: {
     info: (...args: unknown[]) => void;
+    warn: (...args: unknown[]) => void;
     error: (...args: unknown[]) => void;
   };
 }
@@ -99,6 +101,18 @@ export type CommandResult =
  * Per issue #81: "only repo maintainers should use these commands"
  */
 const AUTHORIZED_PERMISSIONS = new Set(["admin", "maintain", "write"]);
+const BRANCH_REFRESH_MAX_POLLS = 10;
+const BRANCH_REFRESH_POLL_INTERVAL_MS = 3000;
+const MERGEABLE_STATE_RESOLUTION_MAX_POLLS = 10;
+const MERGEABLE_STATE_RESOLUTION_INTERVAL_MS = 1500;
+const RESOLVED_MERGEABLE_STATES = new Set([
+  "behind",
+  "clean",
+  "dirty",
+  "blocked",
+  "unstable",
+  "has_hooks",
+]);
 
 /**
  * Check if the sender has sufficient repo permissions to run commands.
@@ -230,7 +244,12 @@ async function handleVote(ctx: CommandContext): Promise<CommandResult> {
     return { status: "rejected", reason: "This issue is not in the discussion phase. The `/vote` command requires `hivemoot:discussion`." };
   }
 
-  const ref: IssueRef = { owner: ctx.owner, repo: ctx.repo, issueNumber: ctx.issueNumber };
+  const ref: IssueRef = {
+    owner: ctx.owner,
+    repo: ctx.repo,
+    issueNumber: ctx.issueNumber,
+    installationId: ctx.installationId,
+  };
   const issues = createIssueOperations(ctx.octokit, { appId: ctx.appId });
   const governance = createGovernanceService(issues);
 
@@ -258,7 +277,12 @@ async function handleImplement(ctx: CommandContext): Promise<CommandResult> {
     return { status: "rejected", reason: "This issue has been rejected." };
   }
 
-  const ref: IssueRef = { owner: ctx.owner, repo: ctx.repo, issueNumber: ctx.issueNumber };
+  const ref: IssueRef = {
+    owner: ctx.owner,
+    repo: ctx.repo,
+    issueNumber: ctx.issueNumber,
+    installationId: ctx.installationId,
+  };
   const issues = createIssueOperations(ctx.octokit, { appId: ctx.appId });
 
   // Determine which phase label to remove
@@ -289,7 +313,24 @@ async function handleImplement(ctx: CommandContext): Promise<CommandResult> {
   return { status: "executed", message: "Fast-tracked to ready-to-implement." };
 }
 
-function pushAlignmentSection(lines: string[], title: string, items: string[]): void {
+/**
+ * Format a human-readable timestamp for blueprint footers.
+ * e.g., "Feb 16, 2026, 14:26 UTC"
+ */
+function formatBlueprintTimestamp(): string {
+  return new Date().toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: "UTC",
+    timeZoneName: "short",
+  });
+}
+
+function pushBlueprintSection(lines: string[], title: string, items: string[]): void {
   if (items.length === 0) {
     return;
   }
@@ -300,60 +341,57 @@ function pushAlignmentSection(lines: string[], title: string, items: string[]): 
   lines.push("");
 }
 
-function buildAlignmentContent(
-  summary: DiscussionSummary,
+function buildBlueprintContent(
+  plan: ImplementationPlan,
   senderLogin: string,
 ): string {
   const lines: string[] = [];
-  const proposal = summary.proposal?.trim() || "Discussion is gathering signal. Run `/gather` again after more input.";
-  const timestamp = new Date().toISOString();
-  const isEarlyDiscussion = summary.metadata.commentCount < 5;
+  const goal = plan.goal?.trim() || "Discussion is gathering signal. Run `/gather` again after more input.";
 
   lines.push(SIGNATURES.ALIGNMENT);
   lines.push("");
-  lines.push("## What We're Building");
-  lines.push(`> ${proposal}`);
+  lines.push(`> ${goal}`);
   lines.push("");
 
-  if (isEarlyDiscussion && summary.alignedOn.length === 0 && summary.openForPR.length === 0) {
-    lines.push("Discussion is still forming. Re-run `/gather` after more feedback to expand this ledger.");
+  // Plan (free-form markdown — only if non-empty)
+  if (plan.plan.trim()) {
+    lines.push("## Plan");
+    lines.push(plan.plan.trim());
     lines.push("");
   }
 
-  pushAlignmentSection(lines, "### ✅ Where the Colony Aligns", summary.alignedOn);
-  pushAlignmentSection(lines, "### 🔶 What's Still Buzzing", summary.openForPR);
-  pushAlignmentSection(lines, "### ❌ Not in This Hive", summary.notIncluded);
+  pushBlueprintSection(lines, "## Decisions", plan.decisions);
+  pushBlueprintSection(lines, "## Out of scope", plan.outOfScope);
+  pushBlueprintSection(lines, "## Open", plan.openQuestions);
+
   lines.push("---");
+  lines.push("");
   lines.push(
-    `_Updated: ${timestamp} · Comments analyzed: ${summary.metadata.commentCount} · Participants: ${summary.metadata.participantCount} · Triggered by @${senderLogin} via \`/gather\`._`,
+    "This plan was gathered from the issue discussion. All participants, please review and comment if you disagree or want to propose changes.",
   );
+  lines.push("");
+
+  const metaParts: string[] = [];
+  metaParts.push(`${plan.metadata.commentCount} comments`);
+  if (plan.metadata.participantCount > 0) {
+    metaParts.push(`${plan.metadata.participantCount} participants`);
+  }
+  metaParts.push(formatBlueprintTimestamp());
+  metaParts.push(`@${senderLogin} via \`/gather\``);
+  lines.push(metaParts.join(" · "));
 
   return lines.join("\n");
 }
 
-function buildFallbackAlignmentContent(
+function buildFallbackBlueprintContent(
   context: IssueContext,
   senderLogin: string,
 ): string {
-  const participants = new Set(context.comments.map((c) => c.author)).size;
-
-  return buildAlignmentContent(
-    {
-      proposal: context.title,
-      alignedOn: [],
-      openForPR: [],
-      notIncluded: [],
-      metadata: {
-        commentCount: context.comments.length,
-        participantCount: participants,
-      },
-    },
-    senderLogin,
-  );
+  return buildBlueprintContent(createMinimalPlan(context), senderLogin);
 }
 
 /**
- * Handle /gather command: upsert the canonical alignment comment during discussion.
+ * Handle /gather command: upsert the canonical blueprint comment during discussion.
  */
 async function handleGather(ctx: CommandContext): Promise<CommandResult> {
   if (ctx.isPullRequest) {
@@ -367,32 +405,40 @@ async function handleGather(ctx: CommandContext): Promise<CommandResult> {
     };
   }
 
-  const ref: IssueRef = { owner: ctx.owner, repo: ctx.repo, issueNumber: ctx.issueNumber };
+  const ref: IssueRef = {
+    owner: ctx.owner,
+    repo: ctx.repo,
+    issueNumber: ctx.issueNumber,
+    installationId: ctx.installationId,
+  };
   const issues = createIssueOperations(ctx.octokit, { appId: ctx.appId });
   const existingAlignmentCommentId = await issues.findAlignmentCommentId(ref);
 
-  let alignmentContent: string;
+  let blueprintContent: string;
   try {
     const context = await issues.getIssueContext(ref);
-    const summarizer = new DiscussionSummarizer({ mode: "alignment" });
-    const summaryResult = await summarizer.summarize(context);
+    const generator = new BlueprintGenerator();
+    const result = await generator.generate(context);
 
-    alignmentContent = summaryResult.success
-      ? buildAlignmentContent(summaryResult.summary, ctx.senderLogin)
-      : buildFallbackAlignmentContent(context, ctx.senderLogin);
+    if (result.success) {
+      blueprintContent = buildBlueprintContent(result.plan, ctx.senderLogin);
+    } else {
+      ctx.log.warn(`Using fallback blueprint for #${ctx.issueNumber}: ${result.reason}`);
+      blueprintContent = buildFallbackBlueprintContent(context, ctx.senderLogin);
+    }
   } catch (error) {
     if (existingAlignmentCommentId) {
       const reason = error instanceof Error ? error.message : String(error);
       await reply(
         ctx,
-        `I couldn't refresh the alignment ledger just now (${reason}). Keeping the previous alignment comment unchanged.\n\nPlease retry \`/gather\` shortly.`,
+        `I couldn't refresh the blueprint just now (${reason}). Keeping the previous blueprint comment unchanged.\n\nPlease retry \`/gather\` shortly.`,
       );
-      return { status: "executed", message: "Alignment refresh failed; previous comment preserved." };
+      return { status: "executed", message: "Blueprint refresh failed; previous comment preserved." };
     }
     throw error;
   }
 
-  const body = buildAlignmentComment(alignmentContent, ctx.issueNumber);
+  const body = buildAlignmentComment(blueprintContent, ctx.issueNumber);
 
   if (existingAlignmentCommentId) {
     await ctx.octokit.rest.issues.updateComment({
@@ -401,11 +447,11 @@ async function handleGather(ctx: CommandContext): Promise<CommandResult> {
       comment_id: existingAlignmentCommentId,
       body,
     });
-    return { status: "executed", message: "Updated the alignment ledger comment." };
+    return { status: "executed", message: "Updated the blueprint comment." };
   }
 
   await issues.comment(ref, body);
-  return { status: "executed", message: "Created the alignment ledger comment." };
+  return { status: "executed", message: "Created the blueprint comment." };
 }
 
 /**
@@ -428,7 +474,12 @@ async function handlePreflight(ctx: CommandContext): Promise<CommandResult> {
   const prs = createPROperations(octokit, { appId: ctx.appId });
   const repoConfig = await loadRepositoryConfig(octokit, ctx.owner, ctx.repo);
 
-  const ref: PRRef = { owner: ctx.owner, repo: ctx.repo, prNumber: ctx.issueNumber };
+  const ref: PRRef = {
+    owner: ctx.owner,
+    repo: ctx.repo,
+    prNumber: ctx.issueNumber,
+    installationId: ctx.installationId,
+  };
   const currentLabels = ctx.issueLabels.map(l => l.name);
 
   // Run shared preflight checks (same signals as merge-ready label)
@@ -533,14 +584,19 @@ async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
   const octokit = ctx.octokit as any; // Full Probot client at runtime
   const prs = createPROperations(octokit, { appId: ctx.appId });
   const repoConfig = await loadRepositoryConfig(octokit, ctx.owner, ctx.repo);
-  const ref: PRRef = { owner: ctx.owner, repo: ctx.repo, prNumber: ctx.issueNumber };
+  const ref: PRRef = {
+    owner: ctx.owner,
+    repo: ctx.repo,
+    prNumber: ctx.issueNumber,
+    installationId: ctx.installationId,
+  };
   const currentLabels = ctx.issueLabels.map((l) => l.name);
 
   const pr = await prs.get(ref);
   if (pr.merged || pr.state !== "open") {
     return { status: "rejected", reason: "This pull request is already closed or merged." };
   }
-  const expectedHeadSha = pr.headSha;
+  let mergeHeadSha = pr.headSha;
 
   const repoInfo = await octokit.rest.repos.get({ owner: ctx.owner, repo: ctx.repo });
   if (!repoInfo?.data?.allow_squash_merge) {
@@ -608,6 +664,21 @@ async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
     return { status: "rejected", reason: body };
   }
 
+  const refreshedHead = await refreshHeadIfBehindBase(ctx, mergeHeadSha);
+  if (!refreshedHead.success) {
+    body += `### Branch Refresh\n\n`;
+    body += `${refreshedHead.reason}\n\n`;
+    body += `Squash merge was blocked to avoid merging a stale head.`;
+    return { status: "rejected", reason: body };
+  }
+  if (refreshedHead.updated) {
+    mergeHeadSha = refreshedHead.headSha;
+    body += "### Branch Refresh\n\n";
+    body += `Branch was behind base and refreshed to \`${mergeHeadSha}\`. Running final checks on the updated head.\n\n`;
+  } else {
+    mergeHeadSha = refreshedHead.headSha;
+  }
+
   const freshPreflight = await evaluatePreflightChecks({
     prs,
     ref,
@@ -627,7 +698,7 @@ async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
       owner: ctx.owner,
       repo: ctx.repo,
       pull_number: ctx.issueNumber,
-      sha: expectedHeadSha,
+      sha: mergeHeadSha,
       merge_method: "squash",
       commit_title: commitTitle,
       commit_message: commitBody,
@@ -643,6 +714,95 @@ async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
   body += `**${hardPassed}/${hardCount} hard checks passed.** Squash merge completed successfully.`;
   await reply(ctx, body);
   return { status: "executed", message: "Squash merge completed." };
+}
+
+type BranchRefreshResult =
+  | { success: true; updated: boolean; headSha: string }
+  | { success: false; reason: string };
+
+async function resolveMergeability(
+  ctx: CommandContext,
+): Promise<{ resolved: true; mergeableState: string; headSha: string } | { resolved: false; headSha: string }> {
+  const octokit = ctx.octokit as any; // Full Probot client at runtime
+  let latestHeadSha = "";
+
+  for (let attempt = 0; attempt < MERGEABLE_STATE_RESOLUTION_MAX_POLLS; attempt++) {
+    const pull = await octokit.rest.pulls.get({
+      owner: ctx.owner,
+      repo: ctx.repo,
+      pull_number: ctx.issueNumber,
+    });
+    const mergeableState = pull?.data?.mergeable_state;
+    latestHeadSha = pull?.data?.head?.sha ?? latestHeadSha;
+
+    if (typeof mergeableState === "string" && RESOLVED_MERGEABLE_STATES.has(mergeableState)) {
+      return { resolved: true, mergeableState, headSha: latestHeadSha };
+    }
+
+    if (attempt < MERGEABLE_STATE_RESOLUTION_MAX_POLLS - 1) {
+      await new Promise((resolve) => setTimeout(resolve, MERGEABLE_STATE_RESOLUTION_INTERVAL_MS));
+    }
+  }
+
+  return { resolved: false, headSha: latestHeadSha };
+}
+
+async function refreshHeadIfBehindBase(
+  ctx: CommandContext,
+  currentHeadSha: string,
+): Promise<BranchRefreshResult> {
+  const octokit = ctx.octokit as any; // Full Probot client at runtime
+
+  const resolvedMergeability = await resolveMergeability(ctx);
+  const baselineSha = resolvedMergeability.headSha || currentHeadSha;
+
+  if (!resolvedMergeability.resolved) {
+    return {
+      success: false,
+      reason: "Couldn't determine mergeability state yet (GitHub is still calculating). Retry `/squash` shortly to avoid merging a stale head.",
+    };
+  }
+
+  if (resolvedMergeability.mergeableState !== "behind") {
+    return { success: true, updated: false, headSha: baselineSha };
+  }
+
+  try {
+    await octokit.rest.pulls.updateBranch({
+      owner: ctx.owner,
+      repo: ctx.repo,
+      pull_number: ctx.issueNumber,
+      expected_head_sha: baselineSha,
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    ctx.log.error({ err: error }, `Failed to refresh stale branch for /squash: ${reason}`);
+    return {
+      success: false,
+      reason: "Branch is behind base and couldn't be refreshed automatically. Rebase/update the branch, wait for CI, then retry `/squash`.",
+    };
+  }
+
+  for (let attempt = 0; attempt < BRANCH_REFRESH_MAX_POLLS; attempt++) {
+    const refreshed = await octokit.rest.pulls.get({
+      owner: ctx.owner,
+      repo: ctx.repo,
+      pull_number: ctx.issueNumber,
+    });
+    const refreshedSha = refreshed?.data?.head?.sha ?? baselineSha;
+    if (refreshedSha !== baselineSha) {
+      return { success: true, updated: true, headSha: refreshedSha };
+    }
+
+    if (attempt < BRANCH_REFRESH_MAX_POLLS - 1) {
+      await new Promise((resolve) => setTimeout(resolve, BRANCH_REFRESH_POLL_INTERVAL_MS));
+    }
+  }
+
+  return {
+    success: false,
+    reason: "Branch refresh started but the head SHA did not advance yet. Wait for the update and CI to finish, then retry `/squash`.",
+  };
 }
 
 /**

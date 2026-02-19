@@ -86,8 +86,14 @@ function createMockOctokit(permission = "admin") {
       },
       pulls: {
         get: vi.fn().mockResolvedValue({
-          data: { title: "Add merge helper", body: "PR description" },
+          data: {
+            title: "Add merge helper",
+            body: "PR description",
+            mergeable_state: "clean",
+            head: { sha: "abc123" },
+          },
         }),
+        updateBranch: vi.fn().mockResolvedValue({}),
         listCommits: vi.fn().mockResolvedValue({
           data: [{ commit: { message: "initial commit" } }],
         }),
@@ -112,6 +118,7 @@ function createPRCtx(overrides: Partial<CommandContext> = {}): CommandContext {
     appId: 12345,
     log: {
       info: vi.fn(),
+      warn: vi.fn(),
       error: vi.fn(),
     },
     ...overrides,
@@ -267,6 +274,226 @@ describe("/squash command", () => {
     const body = (ctx.octokit.rest.issues.createComment.mock.calls[0][0] as { body: string }).body;
     expect(body).toContain("final verification");
     expect(body).toContain("blocked");
+  });
+
+  it("refreshes a behind branch before final verification and merge", async () => {
+    const octokit = createMockOctokit();
+    let pullsGetCalls = 0;
+    octokit.rest.pulls.get.mockImplementation(async () => {
+      pullsGetCalls += 1;
+      if (pullsGetCalls === 2) {
+        return {
+          data: {
+            title: "Add merge helper",
+            body: "PR description",
+            mergeable_state: "behind",
+            head: { sha: "abc123" },
+          },
+        };
+      }
+      if (pullsGetCalls === 3) {
+        return {
+          data: {
+            title: "Add merge helper",
+            body: "PR description",
+            mergeable_state: "clean",
+            head: { sha: "def456" },
+          },
+        };
+      }
+      return {
+        data: {
+          title: "Add merge helper",
+          body: "PR description",
+          mergeable_state: "clean",
+          head: { sha: "abc123" },
+        },
+      };
+    });
+    const ctx = createPRCtx({ octokit });
+
+    const result = await executeCommand(ctx);
+
+    expect(result).toEqual({ status: "executed", message: "Squash merge completed." });
+    expect(octokit.rest.pulls.updateBranch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pull_number: 42,
+        expected_head_sha: "abc123",
+      }),
+    );
+    expect(octokit.rest.pulls.merge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sha: "def456",
+      }),
+    );
+    const body = (octokit.rest.issues.createComment.mock.calls[0][0] as { body: string }).body;
+    expect(body).toContain("Branch Refresh");
+    expect(body).toContain("refreshed to `def456`");
+  });
+
+  it("blocks merge when a behind branch cannot be refreshed", async () => {
+    const octokit = createMockOctokit();
+    let pullsGetCalls = 0;
+    octokit.rest.pulls.get.mockImplementation(async () => {
+      pullsGetCalls += 1;
+      if (pullsGetCalls === 2) {
+        return {
+          data: {
+            title: "Add merge helper",
+            body: "PR description",
+            mergeable_state: "behind",
+            head: { sha: "abc123" },
+          },
+        };
+      }
+      return {
+        data: {
+          title: "Add merge helper",
+          body: "PR description",
+          mergeable_state: "clean",
+          head: { sha: "abc123" },
+        },
+      };
+    });
+    octokit.rest.pulls.updateBranch.mockRejectedValueOnce(new Error("update not allowed"));
+    const ctx = createPRCtx({ octokit });
+
+    const result = await executeCommand(ctx);
+
+    expect(result.status).toBe("rejected");
+    expect(octokit.rest.pulls.merge).not.toHaveBeenCalled();
+    const body = (octokit.rest.issues.createComment.mock.calls[0][0] as { body: string }).body;
+    expect(body).toContain("Branch Refresh");
+    expect(body).toContain("couldn't be refreshed automatically");
+    expect(body).toContain("stale head");
+  });
+
+  it("blocks merge when branch refresh does not advance the head SHA", async () => {
+    vi.useFakeTimers();
+    const octokit = createMockOctokit();
+    let pullsGetCalls = 0;
+    octokit.rest.pulls.get.mockImplementation(async () => {
+      pullsGetCalls += 1;
+      if (pullsGetCalls === 2) {
+        return {
+          data: {
+            title: "Add merge helper",
+            body: "PR description",
+            mergeable_state: "behind",
+            head: { sha: "abc123" },
+          },
+        };
+      }
+      return {
+        data: {
+          title: "Add merge helper",
+          body: "PR description",
+          mergeable_state: "clean",
+          head: { sha: "abc123" },
+        },
+      };
+    });
+    const ctx = createPRCtx({ octokit });
+
+    const resultPromise = executeCommand(ctx);
+    await vi.runAllTimersAsync();
+    const result = await resultPromise;
+    vi.useRealTimers();
+
+    expect(result.status).toBe("rejected");
+    expect(octokit.rest.pulls.updateBranch).toHaveBeenCalledTimes(1);
+    expect(octokit.rest.pulls.merge).not.toHaveBeenCalled();
+    const body = (octokit.rest.issues.createComment.mock.calls[0][0] as { body: string }).body;
+    expect(body).toContain("Branch Refresh");
+    expect(body).toContain("head SHA did not advance");
+    expect(body).toContain("stale head");
+  });
+
+  it("waits for transient mergeable_state to resolve before refreshing behind branches", async () => {
+    vi.useFakeTimers();
+    const octokit = createMockOctokit();
+    let pullsGetCalls = 0;
+    octokit.rest.pulls.get.mockImplementation(async () => {
+      pullsGetCalls += 1;
+      if (pullsGetCalls === 2) {
+        return {
+          data: {
+            title: "Add merge helper",
+            body: "PR description",
+            mergeable_state: "unknown",
+            head: { sha: "abc123" },
+          },
+        };
+      }
+      if (pullsGetCalls === 3) {
+        return {
+          data: {
+            title: "Add merge helper",
+            body: "PR description",
+            mergeable_state: "behind",
+            head: { sha: "abc123" },
+          },
+        };
+      }
+      if (pullsGetCalls === 4) {
+        return {
+          data: {
+            title: "Add merge helper",
+            body: "PR description",
+            mergeable_state: "clean",
+            head: { sha: "def456" },
+          },
+        };
+      }
+      return {
+        data: {
+          title: "Add merge helper",
+          body: "PR description",
+          mergeable_state: "clean",
+          head: { sha: "abc123" },
+        },
+      };
+    });
+    const ctx = createPRCtx({ octokit });
+
+    const resultPromise = executeCommand(ctx);
+    await vi.runAllTimersAsync();
+    const result = await resultPromise;
+    vi.useRealTimers();
+
+    expect(result).toEqual({ status: "executed", message: "Squash merge completed." });
+    expect(octokit.rest.pulls.updateBranch).toHaveBeenCalledTimes(1);
+    expect(octokit.rest.pulls.merge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sha: "def456",
+      }),
+    );
+  });
+
+  it("fails closed when mergeable_state never resolves", async () => {
+    vi.useFakeTimers();
+    const octokit = createMockOctokit();
+    octokit.rest.pulls.get.mockResolvedValue({
+      data: {
+        title: "Add merge helper",
+        body: "PR description",
+        mergeable_state: "unknown",
+        head: { sha: "abc123" },
+      },
+    });
+    const ctx = createPRCtx({ octokit });
+
+    const resultPromise = executeCommand(ctx);
+    await vi.runAllTimersAsync();
+    const result = await resultPromise;
+    vi.useRealTimers();
+
+    expect(result.status).toBe("rejected");
+    expect(octokit.rest.pulls.updateBranch).not.toHaveBeenCalled();
+    expect(octokit.rest.pulls.merge).not.toHaveBeenCalled();
+    const body = (octokit.rest.issues.createComment.mock.calls[0][0] as { body: string }).body;
+    expect(body).toContain("Couldn't determine mergeability state yet");
+    expect(body).toContain("stale head");
   });
 
   it("uses PR fallback commit body when generator returns an empty body", async () => {

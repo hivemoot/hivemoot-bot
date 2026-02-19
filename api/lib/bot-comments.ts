@@ -117,7 +117,7 @@ export type CommentMetadata =
 export const SIGNATURES = {
   VOTING: "React to THIS comment to vote",
   LEADERBOARD: "# 🐝 Implementation Leaderboard 📊",
-  ALIGNMENT: "# 🐝 Colony Alignment Ledger",
+  ALIGNMENT: "# 🐝 Blueprint",
   HUMAN_HELP: "# 🐝 Summoning the Humans",
 } as const;
 

@@ -42,6 +42,11 @@ export const CONFIG_BOUNDS = {
   mergeReady: {
     minApprovals: { min: 1, max: 20, default: 1 },
   },
+  llmMaxTokens: {
+    min: 500,
+    max: 32_768,
+    default: 4_096,
+  },
 } as const;
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -151,7 +156,7 @@ export const MESSAGES = {
 This PR doesn't reference an approved issue.
 
 Link it using closing keywords in the description:
-\`Fixes #<issue-number>\`, \`Closes #<issue-number>\`, or \`Resolves #<issue-number>\`${SIGNATURE}`,
+\`Fixes #<issue-number>\`, \`Fixes owner/repo#<issue-number>\`, or \`Fixes https://github.com/owner/repo/issues/<issue-number>\` (also \`Closes\` / \`Resolves\`).${SIGNATURE}`,
 
   // Posted when discussion phase ends
   votingStart: (priority?: "high" | "medium" | "low") => {
@@ -178,7 +183,7 @@ Voting closes in ~24 hours.${SIGNATURE}`;
 
 Time for hivemoot to decide.
 
-**${SIGNATURES.VOTING}:**
+**${SIGNATURES.VOTING} (react once — multiple reactions = no vote):**
 - 👍 **Ready** — Approve for implementation
 - 👎 **Not Ready** — Close this proposal
 - 😕 **Needs Discussion** — Back to discussion
@@ -195,7 +200,7 @@ Hivemoot has spoken. Ready for implementation.
 
 Next steps:
 - Open a PR for review if you plan to implement.
-- Link this issue in the PR description (e.g., \`Fixes #<issue-number>\`, \`Closes #<issue-number>\`, or \`Resolves #<issue-number>\`).
+- Link this issue in the PR description using a closing keyword (e.g., \`Fixes #<issue-number>\`, \`Fixes owner/repo#<issue-number>\`, or \`Fixes https://github.com/owner/repo/issues/<issue-number>\`; \`Closes\` / \`Resolves\` also work).
 - Implementation slots are limited; additional PRs may be deferred to a later round.${SIGNATURE}`,
 
   // Posted when voting ends with rejection
@@ -628,15 +633,15 @@ ${prNumbers.length} competing implementations: ${prNumbers.map((n) => `#${n}`).j
 Review and approve the best one.${SIGNATURE}`,
 
   /**
-   * Posted to existing PRs when their linked issue is approved for implementation.
+   * Posted to existing PRs when their linked issue is ready to implement.
    * Notifies the PR author to push an update so the PR can be considered.
    * Wrapped with notification metadata for idempotent duplicate detection.
    */
-  issueVotingPassed: (issueNumber: number, prAuthor: string) =>
+  issueReadyToImplement: (issueNumber: number, prAuthor: string) =>
     buildNotificationComment(
       `# 🐝 Issue #${issueNumber} Ready to Implement ✅
 
-Good news @${prAuthor} — Issue #${issueNumber} is approved and ready for implementation!
+Good news @${prAuthor} — Issue #${issueNumber} is ready for implementation!
 
 Push a new commit or add a comment to activate it for implementation tracking.${SIGNATURE}`,
       issueNumber,

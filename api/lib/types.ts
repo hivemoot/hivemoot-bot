@@ -39,6 +39,7 @@ export interface IssueRef {
   owner: string;
   repo: string;
   issueNumber: number;
+  installationId?: number;
 }
 
 /**
@@ -107,6 +108,7 @@ export interface PRRef {
   owner: string;
   repo: string;
   prNumber: number;
+  installationId?: number;
 }
 
 /**
@@ -171,4 +173,5 @@ export interface IssueComment {
   body?: string;
   created_at?: string;
   performed_via_github_app?: { id: number } | null;
+  reactions?: { "+1"?: number; "-1"?: number };
 }

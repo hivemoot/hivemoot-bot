@@ -494,7 +494,7 @@ describe("executeCommand", () => {
   });
 
   describe("error handling", () => {
-    it("should add confused reaction and re-throw on handler error", async () => {
+    it("should add confused reaction, post a generic failure reply, and re-throw on handler error", async () => {
       mockGovernance.transitionToVoting.mockRejectedValue(new Error("API error"));
       const ctx = createCtx();
 
@@ -502,6 +502,44 @@ describe("executeCommand", () => {
 
       const reactionCalls = ctx.octokit.rest.reactions.createForIssueComment.mock.calls;
       expect(reactionCalls.some((c: unknown[]) => (c[0] as { content: string }).content === "confused")).toBe(true);
+      expect(ctx.octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.stringContaining("CMD_VOTE_UNEXPECTED"),
+        }),
+      );
+      expect(ctx.octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.stringContaining("cmd-2s"),
+        }),
+      );
+      expect(ctx.log.error).toHaveBeenCalledWith(
+        expect.objectContaining({
+          failureCode: "CMD_VOTE_UNEXPECTED",
+          correlationId: "cmd-2s",
+          command: "vote",
+          senderPermission: "admin",
+        }),
+        expect.stringContaining("Command /vote failed"),
+      );
+    });
+
+    it("should classify retryable API failures as transient in fallback reply", async () => {
+      const transientError = Object.assign(new Error("Service unavailable"), { status: 503 });
+      mockGovernance.transitionToVoting.mockRejectedValue(transientError);
+      const ctx = createCtx();
+
+      await expect(executeCommand(ctx)).rejects.toThrow("Service unavailable");
+
+      expect(ctx.octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.stringContaining("CMD_VOTE_TRANSIENT"),
+        }),
+      );
+      expect(ctx.octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.stringContaining("This looks transient"),
+        }),
+      );
     });
 
     it("should not fail if acknowledgment reaction throws", async () => {

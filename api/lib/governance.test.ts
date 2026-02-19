@@ -154,7 +154,7 @@ describe("GovernanceService", () => {
 
       beforeEach(() => {
         // Enable LLM by returning a mock model result
-        vi.mocked(createModelFromEnv).mockReturnValue(mockModelResult);
+        vi.mocked(createModelFromEnv).mockResolvedValue(mockModelResult);
 
         // Setup mock issue context
         vi.mocked(mockIssues.getIssueContext).mockResolvedValue(mockContext);

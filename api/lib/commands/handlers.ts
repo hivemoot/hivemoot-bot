@@ -609,7 +609,13 @@ async function handleGather(ctx: CommandContext): Promise<CommandResult> {
   try {
     const context = await issues.getIssueContext(ref);
     const generator = new BlueprintGenerator();
-    const result = await generator.generate(context);
+    const result = await generator.generate(
+      context,
+      undefined,
+      ctx.installationId !== undefined
+        ? { installationId: ctx.installationId }
+        : undefined
+    );
 
     if (result.success) {
       blueprintContent = buildBlueprintContent(result.plan, ctx.senderLogin);
@@ -710,7 +716,13 @@ async function handlePreflight(ctx: CommandContext): Promise<CommandResult> {
           groupEnd: noop,
         },
       });
-      const result = await generator.generate(prContext);
+      const result = await generator.generate(
+        prContext,
+        undefined,
+        ctx.installationId !== undefined
+          ? { installationId: ctx.installationId }
+          : undefined
+      );
 
       if (result.success) {
         const formatted = formatCommitMessage(result.message, ctx.issueNumber);
@@ -830,7 +842,13 @@ async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
         groupEnd: noop,
       },
     });
-    const result = await generator.generate(prContext);
+    const result = await generator.generate(
+      prContext,
+      undefined,
+      ctx.installationId !== undefined
+        ? { installationId: ctx.installationId }
+        : undefined
+    );
 
     if (!result.success) {
       body += "### Commit Message\n\n";

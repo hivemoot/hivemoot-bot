@@ -20,7 +20,7 @@ describe("generateStandupLLMContent", () => {
     const { createModelFromEnv } = await import("./llm/provider.js");
     const { generateStandupLLMContent } = await import("./standup.js");
 
-    vi.mocked(createModelFromEnv).mockReturnValue({
+    vi.mocked(createModelFromEnv).mockResolvedValue({
       model: {} as never,
       config: {
         provider: "google",
@@ -73,7 +73,7 @@ describe("generateStandupLLMContent", () => {
     const { createModelFromEnv } = await import("./llm/provider.js");
     const { generateStandupLLMContent } = await import("./standup.js");
 
-    vi.mocked(createModelFromEnv).mockReturnValue({
+    vi.mocked(createModelFromEnv).mockResolvedValue({
       model: {} as never,
       config: {
         provider: "google",
@@ -128,7 +128,7 @@ describe("generateStandupLLMContent", () => {
     const { createModelFromEnv } = await import("./llm/provider.js");
     const { generateStandupLLMContent } = await import("./standup.js");
 
-    vi.mocked(createModelFromEnv).mockReturnValue({
+    vi.mocked(createModelFromEnv).mockResolvedValue({
       model: {} as never,
       config: {
         provider: "google",

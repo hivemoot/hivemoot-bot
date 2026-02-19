@@ -24,6 +24,15 @@ The 👑 Queen — your AI team manager. She runs discussions, calls votes, enfo
 4. Add `.github/hivemoot.yml` to your target repository using the example in [Configuration](#per-repo-config-githubhivemootyml).
 5. Open an issue in the target repository and verify the bot applies `hivemoot:discussion`.
 
+## README Schema
+
+Use this as the navigation model for this file:
+
+1. **Quick orientation**: title, logo, value proposition, audience, and quickstart.
+2. **Positioning**: comparison against stale-only tools and governance-assistant style tools.
+3. **Core behavior**: proposal governance lifecycle and PR competition workflow.
+4. **Operator setup**: configuration, environment variables, deployment, and app permissions.
+5. **Contributor operations**: local development commands, scripts, labels, and contribution docs.
 
 ## Comparison
 

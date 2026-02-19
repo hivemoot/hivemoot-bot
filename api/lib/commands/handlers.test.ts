@@ -542,6 +542,44 @@ describe("executeCommand", () => {
       );
     });
 
+    it("should classify 403 failures as permission issues in fallback reply", async () => {
+      const permissionError = Object.assign(new Error("Forbidden"), { status: 403 });
+      mockGovernance.transitionToVoting.mockRejectedValue(permissionError);
+      const ctx = createCtx();
+
+      await expect(executeCommand(ctx)).rejects.toThrow("Forbidden");
+
+      expect(ctx.octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.stringContaining("CMD_VOTE_PERMISSION"),
+        }),
+      );
+      expect(ctx.octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.stringContaining("Check repository/app permissions"),
+        }),
+      );
+    });
+
+    it("should classify 422 failures as validation issues in fallback reply", async () => {
+      const validationError = Object.assign(new Error("Unprocessable"), { status: 422 });
+      mockGovernance.transitionToVoting.mockRejectedValue(validationError);
+      const ctx = createCtx();
+
+      await expect(executeCommand(ctx)).rejects.toThrow("Unprocessable");
+
+      expect(ctx.octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.stringContaining("CMD_VOTE_VALIDATION"),
+        }),
+      );
+      expect(ctx.octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.stringContaining("Verify repository configuration and pull request state"),
+        }),
+      );
+    });
+
     it("should not fail if acknowledgment reaction throws", async () => {
       const octokit = createMockOctokit();
       octokit.rest.reactions.createForIssueComment

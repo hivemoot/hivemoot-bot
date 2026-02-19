@@ -39,6 +39,7 @@ export interface IssueRef {
   owner: string;
   repo: string;
   issueNumber: number;
+  installationId?: number;
 }
 
 /**
@@ -107,6 +108,7 @@ export interface PRRef {
   owner: string;
   repo: string;
   prNumber: number;
+  installationId?: number;
 }
 
 /**

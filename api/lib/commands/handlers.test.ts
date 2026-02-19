@@ -167,11 +167,13 @@ describe("executeCommand", () => {
       const result = await executeCommand(ctx);
 
       expect(result).toEqual({ status: "executed", message: "Moved to voting phase." });
-      expect(mockGovernance.transitionToVoting).toHaveBeenCalledWith({
-        owner: "test-org",
-        repo: "test-repo",
-        issueNumber: 42,
-      });
+      expect(mockGovernance.transitionToVoting).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: "test-org",
+          repo: "test-repo",
+          issueNumber: 42,
+        })
+      );
     });
 
     it("should add eyes reaction on receipt and thumbs up on success", async () => {
@@ -242,7 +244,7 @@ describe("executeCommand", () => {
 
       expect(result).toEqual({ status: "executed", message: "Fast-tracked to ready-to-implement." });
       expect(mockIssueOps.transition).toHaveBeenCalledWith(
-        { owner: "test-org", repo: "test-repo", issueNumber: 42 },
+        expect.objectContaining({ owner: "test-org", repo: "test-repo", issueNumber: 42 }),
         expect.objectContaining({
           removeLabel: LABELS.DISCUSSION,
           addLabel: LABELS.READY_TO_IMPLEMENT,
@@ -366,11 +368,11 @@ describe("executeCommand", () => {
       const result = await executeCommand(ctx);
 
       expect(result).toEqual({ status: "executed", message: "Created the blueprint comment." });
-      expect(mockIssueOps.findAlignmentCommentId).toHaveBeenCalledWith({
+      expect(mockIssueOps.findAlignmentCommentId).toHaveBeenCalledWith(expect.objectContaining({
         owner: "test-org",
         repo: "test-repo",
         issueNumber: 42,
-      });
+      }));
       expect(mockIssueOps.comment).toHaveBeenCalledTimes(1);
       const body = mockIssueOps.comment.mock.calls[0][1];
       expect(body).toContain('"type":"alignment"');

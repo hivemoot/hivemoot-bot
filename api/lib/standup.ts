@@ -86,6 +86,10 @@ export interface StandupLLMContent {
   };
 }
 
+export interface StandupLLMContext {
+  installationId?: number;
+}
+
 // ───────────────────────────────────────────────────────────────────────────────
 // LLM Schema
 // ───────────────────────────────────────────────────────────────────────────────
@@ -710,10 +714,15 @@ function validateLLMOutput(
  * Returns null if LLM is not configured or fails.
  */
 export async function generateStandupLLMContent(
-  data: StandupData
+  data: StandupData,
+  llmContext?: StandupLLMContext
 ): Promise<StandupLLMContent | null> {
   try {
-    const modelResult = createModelFromEnv();
+    const modelResult = createModelFromEnv(
+      llmContext?.installationId !== undefined
+        ? { installationId: llmContext.installationId }
+        : undefined
+    );
     if (!modelResult) {
       logger.debug("LLM not configured, skipping standup narration");
       return null;

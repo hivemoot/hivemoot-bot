@@ -33,6 +33,7 @@ import { runForAllRepositories, runIfMain } from "./shared/run-installations.js"
 import type { Repository, PRRef } from "../api/lib/index.js";
 import type { PROperations } from "../api/lib/pr-operations.js";
 import type { IssueOperations } from "../api/lib/github-client.js";
+import type { InstallationContext } from "./shared/run-installations.js";
 
 /**
  * Legacy/plaintext signatures for pre-metadata ready notifications.
@@ -202,7 +203,8 @@ export async function reconcileIssue(
 export async function processRepository(
   octokit: InstanceType<typeof Octokit>,
   repo: Repository,
-  appId: number
+  appId: number,
+  _installation?: InstallationContext
 ): Promise<void> {
   const owner = repo.owner.login;
   const repoName = repo.name;

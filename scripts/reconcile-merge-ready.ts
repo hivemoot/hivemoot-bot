@@ -20,6 +20,7 @@ import {
 } from "../api/lib/index.js";
 import { runForAllRepositories, runIfMain } from "./shared/run-installations.js";
 import type { Repository } from "../api/lib/index.js";
+import type { InstallationContext } from "./shared/run-installations.js";
 
 /**
  * Process a single repository — find all implementation PRs and reconcile each.
@@ -28,7 +29,8 @@ import type { Repository } from "../api/lib/index.js";
 export async function processRepository(
   octokit: InstanceType<typeof Octokit>,
   repo: Repository,
-  appId: number
+  appId: number,
+  _installation?: InstallationContext
 ): Promise<void> {
   const owner = repo.owner.login;
   const repoName = repo.name;

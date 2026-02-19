@@ -16,7 +16,7 @@
  * All possible bot comment types.
  * Single source of truth: the array drives both runtime validation and the type.
  */
-const COMMENT_TYPES = ["voting", "leaderboard", "welcome", "status", "error", "notification", "standup"] as const;
+const COMMENT_TYPES = ["voting", "leaderboard", "welcome", "alignment", "status", "error", "notification", "standup"] as const;
 export type CommentType = (typeof COMMENT_TYPES)[number];
 
 /**
@@ -48,6 +48,13 @@ export interface LeaderboardMetadata extends BaseMetadata {
  */
 export interface WelcomeMetadata extends BaseMetadata {
   type: "welcome";
+}
+
+/**
+ * Alignment comment metadata.
+ */
+export interface AlignmentMetadata extends BaseMetadata {
+  type: "alignment";
 }
 
 /**
@@ -93,6 +100,7 @@ export type CommentMetadata =
   | VotingMetadata
   | LeaderboardMetadata
   | WelcomeMetadata
+  | AlignmentMetadata
   | StatusMetadata
   | HumanHelpMetadata
   | NotificationMetadata
@@ -109,6 +117,7 @@ export type CommentMetadata =
 export const SIGNATURES = {
   VOTING: "React to THIS comment to vote",
   LEADERBOARD: "# 🐝 Implementation Leaderboard 📊",
+  ALIGNMENT: "# 🐝 Blueprint",
   HUMAN_HELP: "# 🐝 Summoning the Humans",
 } as const;
 
@@ -179,6 +188,18 @@ export function createWelcomeMetadata(issueNumber: number): WelcomeMetadata {
   return {
     version: 1,
     type: "welcome",
+    createdAt: new Date().toISOString(),
+    issueNumber,
+  };
+}
+
+/**
+ * Create alignment comment metadata.
+ */
+export function createAlignmentMetadata(issueNumber: number): AlignmentMetadata {
+  return {
+    version: 1,
+    type: "alignment",
     createdAt: new Date().toISOString(),
     issueNumber,
   };
@@ -264,6 +285,14 @@ export function buildVotingComment(content: string, issueNumber: number, cycle: 
  */
 export function buildDiscussionComment(content: string, issueNumber: number): string {
   const metadata = createWelcomeMetadata(issueNumber);
+  return `${generateMetadataTag(metadata)}\n${content}`;
+}
+
+/**
+ * Build a complete alignment comment with embedded metadata.
+ */
+export function buildAlignmentComment(content: string, issueNumber: number): string {
+  const metadata = createAlignmentMetadata(issueNumber);
   return `${generateMetadataTag(metadata)}\n${content}`;
 }
 
@@ -401,6 +430,24 @@ export function isLeaderboardComment(
     return false;
   }
   return hasMetadataType(body, "leaderboard");
+}
+
+/**
+ * Check if a comment is an alignment comment from our app.
+ * Uses metadata type for stable detection.
+ */
+export function isAlignmentComment(
+  body: string | undefined | null,
+  appId: number,
+  performedViaAppId: number | undefined | null
+): boolean {
+  if (performedViaAppId !== appId) {
+    return false;
+  }
+  if (typeof body !== "string") {
+    return false;
+  }
+  return hasMetadataType(body, "alignment");
 }
 
 /**

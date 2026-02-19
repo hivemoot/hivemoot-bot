@@ -15,7 +15,14 @@ import { IssueOperations, createIssueOperations } from "./github-client.js";
 import { logger as mockLogger } from "./logger.js";
 import type { GitHubClient } from "./github-client.js";
 import type { IssueRef } from "./types.js";
-import { SIGNATURES, buildVotingComment, buildHumanHelpComment, buildNotificationComment, NOTIFICATION_TYPES } from "./bot-comments.js";
+import {
+  SIGNATURES,
+  buildVotingComment,
+  buildAlignmentComment,
+  buildHumanHelpComment,
+  buildNotificationComment,
+  NOTIFICATION_TYPES,
+} from "./bot-comments.js";
 
 /**
  * Helper to create a voting comment body with proper metadata.
@@ -680,6 +687,52 @@ describe("IssueOperations", () => {
       const count = await issueOps.countVotingComments(testRef);
 
       expect(count).toBe(2);
+    });
+  });
+
+  describe("findAlignmentCommentId", () => {
+    it("should return alignment comment ID when found with matching app ID", async () => {
+      mockClient.paginate.iterator = vi.fn().mockReturnValue({
+        async *[Symbol.asyncIterator]() {
+          yield {
+            data: [
+              { id: 100, body: "Regular comment", performed_via_github_app: null },
+              { id: 200, body: buildAlignmentComment(SIGNATURES.ALIGNMENT, 42), performed_via_github_app: { id: TEST_APP_ID } },
+            ],
+          };
+        },
+      });
+
+      const commentId = await issueOps.findAlignmentCommentId(testRef);
+      expect(commentId).toBe(200);
+    });
+
+    it("should return null when no alignment comment exists", async () => {
+      mockClient.paginate.iterator = vi.fn().mockReturnValue({
+        async *[Symbol.asyncIterator]() {
+          yield {
+            data: [{ id: 100, body: "Regular comment", performed_via_github_app: { id: TEST_APP_ID } }],
+          };
+        },
+      });
+
+      const commentId = await issueOps.findAlignmentCommentId(testRef);
+      expect(commentId).toBeNull();
+    });
+
+    it("should ignore alignment-shaped comments from different app IDs", async () => {
+      mockClient.paginate.iterator = vi.fn().mockReturnValue({
+        async *[Symbol.asyncIterator]() {
+          yield {
+            data: [
+              { id: 100, body: buildAlignmentComment(SIGNATURES.ALIGNMENT, 42), performed_via_github_app: { id: 99999 } },
+            ],
+          };
+        },
+      });
+
+      const commentId = await issueOps.findAlignmentCommentId(testRef);
+      expect(commentId).toBeNull();
     });
   });
 
@@ -1581,6 +1634,59 @@ describe("IssueOperations", () => {
       const comments = await issueOps.getDiscussionComments(testRef);
 
       expect(comments).toHaveLength(2);
+    });
+
+    it("should include reactions when present in API response", async () => {
+      mockClient.paginate.iterator = vi.fn().mockReturnValue({
+        async *[Symbol.asyncIterator]() {
+          yield {
+            data: [
+              {
+                id: 1,
+                body: "Great idea!",
+                user: { login: "alice", type: "User" },
+                created_at: "2024-01-15T10:00:00Z",
+                reactions: { "+1": 3, "-1": 1 },
+              },
+            ],
+          };
+        },
+      });
+
+      const comments = await issueOps.getDiscussionComments(testRef);
+
+      expect(comments).toHaveLength(1);
+      expect(comments[0].reactions).toEqual({ thumbsUp: 3, thumbsDown: 1 });
+    });
+
+    it("should omit reactions when counts are zero", async () => {
+      mockClient.paginate.iterator = vi.fn().mockReturnValue({
+        async *[Symbol.asyncIterator]() {
+          yield {
+            data: [
+              {
+                id: 1,
+                body: "Normal comment",
+                user: { login: "alice", type: "User" },
+                created_at: "2024-01-15T10:00:00Z",
+                reactions: { "+1": 0, "-1": 0 },
+              },
+              {
+                id: 2,
+                body: "No reactions field",
+                user: { login: "bob", type: "User" },
+                created_at: "2024-01-15T11:00:00Z",
+              },
+            ],
+          };
+        },
+      });
+
+      const comments = await issueOps.getDiscussionComments(testRef);
+
+      expect(comments).toHaveLength(2);
+      expect(comments[0].reactions).toBeUndefined();
+      expect(comments[1].reactions).toBeUndefined();
     });
   });
 

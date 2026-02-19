@@ -43,6 +43,21 @@ vi.mock("../llm/provider.js", () => ({
   getLLMReadiness: vi.fn(() => ({ ready: false, reason: "not_configured" })),
 }));
 
+// Mock the blueprint generator to control success/failure paths.
+// vi.hoisted ensures the mock fn is available before vi.mock runs.
+const { mockBlueprintGenerate } = vi.hoisted(() => ({
+  mockBlueprintGenerate: vi.fn(),
+}));
+vi.mock("../llm/blueprint.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../llm/blueprint.js")>();
+  return {
+    ...actual,
+    BlueprintGenerator: class {
+      generate = mockBlueprintGenerate;
+    },
+  };
+});
+
 let mockIssueOps: Record<string, ReturnType<typeof vi.fn>>;
 let mockGovernance: Record<string, ReturnType<typeof vi.fn>>;
 let mockLabelService: Record<string, ReturnType<typeof vi.fn>>;
@@ -68,6 +83,7 @@ function createMockOctokit(permission = "admin") {
       },
       issues: {
         createComment: vi.fn().mockResolvedValue({}),
+        updateComment: vi.fn().mockResolvedValue({}),
         listLabelsForRepo: vi.fn().mockResolvedValue({ data: [] }),
         createLabel: vi.fn().mockResolvedValue({}),
         updateLabel: vi.fn().mockResolvedValue({}),
@@ -102,6 +118,7 @@ function createCtx(overrides: Partial<CommandContext> = {}): CommandContext {
     appId: 12345,
     log: {
       info: vi.fn(),
+      warn: vi.fn(),
       error: vi.fn(),
     },
     ...overrides,
@@ -122,6 +139,7 @@ describe("executeCommand", () => {
       findVotingCommentId: vi.fn().mockResolvedValue(null),
       countVotingComments: vi.fn().mockResolvedValue(0),
       getIssueContext: vi.fn(),
+      findAlignmentCommentId: vi.fn().mockResolvedValue(null),
     };
     mockGovernance = {
       transitionToVoting: vi.fn().mockResolvedValue(undefined),
@@ -131,10 +149,15 @@ describe("executeCommand", () => {
         created: 2,
         renamed: 1,
         updated: 0,
-        skipped: 8,
+        skipped: REQUIRED_REPOSITORY_LABELS.length - 3,
         renamedLabels: [{ from: "phase:voting", to: "hivemoot:voting" }],
       }),
     };
+    // Default: LLM not configured → fallback blueprint
+    mockBlueprintGenerate.mockResolvedValue({
+      success: false,
+      reason: "LLM not configured",
+    });
   });
 
   describe("authorization", () => {
@@ -210,11 +233,13 @@ describe("executeCommand", () => {
       const result = await executeCommand(ctx);
 
       expect(result).toEqual({ status: "executed", message: "Moved to voting phase." });
-      expect(mockGovernance.transitionToVoting).toHaveBeenCalledWith({
-        owner: "test-org",
-        repo: "test-repo",
-        issueNumber: 42,
-      });
+      expect(mockGovernance.transitionToVoting).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: "test-org",
+          repo: "test-repo",
+          issueNumber: 42,
+        })
+      );
     });
 
     it("should add eyes reaction on receipt and thumbs up on success", async () => {
@@ -285,7 +310,7 @@ describe("executeCommand", () => {
 
       expect(result).toEqual({ status: "executed", message: "Fast-tracked to ready-to-implement." });
       expect(mockIssueOps.transition).toHaveBeenCalledWith(
-        { owner: "test-org", repo: "test-repo", issueNumber: 42 },
+        expect.objectContaining({ owner: "test-org", repo: "test-repo", issueNumber: 42 }),
         expect.objectContaining({
           removeLabel: LABELS.DISCUSSION,
           addLabel: LABELS.READY_TO_IMPLEMENT,
@@ -409,7 +434,9 @@ describe("executeCommand", () => {
       const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
       expect(commentArgs.body).toContain("Doctor Report");
       expect(commentArgs.body).toContain("**Labels**");
-      expect(commentArgs.body).toContain("11/11 labels accounted for");
+      expect(commentArgs.body).toContain(
+        `${REQUIRED_REPOSITORY_LABELS.length}/${REQUIRED_REPOSITORY_LABELS.length} labels accounted for`,
+      );
       expect(commentArgs.body).toContain("Renamed `phase:voting` -> `hivemoot:voting`");
       expect(commentArgs.body).toContain("**Config**");
       expect(commentArgs.body).toContain("Loaded `.github/hivemoot.yml`");
@@ -546,6 +573,146 @@ describe("executeCommand", () => {
       const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
       expect(commentArgs.body).toContain("**PR Workflow**: No trusted reviewers configured");
       expect(commentArgs.body).toContain("**Standup**: Category `Hivemoot Reports` is available");
+    });
+  });
+
+  describe("/gather command", () => {
+    it("should create canonical blueprint comment when none exists", async () => {
+      mockIssueOps.getIssueContext.mockResolvedValue({
+        title: "Improve onboarding docs",
+        body: "Proposal body",
+        author: "queen",
+        comments: [
+          { author: "alice", body: "Looks good", createdAt: "2026-02-16T00:00:00.000Z" },
+        ],
+      });
+
+      const ctx = createCtx({ verb: "gather" });
+      const result = await executeCommand(ctx);
+
+      expect(result).toEqual({ status: "executed", message: "Created the blueprint comment." });
+      expect(mockIssueOps.findAlignmentCommentId).toHaveBeenCalledWith(expect.objectContaining({
+        owner: "test-org",
+        repo: "test-repo",
+        issueNumber: 42,
+      }));
+      expect(mockIssueOps.comment).toHaveBeenCalledTimes(1);
+      const body = mockIssueOps.comment.mock.calls[0][1];
+      expect(body).toContain('"type":"alignment"');
+      expect(body).toContain("Blueprint");
+      expect(body).toContain("@maintainer via `/gather`");
+    });
+
+    it("should use LLM-generated blueprint when generation succeeds", async () => {
+      mockIssueOps.getIssueContext.mockResolvedValue({
+        title: "Improve onboarding docs",
+        body: "Proposal body",
+        author: "queen",
+        comments: [
+          { author: "alice", body: "Looks good", createdAt: "2026-02-16T00:00:00.000Z" },
+        ],
+      });
+      mockBlueprintGenerate.mockResolvedValue({
+        success: true,
+        plan: {
+          goal: "Revamp the onboarding documentation",
+          plan: "1. Audit existing docs\n2. Add getting started guide",
+          decisions: ["Use MDX format"],
+          outOfScope: ["Video tutorials"],
+          openQuestions: [],
+          metadata: { commentCount: 1, participantCount: 1 },
+        },
+      });
+
+      const ctx = createCtx({ verb: "gather" });
+      const result = await executeCommand(ctx);
+
+      expect(result).toEqual({ status: "executed", message: "Created the blueprint comment." });
+      const body = mockIssueOps.comment.mock.calls[0][1];
+      expect(body).toContain("Revamp the onboarding documentation");
+      expect(body).toContain("## Plan");
+      expect(body).toContain("## Decisions");
+      expect(body).toContain("Use MDX format");
+      expect(body).toContain("## Out of scope");
+      expect(body).toContain("Video tutorials");
+    });
+
+    it("should log reason when using fallback blueprint", async () => {
+      mockIssueOps.getIssueContext.mockResolvedValue({
+        title: "Test",
+        body: "Body",
+        author: "queen",
+        comments: [
+          { author: "alice", body: "Comment", createdAt: "2026-02-16T00:00:00.000Z" },
+        ],
+      });
+      mockBlueprintGenerate.mockResolvedValue({
+        success: false,
+        reason: "LLM not configured",
+      });
+
+      const ctx = createCtx({ verb: "gather" });
+      await executeCommand(ctx);
+
+      expect(ctx.log.warn).toHaveBeenCalledWith(
+        "Using fallback blueprint for #42: LLM not configured"
+      );
+    });
+
+    it("should update existing canonical blueprint comment", async () => {
+      mockIssueOps.findAlignmentCommentId.mockResolvedValue(555);
+      mockIssueOps.getIssueContext.mockResolvedValue({
+        title: "Improve onboarding docs",
+        body: "Proposal body",
+        author: "queen",
+        comments: [],
+      });
+
+      const ctx = createCtx({ verb: "gather" });
+      const result = await executeCommand(ctx);
+
+      expect(result).toEqual({ status: "executed", message: "Updated the blueprint comment." });
+      expect(ctx.octokit.rest.issues.updateComment).toHaveBeenCalledWith({
+        owner: "test-org",
+        repo: "test-repo",
+        comment_id: 555,
+        body: expect.stringContaining('"type":"alignment"'),
+      });
+      expect(mockIssueOps.comment).not.toHaveBeenCalled();
+    });
+
+    it("should reject /gather on pull requests", async () => {
+      const ctx = createCtx({ verb: "gather", isPullRequest: true });
+      const result = await executeCommand(ctx);
+      expect(result.status).toBe("rejected");
+    });
+
+    it("should reject /gather when issue is not in discussion phase", async () => {
+      const ctx = createCtx({
+        verb: "gather",
+        issueLabels: [{ name: LABELS.VOTING }],
+      });
+      const result = await executeCommand(ctx);
+      expect(result.status).toBe("rejected");
+    });
+
+    it("should preserve existing blueprint when refresh context fetch fails", async () => {
+      mockIssueOps.findAlignmentCommentId.mockResolvedValue(555);
+      mockIssueOps.getIssueContext.mockRejectedValue(new Error("upstream timeout"));
+
+      const ctx = createCtx({ verb: "gather" });
+      const result = await executeCommand(ctx);
+
+      expect(result).toEqual({
+        status: "executed",
+        message: "Blueprint refresh failed; previous comment preserved.",
+      });
+      expect(ctx.octokit.rest.issues.updateComment).not.toHaveBeenCalled();
+      expect(ctx.octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.stringContaining("Keeping the previous blueprint comment unchanged."),
+        }),
+      );
     });
   });
 

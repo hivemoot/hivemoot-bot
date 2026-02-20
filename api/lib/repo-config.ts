@@ -16,6 +16,7 @@ import {
   PR_STALE_THRESHOLD_DAYS,
 } from "../config.js";
 import { logger } from "./logger.js";
+import { getErrorStatus } from "./github-client.js";
 
 // ───────────────────────────────────────────────────────────────────────────────
 // Types
@@ -1124,7 +1125,7 @@ export async function loadRepositoryConfig(
     logger.info(`[${repoFullName}] Loaded config from ${CONFIG_PATH}`);
     return parseRepoConfig(parsed, repoFullName);
   } catch (error) {
-    const status = (error as { status?: number }).status;
+    const status = getErrorStatus(error);
 
     // 404 is expected when repo doesn't have a config file
     if (status === 404) {

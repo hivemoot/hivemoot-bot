@@ -26,6 +26,7 @@ import { CommitMessageGenerator, formatCommitMessage } from "../llm/commit-messa
 import type { PRContext } from "../llm/types.js";
 import type { IssueRef, PRRef } from "../types.js";
 import type { EffectiveConfig } from "../repo-config.js";
+import { getErrorStatus } from "../github-client.js";
 
 /**
  * Minimal interface for the octokit client needed by command handlers.
@@ -180,13 +181,6 @@ async function isAuthorized(ctx: CommandContext): Promise<AuthorizationResult> {
   }
 }
 
-function getErrorStatus(error: unknown): number | null {
-  if (typeof error !== "object" || error === null || !("status" in error)) {
-    return null;
-  }
-  const status = (error as { status?: unknown }).status;
-  return typeof status === "number" ? status : null;
-}
 
 function classifyCommandFailure(error: unknown): CommandFailureClassification {
   const status = getErrorStatus(error);

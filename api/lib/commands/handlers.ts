@@ -6,9 +6,18 @@
  * and performs the corresponding governance action.
  */
 
-import { LABELS, SIGNATURE, isLabelMatch } from "../../config.js";
+import * as yaml from "js-yaml";
+import { LABELS, REQUIRED_REPOSITORY_LABELS, SIGNATURE, isLabelMatch } from "../../config.js";
 import { SIGNATURES, buildAlignmentComment } from "../bot-comments.js";
-import { createIssueOperations, createGovernanceService, createPROperations, loadRepositoryConfig } from "../index.js";
+import {
+  createIssueOperations,
+  createGovernanceService,
+  createPROperations,
+  createRepositoryLabelService,
+  loadRepositoryConfig,
+} from "../index.js";
+import { getRepoDiscussionInfo } from "../discussions.js";
+import { getLLMReadiness } from "../llm/provider.js";
 import { BlueprintGenerator, createMinimalPlan } from "../llm/blueprint.js";
 import type { ImplementationPlan, IssueContext } from "../llm/types.js";
 import { evaluatePreflightChecks } from "../merge-readiness.js";
@@ -16,6 +25,7 @@ import type { PreflightCheckItem } from "../merge-readiness.js";
 import { CommitMessageGenerator, formatCommitMessage } from "../llm/commit-message.js";
 import type { PRContext } from "../llm/types.js";
 import type { IssueRef, PRRef } from "../types.js";
+import type { EffectiveConfig } from "../repo-config.js";
 
 /**
  * Minimal interface for the octokit client needed by command handlers.
@@ -70,6 +80,7 @@ export interface CommandContext {
   owner: string;
   repo: string;
   issueNumber: number;
+  installationId?: number;
   commentId: number;
   senderLogin: string;
   verb: string;
@@ -100,19 +111,51 @@ export type CommandResult =
  * Per issue #81: "only repo maintainers should use these commands"
  */
 const AUTHORIZED_PERMISSIONS = new Set(["admin", "maintain", "write"]);
+const BRANCH_REFRESH_MAX_POLLS = 10;
+const BRANCH_REFRESH_POLL_INTERVAL_MS = 3000;
+const MERGEABLE_STATE_RESOLUTION_MAX_POLLS = 10;
+const MERGEABLE_STATE_RESOLUTION_INTERVAL_MS = 1500;
+const RESOLVED_MERGEABLE_STATES = new Set([
+  "behind",
+  "clean",
+  "dirty",
+  "blocked",
+  "unstable",
+  "has_hooks",
+]);
+type CommandFailureClassification = "permission" | "validation" | "transient" | "unexpected";
+
+interface AuthorizationResult {
+  authorized: boolean;
+  permission: string | null;
+}
+
+interface CommandLogContext {
+  command: string;
+  owner: string;
+  repo: string;
+  issueNumber: number;
+  commentId: number;
+  senderLogin: string;
+  senderPermission: string;
+  isPullRequest: boolean;
+}
 
 /**
  * Check if the sender has sufficient repo permissions to run commands.
- * Returns true if authorized, false otherwise.
+ * Returns authorization status and the sender's resolved permission (when known).
  */
-async function isAuthorized(ctx: CommandContext): Promise<boolean> {
+async function isAuthorized(ctx: CommandContext): Promise<AuthorizationResult> {
   try {
     const { data } = await ctx.octokit.rest.repos.getCollaboratorPermissionLevel({
       owner: ctx.owner,
       repo: ctx.repo,
       username: ctx.senderLogin,
     });
-    return AUTHORIZED_PERMISSIONS.has(data.permission);
+    return {
+      authorized: AUTHORIZED_PERMISSIONS.has(data.permission),
+      permission: data.permission,
+    };
   } catch (error) {
     // If we can't check permissions (e.g., user is not a collaborator), deny.
     // Log so persistent failures (expired token, rate limit) are visible.
@@ -120,8 +163,78 @@ async function isAuthorized(ctx: CommandContext): Promise<boolean> {
       { err: error, user: ctx.senderLogin, issue: ctx.issueNumber },
       `Permission check failed for ${ctx.senderLogin} — denying command`,
     );
-    return false;
+    return { authorized: false, permission: null };
   }
+}
+
+function getErrorStatus(error: unknown): number | null {
+  if (typeof error !== "object" || error === null || !("status" in error)) {
+    return null;
+  }
+  const status = (error as { status?: unknown }).status;
+  return typeof status === "number" ? status : null;
+}
+
+function classifyCommandFailure(error: unknown): CommandFailureClassification {
+  const status = getErrorStatus(error);
+  if (status === 401 || status === 403) {
+    return "permission";
+  }
+  if (status === 400 || status === 404 || status === 409 || status === 422) {
+    return "validation";
+  }
+  if (status === 429 || (status !== null && status >= 500)) {
+    return "transient";
+  }
+  return "unexpected";
+}
+
+function buildFailureCode(verb: string, classification: CommandFailureClassification): string {
+  return `CMD_${verb.toUpperCase()}_${classification.toUpperCase()}`;
+}
+
+function buildCommandCorrelationId(ctx: CommandContext): string {
+  return `cmd-${ctx.commentId.toString(36)}`;
+}
+
+function buildCommandFailureReply(
+  ctx: CommandContext,
+  failureCode: string,
+  correlationId: string,
+  classification: CommandFailureClassification,
+): string {
+  let guidance = "Retry the command once. If it fails again, ask a maintainer to inspect logs.";
+  if (classification === "permission") {
+    guidance = "Check repository/app permissions for this command, then retry.";
+  } else if (classification === "validation") {
+    guidance = "Verify repository configuration and pull request state, then retry.";
+  } else if (classification === "transient") {
+    guidance = "This looks transient (GitHub/API). Retry the command shortly.";
+  }
+
+  return [
+    "## 🐝 Command failed",
+    "",
+    `I couldn't complete \`/${ctx.verb}\` due to an internal command error.`,
+    "",
+    `- Failure code: \`${failureCode}\``,
+    `- Correlation id: \`${correlationId}\``,
+    "",
+    guidance,
+  ].join("\n");
+}
+
+function buildCommandLogContext(ctx: CommandContext, permission: string | null): CommandLogContext {
+  return {
+    command: ctx.verb,
+    owner: ctx.owner,
+    repo: ctx.repo,
+    issueNumber: ctx.issueNumber,
+    commentId: ctx.commentId,
+    senderLogin: ctx.senderLogin,
+    senderPermission: permission ?? "unknown",
+    isPullRequest: ctx.isPullRequest,
+  };
 }
 
 /**
@@ -231,7 +344,12 @@ async function handleVote(ctx: CommandContext): Promise<CommandResult> {
     return { status: "rejected", reason: "This issue is not in the discussion phase. The `/vote` command requires `hivemoot:discussion`." };
   }
 
-  const ref: IssueRef = { owner: ctx.owner, repo: ctx.repo, issueNumber: ctx.issueNumber };
+  const ref: IssueRef = {
+    owner: ctx.owner,
+    repo: ctx.repo,
+    issueNumber: ctx.issueNumber,
+    installationId: ctx.installationId,
+  };
   const issues = createIssueOperations(ctx.octokit, { appId: ctx.appId });
   const governance = createGovernanceService(issues);
 
@@ -259,7 +377,12 @@ async function handleImplement(ctx: CommandContext): Promise<CommandResult> {
     return { status: "rejected", reason: "This issue has been rejected." };
   }
 
-  const ref: IssueRef = { owner: ctx.owner, repo: ctx.repo, issueNumber: ctx.issueNumber };
+  const ref: IssueRef = {
+    owner: ctx.owner,
+    repo: ctx.repo,
+    issueNumber: ctx.issueNumber,
+    installationId: ctx.installationId,
+  };
   const issues = createIssueOperations(ctx.octokit, { appId: ctx.appId });
 
   // Determine which phase label to remove
@@ -382,7 +505,12 @@ async function handleGather(ctx: CommandContext): Promise<CommandResult> {
     };
   }
 
-  const ref: IssueRef = { owner: ctx.owner, repo: ctx.repo, issueNumber: ctx.issueNumber };
+  const ref: IssueRef = {
+    owner: ctx.owner,
+    repo: ctx.repo,
+    issueNumber: ctx.issueNumber,
+    installationId: ctx.installationId,
+  };
   const issues = createIssueOperations(ctx.octokit, { appId: ctx.appId });
   const existingAlignmentCommentId = await issues.findAlignmentCommentId(ref);
 
@@ -446,7 +574,12 @@ async function handlePreflight(ctx: CommandContext): Promise<CommandResult> {
   const prs = createPROperations(octokit, { appId: ctx.appId });
   const repoConfig = await loadRepositoryConfig(octokit, ctx.owner, ctx.repo);
 
-  const ref: PRRef = { owner: ctx.owner, repo: ctx.repo, prNumber: ctx.issueNumber };
+  const ref: PRRef = {
+    owner: ctx.owner,
+    repo: ctx.repo,
+    prNumber: ctx.issueNumber,
+    installationId: ctx.installationId,
+  };
   const currentLabels = ctx.issueLabels.map(l => l.name);
 
   // Run shared preflight checks (same signals as merge-ready label)
@@ -551,14 +684,19 @@ async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
   const octokit = ctx.octokit as any; // Full Probot client at runtime
   const prs = createPROperations(octokit, { appId: ctx.appId });
   const repoConfig = await loadRepositoryConfig(octokit, ctx.owner, ctx.repo);
-  const ref: PRRef = { owner: ctx.owner, repo: ctx.repo, prNumber: ctx.issueNumber };
+  const ref: PRRef = {
+    owner: ctx.owner,
+    repo: ctx.repo,
+    prNumber: ctx.issueNumber,
+    installationId: ctx.installationId,
+  };
   const currentLabels = ctx.issueLabels.map((l) => l.name);
 
   const pr = await prs.get(ref);
   if (pr.merged || pr.state !== "open") {
     return { status: "rejected", reason: "This pull request is already closed or merged." };
   }
-  const expectedHeadSha = pr.headSha;
+  let mergeHeadSha = pr.headSha;
 
   const repoInfo = await octokit.rest.repos.get({ owner: ctx.owner, repo: ctx.repo });
   if (!repoInfo?.data?.allow_squash_merge) {
@@ -626,6 +764,21 @@ async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
     return { status: "rejected", reason: body };
   }
 
+  const refreshedHead = await refreshHeadIfBehindBase(ctx, mergeHeadSha);
+  if (!refreshedHead.success) {
+    body += `### Branch Refresh\n\n`;
+    body += `${refreshedHead.reason}\n\n`;
+    body += `Squash merge was blocked to avoid merging a stale head.`;
+    return { status: "rejected", reason: body };
+  }
+  if (refreshedHead.updated) {
+    mergeHeadSha = refreshedHead.headSha;
+    body += "### Branch Refresh\n\n";
+    body += `Branch was behind base and refreshed to \`${mergeHeadSha}\`. Running final checks on the updated head.\n\n`;
+  } else {
+    mergeHeadSha = refreshedHead.headSha;
+  }
+
   const freshPreflight = await evaluatePreflightChecks({
     prs,
     ref,
@@ -645,7 +798,7 @@ async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
       owner: ctx.owner,
       repo: ctx.repo,
       pull_number: ctx.issueNumber,
-      sha: expectedHeadSha,
+      sha: mergeHeadSha,
       merge_method: "squash",
       commit_title: commitTitle,
       commit_message: commitBody,
@@ -661,6 +814,95 @@ async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
   body += `**${hardPassed}/${hardCount} hard checks passed.** Squash merge completed successfully.`;
   await reply(ctx, body);
   return { status: "executed", message: "Squash merge completed." };
+}
+
+type BranchRefreshResult =
+  | { success: true; updated: boolean; headSha: string }
+  | { success: false; reason: string };
+
+async function resolveMergeability(
+  ctx: CommandContext,
+): Promise<{ resolved: true; mergeableState: string; headSha: string } | { resolved: false; headSha: string }> {
+  const octokit = ctx.octokit as any; // Full Probot client at runtime
+  let latestHeadSha = "";
+
+  for (let attempt = 0; attempt < MERGEABLE_STATE_RESOLUTION_MAX_POLLS; attempt++) {
+    const pull = await octokit.rest.pulls.get({
+      owner: ctx.owner,
+      repo: ctx.repo,
+      pull_number: ctx.issueNumber,
+    });
+    const mergeableState = pull?.data?.mergeable_state;
+    latestHeadSha = pull?.data?.head?.sha ?? latestHeadSha;
+
+    if (typeof mergeableState === "string" && RESOLVED_MERGEABLE_STATES.has(mergeableState)) {
+      return { resolved: true, mergeableState, headSha: latestHeadSha };
+    }
+
+    if (attempt < MERGEABLE_STATE_RESOLUTION_MAX_POLLS - 1) {
+      await new Promise((resolve) => setTimeout(resolve, MERGEABLE_STATE_RESOLUTION_INTERVAL_MS));
+    }
+  }
+
+  return { resolved: false, headSha: latestHeadSha };
+}
+
+async function refreshHeadIfBehindBase(
+  ctx: CommandContext,
+  currentHeadSha: string,
+): Promise<BranchRefreshResult> {
+  const octokit = ctx.octokit as any; // Full Probot client at runtime
+
+  const resolvedMergeability = await resolveMergeability(ctx);
+  const baselineSha = resolvedMergeability.headSha || currentHeadSha;
+
+  if (!resolvedMergeability.resolved) {
+    return {
+      success: false,
+      reason: "Couldn't determine mergeability state yet (GitHub is still calculating). Retry `/squash` shortly to avoid merging a stale head.",
+    };
+  }
+
+  if (resolvedMergeability.mergeableState !== "behind") {
+    return { success: true, updated: false, headSha: baselineSha };
+  }
+
+  try {
+    await octokit.rest.pulls.updateBranch({
+      owner: ctx.owner,
+      repo: ctx.repo,
+      pull_number: ctx.issueNumber,
+      expected_head_sha: baselineSha,
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    ctx.log.error({ err: error }, `Failed to refresh stale branch for /squash: ${reason}`);
+    return {
+      success: false,
+      reason: "Branch is behind base and couldn't be refreshed automatically. Rebase/update the branch, wait for CI, then retry `/squash`.",
+    };
+  }
+
+  for (let attempt = 0; attempt < BRANCH_REFRESH_MAX_POLLS; attempt++) {
+    const refreshed = await octokit.rest.pulls.get({
+      owner: ctx.owner,
+      repo: ctx.repo,
+      pull_number: ctx.issueNumber,
+    });
+    const refreshedSha = refreshed?.data?.head?.sha ?? baselineSha;
+    if (refreshedSha !== baselineSha) {
+      return { success: true, updated: true, headSha: refreshedSha };
+    }
+
+    if (attempt < BRANCH_REFRESH_MAX_POLLS - 1) {
+      await new Promise((resolve) => setTimeout(resolve, BRANCH_REFRESH_POLL_INTERVAL_MS));
+    }
+  }
+
+  return {
+    success: false,
+    reason: "Branch refresh started but the head SHA did not advance yet. Wait for the update and CI to finish, then retry `/squash`.",
+  };
 }
 
 /**
@@ -727,6 +969,360 @@ async function gatherPRContext(
   return prContext;
 }
 
+/**
+ * Doctor check item severity.
+ */
+type DoctorCheckStatus = "pass" | "advisory" | "fail";
+
+interface DoctorCheckResult {
+  name: string;
+  status: DoctorCheckStatus;
+  detail: string;
+  subItems?: string[];
+}
+
+type DoctorRepoOctokit = {
+  rest: {
+    repos: {
+      getContent: (params: { owner: string; repo: string; path: string }) => Promise<{ data: unknown }>;
+      get: (params: { owner: string; repo: string }) => Promise<unknown>;
+    };
+    pulls: {
+      list: (params: { owner: string; repo: string; state?: "open" | "closed" | "all"; per_page?: number }) => Promise<unknown>;
+    };
+    issues: {
+      listLabelsForRepo: (params: { owner: string; repo: string; per_page?: number }) => Promise<unknown>;
+    };
+  };
+  graphql: <T>(query: string, variables?: Record<string, unknown>) => Promise<T>;
+};
+
+function formatDoctorCheckItem(check: DoctorCheckResult): string {
+  const icon = check.status === "pass" ? "[x]" : (check.status === "advisory" ? "[!]" : "[ ]");
+  return `- ${icon} **${check.name}**: ${check.detail}`;
+}
+
+function formatDoctorSubItem(item: string): string {
+  return `  - ${item}`;
+}
+
+function summarizeDoctorChecks(checks: DoctorCheckResult[]): string {
+  const passed = checks.filter((c) => c.status === "pass").length;
+  const advisories = checks.filter((c) => c.status === "advisory").length;
+  const failed = checks.filter((c) => c.status === "fail").length;
+  return `**${passed}/${checks.length} checks passed, ${advisories} advisories, ${failed} failures.**`;
+}
+
+function errorMessage(err: unknown): string {
+  if (err instanceof Error && err.message.trim().length > 0) {
+    return err.message;
+  }
+  return String(err);
+}
+
+async function runDoctorCheck(
+  name: string,
+  run: () => Promise<DoctorCheckResult>,
+): Promise<DoctorCheckResult> {
+  try {
+    return await run();
+  } catch (err) {
+    return {
+      name,
+      status: "fail",
+      detail: `Check failed: ${errorMessage(err)}`,
+    };
+  }
+}
+
+async function runLabelDoctorCheck(ctx: CommandContext): Promise<DoctorCheckResult> {
+  const labels = createRepositoryLabelService(ctx.octokit as unknown);
+  const result = await labels.ensureRequiredLabels(ctx.owner, ctx.repo);
+  const maybeUpdated = (result as { updated?: unknown }).updated;
+  const updatedCount = typeof maybeUpdated === "number" ? maybeUpdated : 0;
+  const totalExpected = REQUIRED_REPOSITORY_LABELS.length;
+  const totalFound = result.created + result.renamed + result.skipped + updatedCount;
+  const status: DoctorCheckStatus = totalFound >= totalExpected ? "pass" : "fail";
+  const detail = `${totalFound}/${totalExpected} labels accounted for (created ${result.created}, renamed ${result.renamed}, updated ${updatedCount}, already present ${result.skipped})`;
+  const subItems = result.renamedLabels.length > 0
+    ? result.renamedLabels.map((entry) => `Renamed \`${entry.from}\` -> \`${entry.to}\``)
+    : ["No legacy labels were renamed"];
+
+  return {
+    name: "Labels",
+    status,
+    detail,
+    subItems,
+  };
+}
+
+async function runConfigDoctorCheck(
+  ctx: CommandContext,
+  repoConfig: EffectiveConfig,
+): Promise<DoctorCheckResult> {
+  const octokit = ctx.octokit as unknown as DoctorRepoOctokit;
+  const configPath = ".github/hivemoot.yml";
+
+  try {
+    const response = await octokit.rest.repos.getContent({
+      owner: ctx.owner,
+      repo: ctx.repo,
+      path: configPath,
+    });
+    const data = response.data as { type?: string; content?: string } | unknown[];
+
+    if (Array.isArray(data) || typeof data !== "object" || data === null || data.type !== "file" || !data.content) {
+      return {
+        name: "Config",
+        status: "advisory",
+        detail: `\`${configPath}\` exists but is not a valid file payload; defaults are active`,
+      };
+    }
+
+    const content = Buffer.from(data.content, "base64").toString("utf-8");
+    const parsed = yaml.load(content);
+    if (parsed === null || parsed === undefined) {
+      return {
+        name: "Config",
+        status: "advisory",
+        detail: `\`${configPath}\` is empty; defaults are active`,
+      };
+    }
+    if (typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {
+        name: "Config",
+        status: "fail",
+        detail: `\`${configPath}\` must be a YAML object`,
+      };
+    }
+
+    const intakeMethods = repoConfig.governance.pr.intake.map((entry) => entry.method).join(", ");
+    return {
+      name: "Config",
+      status: "pass",
+      detail: `Loaded \`${configPath}\` (intake: ${intakeMethods || "none"})`,
+    };
+  } catch (err) {
+    const status = (err as { status?: number }).status;
+    if (status === 404) {
+      return {
+        name: "Config",
+        status: "advisory",
+        detail: `\`${configPath}\` not found; defaults are active`,
+      };
+    }
+
+    if (err instanceof yaml.YAMLException) {
+      return {
+        name: "Config",
+        status: "fail",
+        detail: `Invalid YAML in \`${configPath}\`: ${err.message}`,
+      };
+    }
+
+    return {
+      name: "Config",
+      status: "fail",
+      detail: `Unable to load \`${configPath}\`: ${errorMessage(err)}`,
+    };
+  }
+}
+
+function runPRWorkflowDoctorCheck(repoConfig: EffectiveConfig): DoctorCheckResult {
+  const intake = repoConfig.governance.pr.intake;
+  const trustedReviewers = repoConfig.governance.pr.trustedReviewers;
+  const usesApprovalIntake = intake.some((method) => method.method === "approval");
+  const hasMergeReady = repoConfig.governance.pr.mergeReady !== null;
+  const requiresTrustedReviewers = usesApprovalIntake || hasMergeReady;
+
+  if (requiresTrustedReviewers && trustedReviewers.length === 0) {
+    return {
+      name: "PR Workflow",
+      status: "fail",
+      detail: "Approval-based intake/merge-ready is configured but `trustedReviewers` is empty",
+    };
+  }
+
+  if (intake.length === 0) {
+    return {
+      name: "PR Workflow",
+      status: "fail",
+      detail: "No PR intake methods are configured",
+    };
+  }
+
+  if (trustedReviewers.length === 0) {
+    return {
+      name: "PR Workflow",
+      status: "advisory",
+      detail: "No trusted reviewers configured; approval-based workflows are disabled",
+    };
+  }
+
+  return {
+    name: "PR Workflow",
+    status: "pass",
+    detail: `Configured intake methods: ${intake.map((method) => method.method).join(", ")} (trusted reviewers: ${trustedReviewers.length})`,
+  };
+}
+
+async function runStandupDoctorCheck(
+  ctx: CommandContext,
+  repoConfig: EffectiveConfig,
+): Promise<DoctorCheckResult> {
+  if (!repoConfig.standup.enabled) {
+    return {
+      name: "Standup",
+      status: "pass",
+      detail: "Disabled (no action required)",
+    };
+  }
+
+  if (!repoConfig.standup.category.trim()) {
+    return {
+      name: "Standup",
+      status: "fail",
+      detail: "`standup.enabled` is true but `standup.category` is empty",
+    };
+  }
+
+  const discussions = await getRepoDiscussionInfo(ctx.octokit as unknown as DoctorRepoOctokit, ctx.owner, ctx.repo);
+  if (!discussions.hasDiscussions) {
+    return {
+      name: "Standup",
+      status: "fail",
+      detail: "GitHub Discussions are disabled for this repository",
+    };
+  }
+
+  const category = discussions.categories.find((entry) => entry.name === repoConfig.standup.category);
+  if (!category) {
+    return {
+      name: "Standup",
+      status: "fail",
+      detail: `Category \`${repoConfig.standup.category}\` was not found`,
+    };
+  }
+
+  return {
+    name: "Standup",
+    status: "pass",
+    detail: `Category \`${repoConfig.standup.category}\` is available`,
+  };
+}
+
+async function runPermissionsDoctorCheck(ctx: CommandContext): Promise<DoctorCheckResult> {
+  const octokit = ctx.octokit as unknown as DoctorRepoOctokit;
+  const failures: string[] = [];
+
+  const probes: Array<{ label: string; run: () => Promise<void> }> = [
+    {
+      label: "issues",
+      run: async () => {
+        await octokit.rest.issues.listLabelsForRepo({ owner: ctx.owner, repo: ctx.repo, per_page: 1 });
+      },
+    },
+    {
+      label: "pull_requests",
+      run: async () => {
+        await octokit.rest.pulls.list({ owner: ctx.owner, repo: ctx.repo, state: "open", per_page: 1 });
+      },
+    },
+    {
+      label: "metadata",
+      run: async () => {
+        await octokit.rest.repos.get({ owner: ctx.owner, repo: ctx.repo });
+      },
+    },
+  ];
+
+  for (const probe of probes) {
+    try {
+      await probe.run();
+    } catch (err) {
+      failures.push(`${probe.label}: ${errorMessage(err)}`);
+    }
+  }
+
+  if (failures.length > 0) {
+    return {
+      name: "Permissions",
+      status: "fail",
+      detail: `${failures.length}/${probes.length} capability probes failed`,
+      subItems: failures,
+    };
+  }
+
+  return {
+    name: "Permissions",
+    status: "pass",
+    detail: "Issues, pull requests, and metadata capability probes succeeded",
+  };
+}
+
+function runLLMDoctorCheck(): DoctorCheckResult {
+  const readiness = getLLMReadiness();
+  if (readiness.ready) {
+    return {
+      name: "LLM",
+      status: "pass",
+      detail: "Provider, model, and API key are configured",
+    };
+  }
+
+  if (readiness.reason === "api_key_missing") {
+    return {
+      name: "LLM",
+      status: "fail",
+      detail: "Provider/model configured but API key is missing",
+    };
+  }
+
+  return {
+    name: "LLM",
+    status: "advisory",
+    detail: "LLM integration is not configured",
+  };
+}
+
+/**
+ * Handle /doctor command: run a setup health report for the current repository.
+ */
+async function handleDoctor(ctx: CommandContext): Promise<CommandResult> {
+  const octokit = ctx.octokit as unknown as DoctorRepoOctokit;
+  const repoConfig = await loadRepositoryConfig(octokit, ctx.owner, ctx.repo);
+
+  const checks: DoctorCheckResult[] = [];
+  checks.push(await runDoctorCheck("Labels", async () => runLabelDoctorCheck(ctx)));
+  checks.push(await runDoctorCheck("Config", async () => runConfigDoctorCheck(ctx, repoConfig)));
+  checks.push(await runDoctorCheck("PR Workflow", async () => runPRWorkflowDoctorCheck(repoConfig)));
+  checks.push(await runDoctorCheck("Standup", async () => runStandupDoctorCheck(ctx, repoConfig)));
+  checks.push(await runDoctorCheck("Permissions", async () => runPermissionsDoctorCheck(ctx)));
+  checks.push(await runDoctorCheck("LLM", async () => runLLMDoctorCheck()));
+
+  const lines: string[] = [
+    "## 🐝 Doctor Report",
+    "",
+  ];
+  for (const check of checks) {
+    lines.push(formatDoctorCheckItem(check));
+    if (check.subItems) {
+      for (const subItem of check.subItems) {
+        lines.push(formatDoctorSubItem(subItem));
+      }
+    }
+  }
+  lines.push("");
+  lines.push(summarizeDoctorChecks(checks));
+
+  await reply(
+    ctx,
+    lines.join("\n"),
+  );
+
+  return { status: "executed", message: "Doctor report posted." };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Command Router
 // ─────────────────────────────────────────────────────────────────────────────
@@ -735,6 +1331,7 @@ async function gatherPRContext(
 const COMMAND_HANDLERS: Record<string, (ctx: CommandContext) => Promise<CommandResult>> = {
   vote: handleVote,
   implement: handleImplement,
+  doctor: handleDoctor,
   gather: handleGather,
   preflight: handlePreflight,
   squash: handleSquash,
@@ -758,14 +1355,15 @@ export async function executeCommand(ctx: CommandContext): Promise<CommandResult
   }
 
   // Authorization: only maintainers can use commands
-  const authorized = await isAuthorized(ctx);
-  if (!authorized) {
+  const authorization = await isAuthorized(ctx);
+  if (!authorization.authorized) {
     // Per issue #81: "for everyone else this should be ignored"
     ctx.log.info(
       `Command /${ctx.verb} from unauthorized user ${ctx.senderLogin} on #${ctx.issueNumber} — ignoring`,
     );
     return { status: "ignored" };
   }
+  const logContext = buildCommandLogContext(ctx, authorization.permission);
 
   // Idempotency guard: if we already reacted with 👀, this is a webhook
   // retry and the command was already executed. Skip to prevent duplicates.
@@ -780,6 +1378,7 @@ export async function executeCommand(ctx: CommandContext): Promise<CommandResult
   await react(ctx, "eyes");
 
   ctx.log.info(
+    logContext,
     `Executing command /${ctx.verb} from ${ctx.senderLogin} on #${ctx.issueNumber}`,
   );
 
@@ -795,10 +1394,20 @@ export async function executeCommand(ctx: CommandContext): Promise<CommandResult
 
     return result;
   } catch (error) {
+    const classification = classifyCommandFailure(error);
+    const failureCode = buildFailureCode(ctx.verb, classification);
+    const correlationId = buildCommandCorrelationId(ctx);
     await react(ctx, "confused");
+    await reply(ctx, buildCommandFailureReply(ctx, failureCode, correlationId, classification));
     ctx.log.error(
-      { err: error, verb: ctx.verb, issue: ctx.issueNumber },
-      `Command /${ctx.verb} failed`,
+      {
+        err: error,
+        ...logContext,
+        failureCode,
+        correlationId,
+        classification,
+      },
+      `Command /${ctx.verb} failed [${failureCode}]`,
     );
     throw error;
   }

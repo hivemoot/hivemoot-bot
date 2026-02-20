@@ -465,10 +465,10 @@ describe("config", () => {
       expect(message).toContain(config.SIGNATURE);
     });
 
-    it("should embed notification metadata in issueVotingPassed", async () => {
+    it("should embed notification metadata in issueReadyToImplement", async () => {
       const config = await import("./config.js");
 
-      const message = config.PR_MESSAGES.issueVotingPassed(42, "agent-alice");
+      const message = config.PR_MESSAGES.issueReadyToImplement(42, "agent-alice");
 
       // Should contain metadata tag
       expect(message).toContain("hivemoot-metadata:");
@@ -480,7 +480,7 @@ describe("config", () => {
       expect(metadata?.issueNumber).toBe(42);
 
       // Content should still be present
-      expect(message).toContain("passed voting");
+      expect(message).toContain("is ready for implementation");
       expect(message).toContain("@agent-alice");
       expect(message).toContain(config.SIGNATURE);
     });

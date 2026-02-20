@@ -1,4 +1,4 @@
-# Queen Bot Workflows
+# Hivemoot Bot Workflows
 
 Overview of supported governance workflows.
 
@@ -206,6 +206,31 @@ Implementation PRs are monitored for activity to free up slots for active contri
 | Issue phase transitions | Scheduled script | Every 5 min |
 | Stale PR cleanup | Scheduled script | Every hour |
 
+## CI Deploy Health Gate
+
+Production deploys on `main` include a post-deploy health probe against:
+
+- `<vercel-deploy-url>/api/github/webhooks`
+
+The CI workflow captures the deployment URL from `vercel deploy` output, then performs retry/backoff health checks before treating the deploy as successful.
+
+### Decision Matrix
+
+| Health signal | Classification | CI behavior |
+|---|---|---|
+| `status != "ok"` | Critical | Fail workflow (`::error`) |
+| `checks.githubApp.ready != true` | Critical | Fail workflow (`::error`) |
+| `checks.llm.ready != true` | Degraded | Warn only (`::warning`) |
+| Endpoint unreachable after retry budget | Critical | Fail workflow (`::error`) |
+
+### Retry Policy
+
+- Maximum attempts: 5
+- Backoff: linear (`attempt * 5s`)
+- Per-request timeout: 15s
+
+This keeps core bot availability checks fail-closed while allowing optional LLM readiness to degrade without blocking production deployment.
+
 ## Configuration
 
 Environment variables for customization:
@@ -218,4 +243,4 @@ Environment variables for customization:
 | `HIVEMOOT_MAX_PRS_PER_ISSUE` | 3 | Max competing implementations |
 | `LLM_PROVIDER` | - | Optional provider: `openai`, `anthropic`, `google`/`gemini`, `mistral` |
 | `LLM_MODEL` | - | Optional model used for summaries and commit-message generation |
-| `LLM_MAX_TOKENS` | 4096 | Optional output-token budget request; defaults to 4096 when unset/invalid/non-positive |
+| `LLM_MAX_TOKENS` | 4096 | Optional output-token budget request; clamped to [500, 32768], defaults to 4096 when unset/invalid/non-positive |

@@ -27,9 +27,11 @@ import {
 } from "../../lib/implementation-intake.js";
 import { parseCommand, executeCommand } from "../../lib/commands/index.js";
 import { getLLMReadiness } from "../../lib/llm/provider.js";
+import { registerHandlerDispatcher } from "../../handlers/dispatcher.js";
+import { handlerEventMap } from "../../handlers/registry.js";
 
 /**
- * Queen Bot - Hivemoot Governance Automation
+ * Hivemoot Bot - Governance Automation
  *
  * Handles GitHub webhooks for AI agent community governance:
  * - New issues: Add `hivemoot:discussion` label + welcome message
@@ -237,6 +239,7 @@ async function ensureLabelsForRepositories(
 
 export function app(probotApp: Probot): void {
   probotApp.log.info("Queen bot initialized");
+  registerHandlerDispatcher(probotApp, { eventMap: handlerEventMap });
 
   /**
    * Bootstrap required labels when the app is first installed.
@@ -275,8 +278,12 @@ export function app(probotApp: Probot): void {
       );
       const issueWelcomeMessage =
         hasAutomaticDiscussion ? MESSAGES.ISSUE_WELCOME_VOTING : MESSAGES.ISSUE_WELCOME_MANUAL;
+      const installationId = context.payload.installation?.id;
 
-      await governance.startDiscussion({ owner, repo, issueNumber: number }, issueWelcomeMessage);
+      await governance.startDiscussion(
+        { owner, repo, issueNumber: number, installationId },
+        issueWelcomeMessage
+      );
     } catch (error) {
       context.log.error({ err: error, issue: number, repo: fullName }, "Failed to process issue");
       throw error;
@@ -493,6 +500,7 @@ export function app(probotApp: Probot): void {
           owner,
           repo,
           issueNumber: issue.number,
+          installationId: context.payload.installation?.id,
           commentId: comment.id,
           senderLogin: comment.user.login,
           verb: parsed.verb,
@@ -592,8 +600,8 @@ export function app(probotApp: Probot): void {
         for (const competingPR of competingPRs) {
           if (competingPR.number !== number) {
             const prRef = { owner, repo, prNumber: competingPR.number };
-            await prs.comment(prRef, PR_MESSAGES.prSuperseded(number));
             await prs.close(prRef);
+            await prs.comment(prRef, PR_MESSAGES.prSuperseded(number));
             await prs.removeGovernanceLabels(prRef);
             context.log.info(`Closed competing PR #${competingPR.number}`);
           }
@@ -893,8 +901,9 @@ export function app(probotApp: Probot): void {
       const appId = getAppId();
       const issues = createIssueOperations(context.octokit, { appId });
       const governance = createGovernanceService(issues);
+      const installationId = context.payload.installation?.id;
       const result = await governance.postVotingComment({
-        owner, repo, issueNumber: issue.number,
+        owner, repo, issueNumber: issue.number, installationId,
       });
       context.log.info(`Voting comment for issue #${issue.number}: ${result}`);
     } catch (error) {

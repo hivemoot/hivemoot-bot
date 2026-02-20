@@ -111,6 +111,27 @@ describe("run-installations shared runner", () => {
     });
 
     expect(processRepository).toHaveBeenCalledTimes(3);
+    expect(processRepository).toHaveBeenNthCalledWith(
+      1,
+      expect.anything(),
+      expect.objectContaining({ full_name: "org-one/repo-a" }),
+      12345,
+      { installationId: 1, installationLogin: "org-one" }
+    );
+    expect(processRepository).toHaveBeenNthCalledWith(
+      2,
+      expect.anything(),
+      expect.objectContaining({ full_name: "org-one/repo-b" }),
+      12345,
+      { installationId: 1, installationLogin: "org-one" }
+    );
+    expect(processRepository).toHaveBeenNthCalledWith(
+      3,
+      expect.anything(),
+      expect.objectContaining({ full_name: "org-two/repo-c" }),
+      12345,
+      { installationId: 2, installationLogin: "org-two" }
+    );
     expect(afterAll).toHaveBeenCalledWith({
       results: [
         { repo: "org-one/repo-a", result: "org-one/repo-a:12345" },

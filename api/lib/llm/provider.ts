@@ -21,6 +21,11 @@ import type { LanguageModelV1 } from "ai";
 
 import type { LLMConfig, LLMProvider, LLMReadiness } from "./types.js";
 import { LLM_DEFAULTS } from "./types.js";
+import { CONFIG_BOUNDS } from "../../config.js";
+
+export interface ModelResolutionOptions {
+  installationId?: number;
+}
 
 // ───────────────────────────────────────────────────────────────────────────────
 // Environment Parsing
@@ -88,7 +93,8 @@ function parseRequestedMaxTokensFromEnv(): number {
   const hasExplicitPositiveValue = Number.isFinite(parsedMaxTokens) && parsedMaxTokens > 0;
 
   if (hasExplicitPositiveValue) {
-    return parsedMaxTokens;
+    const { min, max } = CONFIG_BOUNDS.llmMaxTokens;
+    return Math.max(min, Math.min(max, parsedMaxTokens));
   }
 
   return LLM_DEFAULTS.maxTokens;
@@ -228,8 +234,13 @@ export function createModel(config: LLMConfig): LanguageModelV1 {
 /**
  * Create a model from environment configuration.
  * Returns null if LLM is not configured.
+ *
+ * The optional installation context is reserved for BYOK resolution wiring.
+ * Current behavior still uses shared environment variables only.
  */
-export function createModelFromEnv(): { model: LanguageModelV1; config: LLMConfig } | null {
+export function createModelFromEnv(
+  _options?: ModelResolutionOptions
+): { model: LanguageModelV1; config: LLMConfig } | null {
   const config = getLLMConfig();
   if (!config) {
     return null;

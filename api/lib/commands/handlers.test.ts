@@ -1,11 +1,46 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { executeCommand, type CommandContext } from "./handlers.js";
-import { LABELS } from "../../config.js";
+import { LABELS, REQUIRED_REPOSITORY_LABELS } from "../../config.js";
 
 // Mock the governance/issue operations modules
 vi.mock("../index.js", () => ({
   createIssueOperations: vi.fn(() => mockIssueOps),
   createGovernanceService: vi.fn(() => mockGovernance),
+  createRepositoryLabelService: vi.fn(() => mockLabelService),
+  loadRepositoryConfig: vi.fn().mockResolvedValue({
+    version: 1,
+    governance: {
+      proposals: {
+        discussion: { exits: [{ type: "manual" }], durationMs: 0 },
+        voting: { exits: [{ type: "manual" }], durationMs: 0 },
+        extendedVoting: { exits: [{ type: "manual" }], durationMs: 0 },
+      },
+      pr: {
+        staleDays: 3,
+        maxPRsPerIssue: 3,
+        trustedReviewers: ["alice"],
+        intake: [{ method: "update" }],
+        mergeReady: null,
+      },
+    },
+    standup: {
+      enabled: false,
+      category: "",
+    },
+  }),
+}));
+
+vi.mock("../discussions.js", () => ({
+  getRepoDiscussionInfo: vi.fn().mockResolvedValue({
+    repoId: "repo-id",
+    repoCreatedAt: "2026-02-15T00:00:00.000Z",
+    hasDiscussions: true,
+    categories: [{ id: "cat-1", name: "Hivemoot Reports" }],
+  }),
+}));
+
+vi.mock("../llm/provider.js", () => ({
+  getLLMReadiness: vi.fn(() => ({ ready: false, reason: "not_configured" })),
 }));
 
 // Mock the blueprint generator to control success/failure paths.
@@ -25,6 +60,7 @@ vi.mock("../llm/blueprint.js", async (importOriginal) => {
 
 let mockIssueOps: Record<string, ReturnType<typeof vi.fn>>;
 let mockGovernance: Record<string, ReturnType<typeof vi.fn>>;
+let mockLabelService: Record<string, ReturnType<typeof vi.fn>>;
 
 function createMockOctokit(permission = "admin") {
   return {
@@ -33,6 +69,13 @@ function createMockOctokit(permission = "admin") {
         getCollaboratorPermissionLevel: vi.fn().mockResolvedValue({
           data: { permission },
         }),
+        getContent: vi.fn().mockResolvedValue({
+          data: {
+            type: "file",
+            content: Buffer.from("version: 1\n").toString("base64"),
+          },
+        }),
+        get: vi.fn().mockResolvedValue({ data: {} }),
       },
       reactions: {
         createForIssueComment: vi.fn().mockResolvedValue({}),
@@ -41,8 +84,22 @@ function createMockOctokit(permission = "admin") {
       issues: {
         createComment: vi.fn().mockResolvedValue({}),
         updateComment: vi.fn().mockResolvedValue({}),
+        listLabelsForRepo: vi.fn().mockResolvedValue({ data: [] }),
+        createLabel: vi.fn().mockResolvedValue({}),
+        updateLabel: vi.fn().mockResolvedValue({}),
+      },
+      pulls: {
+        list: vi.fn().mockResolvedValue({ data: [] }),
       },
     },
+    paginate: {
+      iterator: vi.fn().mockImplementation(() => ({
+        async *[Symbol.asyncIterator]() {
+          yield { data: [] };
+        },
+      })),
+    },
+    graphql: vi.fn().mockResolvedValue({}),
   };
 }
 
@@ -86,6 +143,15 @@ describe("executeCommand", () => {
     };
     mockGovernance = {
       transitionToVoting: vi.fn().mockResolvedValue(undefined),
+    };
+    mockLabelService = {
+      ensureRequiredLabels: vi.fn().mockResolvedValue({
+        created: 2,
+        renamed: 1,
+        updated: 0,
+        skipped: REQUIRED_REPOSITORY_LABELS.length - 3,
+        renamedLabels: [{ from: "phase:voting", to: "hivemoot:voting" }],
+      }),
     };
     // Default: LLM not configured → fallback blueprint
     mockBlueprintGenerate.mockResolvedValue({
@@ -167,11 +233,13 @@ describe("executeCommand", () => {
       const result = await executeCommand(ctx);
 
       expect(result).toEqual({ status: "executed", message: "Moved to voting phase." });
-      expect(mockGovernance.transitionToVoting).toHaveBeenCalledWith({
-        owner: "test-org",
-        repo: "test-repo",
-        issueNumber: 42,
-      });
+      expect(mockGovernance.transitionToVoting).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: "test-org",
+          repo: "test-repo",
+          issueNumber: 42,
+        })
+      );
     });
 
     it("should add eyes reaction on receipt and thumbs up on success", async () => {
@@ -242,7 +310,7 @@ describe("executeCommand", () => {
 
       expect(result).toEqual({ status: "executed", message: "Fast-tracked to ready-to-implement." });
       expect(mockIssueOps.transition).toHaveBeenCalledWith(
-        { owner: "test-org", repo: "test-repo", issueNumber: 42 },
+        expect.objectContaining({ owner: "test-org", repo: "test-repo", issueNumber: 42 }),
         expect.objectContaining({
           removeLabel: LABELS.DISCUSSION,
           addLabel: LABELS.READY_TO_IMPLEMENT,
@@ -351,6 +419,163 @@ describe("executeCommand", () => {
     });
   });
 
+  describe("/doctor command", () => {
+    it("should run the full doctor checklist and post a report", async () => {
+      const ctx = createCtx({ verb: "doctor" });
+      const result = await executeCommand(ctx);
+
+      expect(result).toEqual({
+        status: "executed",
+        message: "Doctor report posted.",
+      });
+      expect(mockLabelService.ensureRequiredLabels).toHaveBeenCalledWith("test-org", "test-repo");
+      expect(ctx.octokit.rest.issues.createComment).toHaveBeenCalledTimes(1);
+
+      const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
+      expect(commentArgs.body).toContain("Doctor Report");
+      expect(commentArgs.body).toContain("**Labels**");
+      expect(commentArgs.body).toContain(
+        `${REQUIRED_REPOSITORY_LABELS.length}/${REQUIRED_REPOSITORY_LABELS.length} labels accounted for`,
+      );
+      expect(commentArgs.body).toContain("Renamed `phase:voting` -> `hivemoot:voting`");
+      expect(commentArgs.body).toContain("**Config**");
+      expect(commentArgs.body).toContain("Loaded `.github/hivemoot.yml`");
+      expect(commentArgs.body).toContain("**PR Workflow**");
+      expect(commentArgs.body).toContain("**Standup**: Disabled");
+      expect(commentArgs.body).toContain("**Permissions**");
+      expect(commentArgs.body).toContain("**LLM**");
+      expect(commentArgs.body).toContain(`${REQUIRED_REPOSITORY_LABELS.length}`);
+      expect(commentArgs.body).toContain("checks passed");
+    });
+
+    it("should report when no legacy labels were renamed", async () => {
+      mockLabelService.ensureRequiredLabels.mockResolvedValueOnce({
+        created: 0,
+        renamed: 0,
+        updated: 0,
+        skipped: REQUIRED_REPOSITORY_LABELS.length,
+        renamedLabels: [],
+      });
+
+      const ctx = createCtx({ verb: "doctor" });
+      await executeCommand(ctx);
+
+      const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
+      expect(commentArgs.body).toContain("No legacy labels were renamed");
+    });
+
+    it("should fail PR workflow check when approval is enabled without trusted reviewers", async () => {
+      const { loadRepositoryConfig } = await import("../index.js");
+      vi.mocked(loadRepositoryConfig).mockResolvedValueOnce({
+        version: 1,
+        governance: {
+          proposals: {
+            discussion: { exits: [{ type: "manual" }], durationMs: 0 },
+            voting: { exits: [{ type: "manual" }], durationMs: 0 },
+            extendedVoting: { exits: [{ type: "manual" }], durationMs: 0 },
+          },
+          pr: {
+            staleDays: 3,
+            maxPRsPerIssue: 3,
+            trustedReviewers: [],
+            intake: [{ method: "approval", minApprovals: 2 }],
+            mergeReady: null,
+          },
+        },
+        standup: {
+          enabled: false,
+          category: "",
+        },
+      });
+
+      const ctx = createCtx({ verb: "doctor" });
+      await executeCommand(ctx);
+      const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
+      expect(commentArgs.body).toContain("**PR Workflow**");
+      expect(commentArgs.body).toContain("trustedReviewers` is empty");
+    });
+
+    it("should report permission probe failures with details", async () => {
+      const octokit = createMockOctokit();
+      octokit.rest.pulls.list.mockRejectedValueOnce(new Error("Forbidden"));
+
+      const ctx = createCtx({ verb: "doctor", octokit });
+      await executeCommand(ctx);
+
+      const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
+      expect(commentArgs.body).toContain("**Permissions**: 1/3 capability probes failed");
+      expect(commentArgs.body).toContain("pull_requests: Forbidden");
+    });
+
+    it("should show LLM pass when provider and key are configured", async () => {
+      const { getLLMReadiness } = await import("../llm/provider.js");
+      vi.mocked(getLLMReadiness).mockReturnValueOnce({ ready: true });
+
+      const ctx = createCtx({ verb: "doctor" });
+      await executeCommand(ctx);
+
+      const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
+      expect(commentArgs.body).toContain("**LLM**: Provider, model, and API key are configured");
+    });
+
+    it("should show LLM fail when api key is missing", async () => {
+      const { getLLMReadiness } = await import("../llm/provider.js");
+      vi.mocked(getLLMReadiness).mockReturnValueOnce({
+        ready: false,
+        reason: "api_key_missing",
+      });
+
+      const ctx = createCtx({ verb: "doctor" });
+      await executeCommand(ctx);
+
+      const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
+      expect(commentArgs.body).toContain("**LLM**: Provider/model configured but API key is missing");
+    });
+
+    it("should continue report generation when a check throws unexpectedly", async () => {
+      mockLabelService.ensureRequiredLabels.mockRejectedValueOnce(new Error("boom"));
+
+      const ctx = createCtx({ verb: "doctor" });
+      await executeCommand(ctx);
+
+      const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
+      expect(commentArgs.body).toContain("**Labels**: Check failed: boom");
+      expect(commentArgs.body).toContain("**Config**");
+    });
+
+    it("should report advisory PR workflow and validate enabled standup category", async () => {
+      const { loadRepositoryConfig } = await import("../index.js");
+      vi.mocked(loadRepositoryConfig).mockResolvedValueOnce({
+        version: 1,
+        governance: {
+          proposals: {
+            discussion: { exits: [{ type: "manual" }], durationMs: 0 },
+            voting: { exits: [{ type: "manual" }], durationMs: 0 },
+            extendedVoting: { exits: [{ type: "manual" }], durationMs: 0 },
+          },
+          pr: {
+            staleDays: 3,
+            maxPRsPerIssue: 3,
+            trustedReviewers: [],
+            intake: [{ method: "update" }],
+            mergeReady: null,
+          },
+        },
+        standup: {
+          enabled: true,
+          category: "Hivemoot Reports",
+        },
+      });
+
+      const ctx = createCtx({ verb: "doctor" });
+      await executeCommand(ctx);
+
+      const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
+      expect(commentArgs.body).toContain("**PR Workflow**: No trusted reviewers configured");
+      expect(commentArgs.body).toContain("**Standup**: Category `Hivemoot Reports` is available");
+    });
+  });
+
   describe("/gather command", () => {
     it("should create canonical blueprint comment when none exists", async () => {
       mockIssueOps.getIssueContext.mockResolvedValue({
@@ -366,11 +591,11 @@ describe("executeCommand", () => {
       const result = await executeCommand(ctx);
 
       expect(result).toEqual({ status: "executed", message: "Created the blueprint comment." });
-      expect(mockIssueOps.findAlignmentCommentId).toHaveBeenCalledWith({
+      expect(mockIssueOps.findAlignmentCommentId).toHaveBeenCalledWith(expect.objectContaining({
         owner: "test-org",
         repo: "test-repo",
         issueNumber: 42,
-      });
+      }));
       expect(mockIssueOps.comment).toHaveBeenCalledTimes(1);
       const body = mockIssueOps.comment.mock.calls[0][1];
       expect(body).toContain('"type":"alignment"');
@@ -492,7 +717,7 @@ describe("executeCommand", () => {
   });
 
   describe("error handling", () => {
-    it("should add confused reaction and re-throw on handler error", async () => {
+    it("should add confused reaction, post a generic failure reply, and re-throw on handler error", async () => {
       mockGovernance.transitionToVoting.mockRejectedValue(new Error("API error"));
       const ctx = createCtx();
 
@@ -500,6 +725,82 @@ describe("executeCommand", () => {
 
       const reactionCalls = ctx.octokit.rest.reactions.createForIssueComment.mock.calls;
       expect(reactionCalls.some((c: unknown[]) => (c[0] as { content: string }).content === "confused")).toBe(true);
+      expect(ctx.octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.stringContaining("CMD_VOTE_UNEXPECTED"),
+        }),
+      );
+      expect(ctx.octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.stringContaining("cmd-2s"),
+        }),
+      );
+      expect(ctx.log.error).toHaveBeenCalledWith(
+        expect.objectContaining({
+          failureCode: "CMD_VOTE_UNEXPECTED",
+          correlationId: "cmd-2s",
+          command: "vote",
+          senderPermission: "admin",
+        }),
+        expect.stringContaining("Command /vote failed"),
+      );
+    });
+
+    it("should classify retryable API failures as transient in fallback reply", async () => {
+      const transientError = Object.assign(new Error("Service unavailable"), { status: 503 });
+      mockGovernance.transitionToVoting.mockRejectedValue(transientError);
+      const ctx = createCtx();
+
+      await expect(executeCommand(ctx)).rejects.toThrow("Service unavailable");
+
+      expect(ctx.octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.stringContaining("CMD_VOTE_TRANSIENT"),
+        }),
+      );
+      expect(ctx.octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.stringContaining("This looks transient"),
+        }),
+      );
+    });
+
+    it("should classify 403 failures as permission issues in fallback reply", async () => {
+      const permissionError = Object.assign(new Error("Forbidden"), { status: 403 });
+      mockGovernance.transitionToVoting.mockRejectedValue(permissionError);
+      const ctx = createCtx();
+
+      await expect(executeCommand(ctx)).rejects.toThrow("Forbidden");
+
+      expect(ctx.octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.stringContaining("CMD_VOTE_PERMISSION"),
+        }),
+      );
+      expect(ctx.octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.stringContaining("Check repository/app permissions"),
+        }),
+      );
+    });
+
+    it("should classify 422 failures as validation issues in fallback reply", async () => {
+      const validationError = Object.assign(new Error("Unprocessable"), { status: 422 });
+      mockGovernance.transitionToVoting.mockRejectedValue(validationError);
+      const ctx = createCtx();
+
+      await expect(executeCommand(ctx)).rejects.toThrow("Unprocessable");
+
+      expect(ctx.octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.stringContaining("CMD_VOTE_VALIDATION"),
+        }),
+      );
+      expect(ctx.octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.stringContaining("Verify repository configuration and pull request state"),
+        }),
+      );
     });
 
     it("should not fail if acknowledgment reaction throws", async () => {

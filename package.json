@@ -33,14 +33,17 @@
   "devDependencies": {
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.0.0",
-    "@typescript-eslint/eslint-plugin": "^8.55.0",
-    "@typescript-eslint/parser": "^8.55.0",
+    "@typescript-eslint/eslint-plugin": "^8.56.0",
+    "@typescript-eslint/parser": "^8.56.0",
     "@vitest/coverage-v8": "^4.0.18",
-    "eslint": "^9.39.2",
+    "eslint": "^10.0.0",
     "typescript": "^5.9.3",
     "vitest": "^4.0.18"
   },
   "engines": {
     "node": "22.x"
+  },
+  "overrides": {
+    "minimatch": "10.2.1"
   }
 }

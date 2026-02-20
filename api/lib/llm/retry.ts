@@ -39,14 +39,14 @@ export const LLM_RETRY_DEFAULTS: LLMRetryConfig = {
   maxRetries: 3,
   maxRetryDelayMs: 60_000,
   defaultRetryDelayMs: 5_000,
-  // 45s leaves ~15s headroom within a 60s Vercel function budget for
+  // 105s leaves ~15s headroom within a 120s Vercel function budget for
   // GitHub API calls around the LLM invocation.
   //
   // ⚠️  Budget alignment (update together):
-  //   vercel.json  maxDuration .............. 60s  (hard ceiling)
-  //   retry.ts     maxTotalElapsedMs ........ 45s  (retry sequence budget)
-  //   types.ts     perCallTimeoutMs ......... 15s  (single LLM call)
-  maxTotalElapsedMs: 45_000,
+  //   vercel.json  maxDuration .............. 120s (hard ceiling)
+  //   retry.ts     maxTotalElapsedMs ........ 105s (retry sequence budget)
+  //   types.ts     perCallTimeoutMs ......... 90s  (single LLM call)
+  maxTotalElapsedMs: 105_000,
 };
 
 // ───────────────────────────────────────────────────────────────────────────────

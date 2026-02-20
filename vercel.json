@@ -5,7 +5,7 @@
   "outputDirectory": "public",
   "functions": {
     "api/github/webhooks/index.ts": {
-      "maxDuration": 60
+      "maxDuration": 120
     }
   },
   "git": {

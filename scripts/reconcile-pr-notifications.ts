@@ -1,8 +1,8 @@
 /**
  * Scheduled PR Notification Reconciliation
  *
- * Catches missed PR notifications by sweeping all phase:ready-to-implement
- * issues and posting voting-passed notifications to un-notified PRs.
+ * Catches missed PR notifications by sweeping all hivemoot:ready-to-implement
+ * issues and posting ready-to-implement notifications to un-notified PRs.
  *
  * Covers two gaps:
  * 1. Backfill — Issues already in ready-to-implement before the live trigger deployed
@@ -16,6 +16,7 @@ import { Octokit } from "octokit";
 import {
   LABELS,
   PR_MESSAGES,
+  getLabelQueryAliases,
 } from "../api/config.js";
 import {
   createPROperations,
@@ -32,15 +33,34 @@ import { runForAllRepositories, runIfMain } from "./shared/run-installations.js"
 import type { Repository, PRRef } from "../api/lib/index.js";
 import type { PROperations } from "../api/lib/pr-operations.js";
 import type { IssueOperations } from "../api/lib/github-client.js";
+import type { InstallationContext } from "./shared/run-installations.js";
 
 /**
- * Legacy signature for pre-metadata voting-passed notifications.
- * Must stay in sync with the phrasing in PR_MESSAGES.issueVotingPassed.
+ * Legacy/plaintext signatures for pre-metadata ready notifications.
+ * Keep both old and new phrasing for backward compatibility in fallback detection.
  */
-const VOTING_PASSED_LEGACY_SIGNATURE = "passed voting and is ready for implementation";
+const READY_TO_IMPLEMENT_LEGACY_SIGNATURES = [
+  "passed voting and is ready for implementation",
+  "is ready for implementation!\n\nPush a new commit or add a comment to activate it for implementation tracking.",
+] as const;
 
 /**
- * Check if a PR already has a voting-passed notification for this issue.
+ * Parse all "Issue #N" tokens and require exact numeric equality.
+ * This avoids prefix collisions (#1 matching #10) in legacy fallback detection.
+ */
+function hasLegacyIssueNumberMatch(body: string, issueNumber: number): boolean {
+  const expectedToken = String(issueNumber);
+  const matches = body.matchAll(/\bIssue #(\d+)\b/g);
+  for (const match of matches) {
+    if (match[1] === expectedToken) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Check if a PR already has a ready-to-implement notification for this issue.
  *
  * Single-pass detection:
  * 1. Fetch comments once
@@ -49,7 +69,7 @@ const VOTING_PASSED_LEGACY_SIGNATURE = "passed voting and is ready for implement
  *
  * Exported for testing.
  */
-export async function hasVotingPassedNotification(
+export async function hasReadyToImplementNotification(
   prs: PROperations,
   ref: PRRef,
   issueNumber: number
@@ -68,10 +88,11 @@ export async function hasVotingPassedNotification(
   // These contain the legacy signature + "Issue #N".
   // We scan comment bodies to detect them without requiring metadata.
   for (const comment of comments) {
+    const body = comment.body;
     if (
-      comment.body &&
-      comment.body.includes(VOTING_PASSED_LEGACY_SIGNATURE) &&
-      comment.body.includes(`Issue #${issueNumber}`)
+      body &&
+      READY_TO_IMPLEMENT_LEGACY_SIGNATURES.some((signature) => body.includes(signature)) &&
+      hasLegacyIssueNumberMatch(body, issueNumber)
     ) {
       return true;
     }
@@ -118,11 +139,11 @@ export async function reconcileIssue(
     const ref: PRRef = { owner, repo, prNumber: linkedPR.number };
 
     // Concern 1: Notification (skip if already posted)
-    const alreadyNotified = await hasVotingPassedNotification(prs, ref, issueNumber);
+    const alreadyNotified = await hasReadyToImplementNotification(prs, ref, issueNumber);
     if (!alreadyNotified) {
       await prs.comment(
         ref,
-        PR_MESSAGES.issueVotingPassed(issueNumber, linkedPR.author.login)
+        PR_MESSAGES.issueReadyToImplement(issueNumber, linkedPR.author.login)
       );
       logger.info(`Reconciled: notified PR #${linkedPR.number} (@${linkedPR.author.login}) that issue #${issueNumber} is ready`);
       notified++;
@@ -176,13 +197,14 @@ export async function reconcileIssue(
 }
 
 /**
- * Process a single repository - find all phase:ready-to-implement issues and reconcile each.
+ * Process a single repository - find all hivemoot:ready-to-implement issues and reconcile each.
  * Exported for testing.
  */
 export async function processRepository(
   octokit: InstanceType<typeof Octokit>,
   repo: Repository,
-  appId: number
+  appId: number,
+  _installation?: InstallationContext
 ): Promise<void> {
   const owner = repo.owner.login;
   const repoName = repo.name;
@@ -195,34 +217,39 @@ export async function processRepository(
     const repoConfig = await loadRepositoryConfig(octokit, owner, repoName);
     const { maxPRsPerIssue, trustedReviewers, intake } = repoConfig.governance.pr;
 
-    // Paginate through all open issues with phase:ready-to-implement label
+    // Paginate through all open issues with ready-to-implement label (canonical + legacy)
     const failedIssues: number[] = [];
-    const readyIterator = octokit.paginate.iterator(
-      octokit.rest.issues.listForRepo,
-      {
-        owner,
-        repo: repoName,
-        state: "open",
-        labels: LABELS.READY_TO_IMPLEMENT,
-        per_page: 100,
-      }
-    );
+    const seenIssues = new Set<number>();
 
-    for await (const { data: page } of readyIterator) {
-      // Filter out PRs (the issues API also returns PRs with matching labels)
-      const filteredIssues = (page as Array<{ number: number; pull_request?: unknown }>).filter(
-        (item) => !item.pull_request
+    for (const alias of getLabelQueryAliases(LABELS.READY_TO_IMPLEMENT)) {
+      const readyIterator = octokit.paginate.iterator(
+        octokit.rest.issues.listForRepo,
+        {
+          owner,
+          repo: repoName,
+          state: "open",
+          labels: alias,
+          per_page: 100,
+        }
       );
 
-      for (const issue of filteredIssues) {
-        try {
-          const result = await reconcileIssue(octokit, prs, issues, owner, repoName, issue.number, maxPRsPerIssue, trustedReviewers, intake);
-          if (result.notified > 0) {
-            logger.info(`Issue #${issue.number}: notified ${result.notified} PR(s), skipped ${result.skipped}`);
+      for await (const { data: page } of readyIterator) {
+        const filteredIssues = (page as Array<{ number: number; pull_request?: unknown }>).filter(
+          (item) => !item.pull_request
+        );
+
+        for (const issue of filteredIssues) {
+          if (seenIssues.has(issue.number)) continue;
+          seenIssues.add(issue.number);
+          try {
+            const result = await reconcileIssue(octokit, prs, issues, owner, repoName, issue.number, maxPRsPerIssue, trustedReviewers, intake);
+            if (result.notified > 0) {
+              logger.info(`Issue #${issue.number}: notified ${result.notified} PR(s), skipped ${result.skipped}`);
+            }
+          } catch (error) {
+            failedIssues.push(issue.number);
+            logger.error(`Failed to reconcile issue #${issue.number}`, error as Error);
           }
-        } catch (error) {
-          failedIssues.push(issue.number);
-          logger.error(`Failed to reconcile issue #${issue.number}`, error as Error);
         }
       }
     }

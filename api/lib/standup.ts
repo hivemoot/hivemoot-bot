@@ -12,14 +12,16 @@
 import { z } from "zod";
 import { generateObject } from "ai";
 
-import { LABELS, SIGNATURE } from "../config.js";
+import { LABELS, SIGNATURE, getLabelQueryAliases } from "../config.js";
 import {
   createStandupMetadata,
   generateMetadataTag,
 } from "./bot-comments.js";
+import { repairMalformedJsonText } from "./llm/json-repair.js";
 import { createModelFromEnv } from "./llm/provider.js";
 import { STANDUP_SYSTEM_PROMPT, buildStandupUserPrompt } from "./llm/prompts.js";
 import { withLLMRetry } from "./llm/retry.js";
+import { LLM_DEFAULTS } from "./llm/types.js";
 import { logger } from "./logger.js";
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -83,6 +85,10 @@ export interface StandupLLMContent {
     focusAreas: string;
     needsAttention: string;
   };
+}
+
+export interface StandupLLMContext {
+  installationId?: number;
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -316,21 +322,28 @@ async function fetchIssuesByLabel(
   repo: string,
   label: string
 ): Promise<StandupIssueRef[]> {
-  const response = await octokit.rest.issues.listForRepo({
-    owner,
-    repo,
-    labels: label,
-    state: "open",
-    per_page: 100,
-  });
+  const seen = new Set<number>();
+  const issues: StandupIssueRef[] = [];
 
-  // Filter out PRs (GitHub's issues API returns PRs with a pull_request field)
-  return response.data
-    .filter((issue) => !issue.pull_request)
-    .map((issue) => ({
-      number: issue.number,
-      title: issue.title,
-    }));
+  // Query each alias (canonical + legacy) to catch both old and new labels
+  for (const alias of getLabelQueryAliases(label)) {
+    const response = await octokit.rest.issues.listForRepo({
+      owner,
+      repo,
+      labels: alias,
+      state: "open",
+      per_page: 100,
+    });
+
+    for (const issue of response.data) {
+      if (!issue.pull_request && !seen.has(issue.number)) {
+        seen.add(issue.number);
+        issues.push({ number: issue.number, title: issue.title });
+      }
+    }
+  }
+
+  return issues;
 }
 
 /**
@@ -702,10 +715,15 @@ function validateLLMOutput(
  * Returns null if LLM is not configured or fails.
  */
 export async function generateStandupLLMContent(
-  data: StandupData
+  data: StandupData,
+  llmContext?: StandupLLMContext
 ): Promise<StandupLLMContent | null> {
   try {
-    const modelResult = createModelFromEnv();
+    const modelResult = createModelFromEnv(
+      llmContext?.installationId !== undefined
+        ? { installationId: llmContext.installationId }
+        : undefined
+    );
     if (!modelResult) {
       logger.debug("LLM not configured, skipping standup narration");
       return null;
@@ -721,9 +739,17 @@ export async function generateStandupLLMContent(
           schema: StandupOutputSchema,
           system: STANDUP_SYSTEM_PROMPT,
           prompt: buildStandupUserPrompt(data),
+          experimental_repairText: async (args) => {
+            const repaired = await repairMalformedJsonText(args);
+            if (repaired !== null) {
+              logger.info(`Repaired malformed LLM JSON output (error: ${args.error.message})`);
+            }
+            return repaired;
+          },
           maxTokens: config.maxTokens,
           temperature: 0.4,
           maxRetries: 0, // Disable SDK retry; our wrapper handles rate-limits
+          abortSignal: AbortSignal.timeout(LLM_DEFAULTS.perCallTimeoutMs),
         }),
       undefined,
       logger

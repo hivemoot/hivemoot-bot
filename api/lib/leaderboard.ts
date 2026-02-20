@@ -78,7 +78,7 @@ export function formatLeaderboard(scores: PRWithApprovals[]): string {
 No linked PRs are eligible for the implementation leaderboard yet.
 
 Next steps:
-- Open a PR that links this issue (e.g., \`Fixes #<issue-number>\`).
+- Open a PR that links this issue using a closing keyword (e.g., \`Fixes #<issue-number>\` or \`Fixes https://github.com/owner/repo/issues/<issue-number>\`).
 - If your PR was opened before the issue became ready to implement, add a new commit (or leave a comment) to activate it for consideration.
 
 | PR | Author | Approvals |

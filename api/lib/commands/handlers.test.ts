@@ -483,6 +483,23 @@ describe("executeCommand", () => {
       expect(commentArgs.body).toContain("Renamed `phase:voting` → `hivemoot:voting`");
     });
 
+    it("should run repair and report no renames when renamedLabels is empty", async () => {
+      mockLabelService.ensureRequiredLabels.mockResolvedValueOnce({
+        created: 1,
+        renamed: 0,
+        skipped: REQUIRED_REPOSITORY_LABELS.length - 1,
+        renamedLabels: [],
+      });
+
+      const ctx = createCtx({ verb: "doctor", freeText: "repair" });
+      const result = await executeCommand(ctx);
+
+      expect(result.status).toBe("executed");
+      const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
+      expect(commentArgs.body).toContain("Doctor Repair");
+      expect(commentArgs.body).toContain("Repair complete");
+    });
+
     it("should reject unknown /doctor subcommands", async () => {
       const ctx = createCtx({ verb: "doctor", freeText: "nuke" });
       const result = await executeCommand(ctx);

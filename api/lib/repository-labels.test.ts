@@ -315,3 +315,96 @@ describe("RepositoryLabelService", () => {
     expect(client.rest.issues.updateLabel).not.toHaveBeenCalled();
   });
 });
+
+describe("RepositoryLabelService.auditRequiredLabels", () => {
+  let client: RepositoryLabelClient;
+  let service: RepositoryLabelService;
+
+  beforeEach(() => {
+    client = {
+      rest: {
+        issues: {
+          listLabelsForRepo: vi.fn(),
+          createLabel: vi.fn(),
+          updateLabel: vi.fn(),
+        },
+      },
+      paginate: {
+        iterator: vi.fn().mockReturnValue(buildIterator([[]])),
+      },
+    } as unknown as RepositoryLabelClient;
+
+    service = new RepositoryLabelService(client);
+  });
+
+  it("should report all required labels as missing when repo has none", async () => {
+    const votingLabel = requiredDef(LABELS.VOTING);
+    const discussionLabel = requiredDef(LABELS.DISCUSSION);
+
+    const result = await service.auditRequiredLabels("hivemoot", "colony", [votingLabel, discussionLabel]);
+
+    expect(result.missing).toEqual([LABELS.VOTING, LABELS.DISCUSSION]);
+    expect(result.colorMismatch).toHaveLength(0);
+    expect(result.renameable).toHaveLength(0);
+    expect(result.ok).toBe(0);
+  });
+
+  it("should report ok count for labels that exist with correct color and description", async () => {
+    const votingLabel = requiredDef(LABELS.VOTING);
+    vi.mocked(client.paginate.iterator).mockReturnValue(
+      buildIterator([
+        [label(LABELS.VOTING, votingLabel.color, votingLabel.description)],
+      ])
+    );
+
+    const result = await service.auditRequiredLabels("hivemoot", "colony", [votingLabel]);
+
+    expect(result.ok).toBe(1);
+    expect(result.missing).toHaveLength(0);
+    expect(result.colorMismatch).toHaveLength(0);
+    expect(result.renameable).toHaveLength(0);
+  });
+
+  it("should report color mismatch for label with drifted color", async () => {
+    const votingLabel = requiredDef(LABELS.VOTING);
+    const driftedColor = "aaaaaa";
+    vi.mocked(client.paginate.iterator).mockReturnValue(
+      buildIterator([
+        [label(LABELS.VOTING, driftedColor, votingLabel.description)],
+      ])
+    );
+
+    const result = await service.auditRequiredLabels("hivemoot", "colony", [votingLabel]);
+
+    expect(result.colorMismatch).toEqual([
+      { name: LABELS.VOTING, current: driftedColor, expected: votingLabel.color },
+    ]);
+    expect(result.ok).toBe(0);
+    expect(result.missing).toHaveLength(0);
+    expect(result.renameable).toHaveLength(0);
+  });
+
+  it("should report renameable for label that exists only under legacy name", async () => {
+    const votingLabel = requiredDef(LABELS.VOTING);
+    vi.mocked(client.paginate.iterator).mockReturnValue(
+      buildIterator([
+        [label("phase:voting", votingLabel.color, votingLabel.description)],
+      ])
+    );
+
+    const result = await service.auditRequiredLabels("hivemoot", "colony", [votingLabel]);
+
+    expect(result.renameable).toEqual([{ from: "phase:voting", to: LABELS.VOTING }]);
+    expect(result.missing).toHaveLength(0);
+    expect(result.ok).toBe(0);
+  });
+
+  it("should not mutate any labels during audit", async () => {
+    const votingLabel = requiredDef(LABELS.VOTING);
+
+    await service.auditRequiredLabels("hivemoot", "colony", [votingLabel]);
+
+    expect(client.rest.issues.createLabel).not.toHaveBeenCalled();
+    expect(client.rest.issues.updateLabel).not.toHaveBeenCalled();
+  });
+});

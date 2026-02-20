@@ -307,6 +307,38 @@ describe("withLLMRetry", () => {
     vi.useFakeTimers();
   });
 
+  it("normalizes NaN maxRetries to default (3)", async () => {
+    vi.useRealTimers();
+
+    const rateLimitError = makeAPICallError(429, { message: "Please retry in 0.01s" });
+    const fn = vi.fn().mockRejectedValue(rateLimitError);
+
+    // NaN maxRetries should fall back to 3, so the function attempts 4 calls total
+    await expect(
+      withLLMRetry(fn, { maxRetries: NaN, defaultRetryDelayMs: 10 })
+    ).rejects.toThrow();
+    // With maxRetries=3 (fallback), fn is called 4 times (1 initial + 3 retries)
+    expect(fn.mock.calls.length).toBe(4);
+
+    vi.useFakeTimers();
+  });
+
+  it("normalizes negative maxRetryDelayMs to 1 (minimum positive integer)", async () => {
+    const rateLimitError = makeAPICallError(429, { message: "Please retry in 30.0s" });
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(rateLimitError)
+      .mockResolvedValueOnce("ok");
+
+    // Negative maxRetryDelayMs should be normalized to 1ms (toPositiveInteger)
+    const promise = withLLMRetry(fn, { maxRetries: 1, maxRetryDelayMs: -100 });
+    // Suggested 30s is capped at normalized maxRetryDelayMs=1ms
+    await vi.advanceTimersByTimeAsync(1);
+    const result = await promise;
+    expect(result).toBe("ok");
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
   it("ignores maxTotalElapsedMs when undefined", async () => {
     const rateLimitError = makeAPICallError(429, {
       message: "Please retry in 1.0s",

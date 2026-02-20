@@ -21,6 +21,7 @@ import { repairMalformedJsonText } from "./llm/json-repair.js";
 import { createModelFromEnv } from "./llm/provider.js";
 import { STANDUP_SYSTEM_PROMPT, buildStandupUserPrompt } from "./llm/prompts.js";
 import { withLLMRetry } from "./llm/retry.js";
+import { LLM_DEFAULTS } from "./llm/types.js";
 import { logger } from "./logger.js";
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -748,6 +749,7 @@ export async function generateStandupLLMContent(
           maxTokens: config.maxTokens,
           temperature: 0.4,
           maxRetries: 0, // Disable SDK retry; our wrapper handles rate-limits
+          abortSignal: AbortSignal.timeout(LLM_DEFAULTS.perCallTimeoutMs),
         }),
       undefined,
       logger

@@ -486,6 +486,22 @@ describe("executeCommand", () => {
       expect(commentArgs.body).toContain("Renamed `phase:voting` -> `hivemoot:voting`");
     });
 
+    it("should report when repair mode has no legacy label renames", async () => {
+      mockLabelService.ensureRequiredLabels.mockResolvedValueOnce({
+        created: 0,
+        renamed: 0,
+        updated: 0,
+        skipped: REQUIRED_REPOSITORY_LABELS.length,
+        renamedLabels: [],
+      });
+
+      const ctx = createCtx({ verb: "doctor", freeText: "repair" });
+      await executeCommand(ctx);
+
+      const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
+      expect(commentArgs.body).toContain("No legacy labels were renamed");
+    });
+
     it("should reject unknown /doctor options", async () => {
       const ctx = createCtx({ verb: "doctor", freeText: "fix" });
       const result = await executeCommand(ctx);

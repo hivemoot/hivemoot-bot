@@ -225,6 +225,50 @@ describe("RepositoryLabelService", () => {
     expect(client.rest.issues.createLabel).not.toHaveBeenCalled();
   });
 
+  it("should treat legacy rename 422 as already-renamed and continue", async () => {
+    vi.mocked(client.paginate.iterator).mockReturnValue(
+      buildIterator([
+        [label("phase:voting", "5319e7", "Voting phase.")],
+      ])
+    );
+
+    const alreadyRenamedError = new Error("Unprocessable Entity") as Error & {
+      status: number;
+    };
+    alreadyRenamedError.status = 422;
+    vi.mocked(client.rest.issues.updateLabel).mockRejectedValueOnce(alreadyRenamedError);
+
+    const votingLabel = requiredDef(LABELS.VOTING);
+    const result = await service.ensureRequiredLabels("hivemoot", "colony", [votingLabel]);
+
+    expect(result).toEqual({
+      created: 0,
+      renamed: 0,
+      updated: 0,
+      skipped: 1,
+      renamedLabels: [],
+    });
+    expect(client.rest.issues.createLabel).not.toHaveBeenCalled();
+  });
+
+  it("should rethrow non-422 errors from legacy rename", async () => {
+    vi.mocked(client.paginate.iterator).mockReturnValue(
+      buildIterator([
+        [label("phase:voting", "5319e7", "Voting phase.")],
+      ])
+    );
+
+    const serverError = new Error("rename failed") as Error & {
+      status: number;
+    };
+    serverError.status = 500;
+    vi.mocked(client.rest.issues.updateLabel).mockRejectedValueOnce(serverError);
+
+    const votingLabel = requiredDef(LABELS.VOTING);
+    await expect(service.ensureRequiredLabels("hivemoot", "colony", [votingLabel])).rejects.toThrow("rename failed");
+    expect(client.rest.issues.createLabel).not.toHaveBeenCalled();
+  });
+
   it("should skip when canonical label already exists even if legacy also exists", async () => {
     const votingLabel = requiredDef(LABELS.VOTING);
     // Both old and new names exist — skip (canonical takes precedence, and has correct color)

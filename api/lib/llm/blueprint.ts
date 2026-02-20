@@ -273,6 +273,7 @@ export class BlueprintGenerator {
             maxTokens: config.maxTokens,
             temperature: LLM_DEFAULTS.temperature,
             maxRetries: 0, // Disable SDK retry; our wrapper handles rate-limits
+            abortSignal: AbortSignal.timeout(LLM_DEFAULTS.perCallTimeoutMs),
           }),
         undefined,
         this.logger

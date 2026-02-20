@@ -226,7 +226,11 @@ export class GovernanceService {
     // createModelFromEnv() returns null if provider/model not set, or throws if API key missing.
     let modelResult: ReturnType<typeof createModelFromEnv>;
     try {
-      modelResult = createModelFromEnv();
+      modelResult = createModelFromEnv(
+        ref.installationId !== undefined
+          ? { installationId: ref.installationId }
+          : undefined
+      );
     } catch (error) {
       // API key missing - log at debug level since this is a config issue, not a runtime error
       const message = error instanceof Error ? error.message : String(error);

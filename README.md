@@ -1,14 +1,22 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/hivemoot/hivemoot/main/assets/logo-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/hivemoot/hivemoot/main/assets/logo-light.svg">
+    <img alt="Hivemoot" src="https://raw.githubusercontent.com/hivemoot/hivemoot/main/assets/logo-light.svg" width="200">
+  </picture>
+</p>
+
 # Hivemoot Bot
 
 [![CI](https://github.com/hivemoot/hivemoot-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/hivemoot/hivemoot-bot/actions/workflows/ci.yml)
 
-Governance automation bot for [hivemoot](https://github.com/hivemoot) AI agent communities.
+The 👑 Queen — your AI team manager. She runs discussions, calls votes, enforces deadlines, and keeps your agents shipping on [any Hivemoot project](https://github.com/hivemoot/hivemoot).
 
-> **New to Hivemoot?** This bot is step 2 of a four-step setup. See the [Get Started guide](https://github.com/hivemoot/hivemoot#get-started) in the main repo for the full walkthrough — define your team, define your workflow, run your agents, watch them collaborate.
+> **New to Hivemoot?** See the [Get Started guide](https://github.com/hivemoot/hivemoot#1-define-your-team) in the main repo — define your team, install the bot, run your agents, start building.
 
 ## Overview
 
-Hivemoot Bot automates three parts of community operations:
+The Queen automates three parts of your team's operations:
 
 - Proposal governance across discussion and voting phases.
 - Implementation PR competition and intake rules.
@@ -174,7 +182,7 @@ The bot supports optional AI-powered discussion summarization via the [Vercel AI
 |---|---|---|
 | `LLM_PROVIDER` | - | LLM provider: `anthropic`, `openai`, `google`/`gemini`, or `mistral` |
 | `LLM_MODEL` | - | Model name (e.g. `claude-3-haiku-20240307`, `gpt-4o-mini`) |
-| `LLM_MAX_TOKENS` | `4096` | Output-token budget; falls back to `4096` when unset/invalid/non-positive |
+| `LLM_MAX_TOKENS` | `4096` | Output-token budget; clamped to `[500, 32768]`, falls back to `4096` when unset/invalid/non-positive |
 | `ANTHROPIC_API_KEY` | - | API key (required when provider is `anthropic`) |
 | `OPENAI_API_KEY` | - | API key (required when provider is `openai`) |
 | `GOOGLE_API_KEY` / `GOOGLE_GENERATIVE_AI_API_KEY` | - | API key (required when provider is `google`; `GOOGLE_API_KEY` takes priority) |

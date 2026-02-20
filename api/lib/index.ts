@@ -73,7 +73,7 @@ export type {
 
 // Repository label bootstrap
 export { RepositoryLabelService, createRepositoryLabelService } from "./repository-labels.js";
-export type { RepositoryLabelClient, EnsureLabelsResult } from "./repository-labels.js";
+export type { RepositoryLabelClient, EnsureLabelsResult, AuditLabelsResult } from "./repository-labels.js";
 
 // Repository configuration
 export { loadRepositoryConfig, getDefaultConfig } from "./repo-config.js";

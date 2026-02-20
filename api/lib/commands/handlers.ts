@@ -1037,16 +1037,48 @@ async function runDoctorCheck(
 
 async function runLabelDoctorCheck(ctx: CommandContext): Promise<DoctorCheckResult> {
   const labels = createRepositoryLabelService(ctx.octokit as unknown);
+  const result = await labels.auditRequiredLabels(ctx.owner, ctx.repo);
+  const totalExpected = REQUIRED_REPOSITORY_LABELS.length;
+  const issues = result.missing.length + result.colorMismatch.length + result.renameable.length;
+  const status: DoctorCheckStatus = issues === 0 ? "pass" : "fail";
+
+  let detail: string;
+  if (issues === 0) {
+    detail = `All ${totalExpected} labels present and correct`;
+  } else {
+    const parts: string[] = [];
+    if (result.missing.length > 0) parts.push(`${result.missing.length} missing`);
+    if (result.renameable.length > 0) parts.push(`${result.renameable.length} renameable from legacy`);
+    if (result.colorMismatch.length > 0) parts.push(`${result.colorMismatch.length} with color/description drift`);
+    detail = `${issues} issue(s): ${parts.join(", ")} — run \`/doctor repair\` to fix`;
+  }
+
+  const subItems: string[] = [
+    ...result.missing.map((name) => `Missing: \`${name}\``),
+    ...result.renameable.map((entry) => `Renameable: \`${entry.from}\` → \`${entry.to}\``),
+    ...result.colorMismatch.map((entry) => `Color drift: \`${entry.name}\` (current: ${entry.current}, expected: ${entry.expected})`),
+  ];
+
+  return {
+    name: "Labels",
+    status,
+    detail,
+    subItems: subItems.length > 0 ? subItems : undefined,
+  };
+}
+
+async function runLabelRepair(ctx: CommandContext): Promise<DoctorCheckResult> {
+  const labels = createRepositoryLabelService(ctx.octokit as unknown);
   const result = await labels.ensureRequiredLabels(ctx.owner, ctx.repo);
   const maybeUpdated = (result as { updated?: unknown }).updated;
   const updatedCount = typeof maybeUpdated === "number" ? maybeUpdated : 0;
   const totalExpected = REQUIRED_REPOSITORY_LABELS.length;
-  const totalFound = result.created + result.renamed + result.skipped + updatedCount;
-  const status: DoctorCheckStatus = totalFound >= totalExpected ? "pass" : "fail";
-  const detail = `${totalFound}/${totalExpected} labels accounted for (created ${result.created}, renamed ${result.renamed}, updated ${updatedCount}, already present ${result.skipped})`;
+  const totalActioned = result.created + result.renamed + updatedCount;
+  const status: DoctorCheckStatus = "pass";
+  const detail = `Repair complete: created ${result.created}, renamed ${result.renamed}, updated ${updatedCount}, already present ${result.skipped} (${totalActioned + result.skipped}/${totalExpected} total)`;
   const subItems = result.renamedLabels.length > 0
-    ? result.renamedLabels.map((entry) => `Renamed \`${entry.from}\` -> \`${entry.to}\``)
-    : ["No legacy labels were renamed"];
+    ? result.renamedLabels.map((entry) => `Renamed \`${entry.from}\` → \`${entry.to}\``)
+    : undefined;
 
   return {
     name: "Labels",
@@ -1289,6 +1321,39 @@ function runLLMDoctorCheck(): DoctorCheckResult {
  * Handle /doctor command: run a setup health report for the current repository.
  */
 async function handleDoctor(ctx: CommandContext): Promise<CommandResult> {
+  const subcommand = ctx.freeText?.trim().toLowerCase();
+
+  if (subcommand === "repair") {
+    const checks: DoctorCheckResult[] = [];
+    checks.push(await runDoctorCheck("Labels", async () => runLabelRepair(ctx)));
+
+    const lines: string[] = [
+      "## 🐝 Doctor Repair",
+      "",
+    ];
+    for (const check of checks) {
+      lines.push(formatDoctorCheckItem(check));
+      if (check.subItems) {
+        for (const subItem of check.subItems) {
+          lines.push(formatDoctorSubItem(subItem));
+        }
+      }
+    }
+    lines.push("");
+    lines.push(summarizeDoctorChecks(checks));
+
+    await reply(ctx, lines.join("\n"));
+    return { status: "executed", message: "Doctor repair complete." };
+  }
+
+  if (subcommand !== undefined && subcommand !== "") {
+    await reply(
+      ctx,
+      `Unknown \`/doctor\` subcommand: \`${subcommand}\`. Valid subcommands: \`repair\`.`,
+    );
+    return { status: "rejected", reason: `Unknown /doctor subcommand: ${subcommand}` };
+  }
+
   const octokit = ctx.octokit as unknown as DoctorRepoOctokit;
   const repoConfig = await loadRepositoryConfig(octokit, ctx.owner, ctx.repo);
 

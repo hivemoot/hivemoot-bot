@@ -68,6 +68,13 @@ export interface EnsureLabelsResult {
   renamedLabels: Array<{ from: string; to: string }>;
 }
 
+export interface AuditLabelsResult {
+  missing: string[];
+  colorMismatch: Array<{ name: string; current: string; expected: string }>;
+  renameable: Array<{ from: string; to: string }>;
+  ok: number;
+}
+
 export function createRepositoryLabelService(octokit: unknown): RepositoryLabelService {
   if (!isValidRepositoryLabelClient(octokit)) {
     throw new Error(
@@ -199,6 +206,52 @@ export class RepositoryLabelService {
     }
 
     return { created, renamed, updated, skipped, renamedLabels };
+  }
+
+  /**
+   * Audit required labels without making any changes.
+   *
+   * Returns a summary of what's missing, what has color/description drift,
+   * and what legacy labels could be renamed — without mutating anything.
+   */
+  async auditRequiredLabels(
+    owner: string,
+    repo: string,
+    requiredLabels: readonly RepositoryLabelDefinition[] = REQUIRED_REPOSITORY_LABELS
+  ): Promise<AuditLabelsResult> {
+    const existingLabels = await this.getExistingLabels(owner, repo);
+    const reverseLegacy = buildReverseLegacyMap();
+    const missing: string[] = [];
+    const colorMismatch: Array<{ name: string; current: string; expected: string }> = [];
+    const renameable: Array<{ from: string; to: string }> = [];
+    let ok = 0;
+
+    for (const label of requiredLabels) {
+      const key = label.name.toLowerCase();
+      const existing = existingLabels.get(key);
+      if (existing) {
+        if (needsUpdate(existing, label)) {
+          colorMismatch.push({
+            name: label.name,
+            current: existing.color,
+            expected: label.color,
+          });
+        } else {
+          ok++;
+        }
+        continue;
+      }
+
+      const legacyNames = reverseLegacy.get(label.name) ?? [];
+      const foundLegacy = legacyNames.find((name) => existingLabels.has(name.toLowerCase()));
+      if (foundLegacy) {
+        renameable.push({ from: foundLegacy, to: label.name });
+      } else {
+        missing.push(label.name);
+      }
+    }
+
+    return { missing, colorMismatch, renameable, ok };
   }
 
   private async getExistingLabels(owner: string, repo: string): Promise<Map<string, ExistingLabel>> {

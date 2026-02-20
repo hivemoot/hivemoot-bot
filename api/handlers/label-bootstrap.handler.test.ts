@@ -278,4 +278,63 @@ describe("label-bootstrap handlers", () => {
       `[installation.created] Label bootstrap summary: reposProcessed=2, reposFailed=1, labelsCreated=${REQUIRED_REPOSITORY_LABELS.length}, labelsRenamed=0, labelsUpdated=0, labelsSkipped=0`,
     );
   });
+
+  it("throws when repository owner cannot be derived from full_name", async () => {
+    const octokit = createInstallationOctokit();
+    const log = { info: vi.fn(), error: vi.fn() };
+
+    await expect(
+      installationCreatedLabelBootstrapHandler.handle(
+        createEvent(
+          "installation.created",
+          {
+            repositories: [
+              { name: "repo-no-owner", full_name: "/repo-no-owner" },
+            ],
+          },
+          octokit,
+          log,
+        ),
+        {},
+      ),
+    ).rejects.toThrow("Unable to determine repository owner");
+  });
+
+  it("throws a clear error when installation repository listing client is missing", async () => {
+    const log = { info: vi.fn(), error: vi.fn() };
+    const event: HandlerEvent = {
+      name: "installation.created",
+      context: {
+        octokit: null,
+        log,
+        payload: {},
+      },
+    };
+
+    await expect(
+      installationCreatedLabelBootstrapHandler.handle(event, {}),
+    ).rejects.toThrow(
+      "[installation.created] Unable to list installation repositories: missing apps.listReposAccessibleToInstallation",
+    );
+  });
+
+  it("logs zero-summary and returns when fallback repository listing is empty", async () => {
+    const octokit = createInstallationOctokit({
+      fallbackRepositoryPages: [[]],
+    });
+    const log = { info: vi.fn(), error: vi.fn() };
+
+    await installationCreatedLabelBootstrapHandler.handle(
+      createEvent("installation.created", {}, octokit, log),
+      {},
+    );
+
+    expect(octokit.rest.issues.createLabel).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith(
+      "[installation.created] No installation repositories available; skipping label bootstrap",
+    );
+    expect(log.info).toHaveBeenCalledWith(
+      "[installation.created] Label bootstrap summary: reposProcessed=0, reposFailed=0, labelsCreated=0, labelsRenamed=0, labelsUpdated=0, labelsSkipped=0",
+    );
+  });
 });

@@ -2074,5 +2074,132 @@ governance:
         expect(defaults.governance.pr.mergeReady).toBeNull();
       });
     });
+
+    describe("alignment.autoGather", () => {
+      it("should default to disabled when not configured", async () => {
+        const configYaml = `version: 1\n`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config.governance.alignment.autoGather).toEqual({
+          enabled: false,
+          minNewComments: CONFIG_BOUNDS.autoGather.minNewComments.default,
+          cooldownMinutes: CONFIG_BOUNDS.autoGather.cooldownMinutes.default,
+        });
+      });
+
+      it("should default to disabled in getDefaultConfig", () => {
+        const defaults = getDefaultConfig();
+        expect(defaults.governance.alignment.autoGather.enabled).toBe(false);
+      });
+
+      it("should parse enabled auto-gather with custom values", async () => {
+        const configYaml = `
+version: 1
+governance:
+  alignment:
+    autoGather:
+      enabled: true
+      minNewComments: 3
+      cooldownMinutes: 30
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config.governance.alignment.autoGather).toEqual({
+          enabled: true,
+          minNewComments: 3,
+          cooldownMinutes: 30,
+        });
+      });
+
+      it("should use defaults for omitted fields when enabled", async () => {
+        const configYaml = `
+version: 1
+governance:
+  alignment:
+    autoGather:
+      enabled: true
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config.governance.alignment.autoGather.enabled).toBe(true);
+        expect(config.governance.alignment.autoGather.minNewComments).toBe(
+          CONFIG_BOUNDS.autoGather.minNewComments.default
+        );
+        expect(config.governance.alignment.autoGather.cooldownMinutes).toBe(
+          CONFIG_BOUNDS.autoGather.cooldownMinutes.default
+        );
+      });
+
+      it("should clamp minNewComments to bounds", async () => {
+        const configYaml = `
+version: 1
+governance:
+  alignment:
+    autoGather:
+      enabled: true
+      minNewComments: 9999
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config.governance.alignment.autoGather.minNewComments).toBe(
+          CONFIG_BOUNDS.autoGather.minNewComments.max
+        );
+      });
+
+      it("should clamp cooldownMinutes to bounds", async () => {
+        const configYaml = `
+version: 1
+governance:
+  alignment:
+    autoGather:
+      enabled: true
+      cooldownMinutes: 0
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config.governance.alignment.autoGather.cooldownMinutes).toBe(
+          CONFIG_BOUNDS.autoGather.cooldownMinutes.min
+        );
+      });
+
+      it("should disable when enabled is not boolean", async () => {
+        const configYaml = `
+version: 1
+governance:
+  alignment:
+    autoGather:
+      enabled: "yes"
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config.governance.alignment.autoGather.enabled).toBe(false);
+      });
+
+      it("should disable when autoGather is not an object", async () => {
+        const configYaml = `
+version: 1
+governance:
+  alignment:
+    autoGather: "invalid"
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config.governance.alignment.autoGather.enabled).toBe(false);
+      });
+    });
   });
 });

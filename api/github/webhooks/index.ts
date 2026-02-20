@@ -25,7 +25,7 @@ import {
   processImplementationIntake,
   recalculateLeaderboardForPR,
 } from "../../lib/implementation-intake.js";
-import { parseCommand, executeCommand } from "../../lib/commands/index.js";
+import { parseCommand, executeCommand, autoGatherIfEligible } from "../../lib/commands/index.js";
 import { getLLMReadiness } from "../../lib/llm/provider.js";
 import { registerHandlerDispatcher } from "../../handlers/dispatcher.js";
 import { handlerEventMap } from "../../handlers/registry.js";
@@ -515,8 +515,24 @@ export function app(probotApp: Probot): void {
         return;
       }
 
-      // Non-command comments: only process PR comments for intake
+      // Non-command comments on issues: check auto-gather eligibility
       if (!issue.pull_request) {
+        const repoConfig = await loadRepositoryConfig(context.octokit, owner, repo);
+        if (repoConfig.governance.alignment.autoGather.enabled) {
+          await autoGatherIfEligible({
+            octokit: context.octokit as Parameters<typeof autoGatherIfEligible>[0]["octokit"],
+            owner,
+            repo,
+            issueNumber: issue.number,
+            installationId: context.payload.installation?.id,
+            issueLabels: issue.labels?.map((l) =>
+              typeof l === "string" ? { name: l } : { name: l.name ?? "" },
+            ) ?? [],
+            autoGatherConfig: repoConfig.governance.alignment.autoGather,
+            appId,
+            log: context.log,
+          });
+        }
         return;
       }
 

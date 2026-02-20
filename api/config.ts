@@ -47,6 +47,10 @@ export const CONFIG_BOUNDS = {
     max: 32_768,
     default: 4_096,
   },
+  autoGather: {
+    minNewComments: { min: 1, max: 100, default: 5 },
+    cooldownMinutes: { min: 5, max: 10080, default: 60 }, // 5 min..7 days
+  },
 } as const;
 
 // ───────────────────────────────────────────────────────────────────────────────

@@ -25,7 +25,7 @@ import type { PreflightCheckItem } from "../merge-readiness.js";
 import { CommitMessageGenerator, formatCommitMessage } from "../llm/commit-message.js";
 import type { PRContext } from "../llm/types.js";
 import type { IssueRef, PRRef } from "../types.js";
-import type { EffectiveConfig } from "../repo-config.js";
+import type { EffectiveConfig, AlignmentAutoGatherConfig } from "../repo-config.js";
 
 /**
  * Minimal interface for the octokit client needed by command handlers.
@@ -535,6 +535,7 @@ function pushBlueprintSection(lines: string[], title: string, items: string[]): 
 function buildBlueprintContent(
   plan: ImplementationPlan,
   senderLogin: string,
+  options?: { triggerLabel?: string },
 ): string {
   const lines: string[] = [];
   const goal = plan.goal?.trim() || "Discussion is gathering signal. Run `/gather` again after more input.";
@@ -568,7 +569,7 @@ function buildBlueprintContent(
     metaParts.push(`${plan.metadata.participantCount} participants`);
   }
   metaParts.push(formatBlueprintTimestamp());
-  metaParts.push(`@${senderLogin} via \`/gather\``);
+  metaParts.push(options?.triggerLabel ?? `@${senderLogin} via \`/gather\``);
   lines.push(metaParts.join(" · "));
 
   return lines.join("\n");
@@ -577,8 +578,9 @@ function buildBlueprintContent(
 function buildFallbackBlueprintContent(
   context: IssueContext,
   senderLogin: string,
+  options?: { triggerLabel?: string },
 ): string {
-  return buildBlueprintContent(createMinimalPlan(context), senderLogin);
+  return buildBlueprintContent(createMinimalPlan(context), senderLogin, options);
 }
 
 /**
@@ -1501,5 +1503,121 @@ export async function executeCommand(ctx: CommandContext): Promise<CommandResult
       `Command /${ctx.verb} failed [${failureCode}]`,
     );
     throw error;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Auto-Gather
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Parameters for auto-gather eligibility check and execution.
+ */
+export interface AutoGatherParams {
+  octokit: CommandOctokit;
+  owner: string;
+  repo: string;
+  issueNumber: number;
+  installationId?: number;
+  /** Labels currently on the issue, used to gate on discussion phase. */
+  issueLabels: Array<{ name: string }>;
+  autoGatherConfig: AlignmentAutoGatherConfig;
+  appId: number;
+  log: {
+    info: (...args: unknown[]) => void;
+    warn: (...args: unknown[]) => void;
+    error: (...args: unknown[]) => void;
+  };
+}
+
+/**
+ * Automatically run /gather when a discussion issue accumulates enough new comments.
+ *
+ * Eligibility rules:
+ * 1. Issue must have `hivemoot:discussion` label.
+ * 2. At least `minNewComments` non-queen comments since last gather (or since epoch
+ *    when no alignment comment exists yet).
+ * 3. At least `cooldownMinutes` have elapsed since the last gather.
+ *
+ * On error, logs a warning and returns without posting anything to the issue.
+ * This is intentionally best-effort — a missed trigger will re-evaluate on the
+ * next comment.
+ */
+export async function autoGatherIfEligible(params: AutoGatherParams): Promise<void> {
+  const { octokit, owner, repo, issueNumber, installationId, issueLabels, autoGatherConfig, appId, log } = params;
+
+  // Gate on discussion phase
+  const isDiscussion = issueLabels.some((l) => isLabelMatch(l.name, LABELS.DISCUSSION));
+  if (!isDiscussion) return;
+
+  const ref: IssueRef = { owner, repo, issueNumber, installationId };
+  const issues = createIssueOperations(octokit, { appId });
+
+  let alignmentInfo: { id: number; createdAt: string } | null = null;
+  try {
+    alignmentInfo = await issues.findAlignmentCommentInfo(ref);
+  } catch (error) {
+    log.warn(`Auto-gather: failed to find alignment comment for #${issueNumber}: ${error instanceof Error ? error.message : String(error)}`);
+    return;
+  }
+
+  const now = Date.now();
+  const cooldownMs = autoGatherConfig.cooldownMinutes * 60 * 1000;
+
+  // Cooldown check: skip if a gather was triggered recently
+  if (alignmentInfo) {
+    const lastGatheredMs = new Date(alignmentInfo.createdAt).getTime();
+    if (now - lastGatheredMs < cooldownMs) {
+      return;
+    }
+  }
+
+  // Count new non-queen comments since last gather (epoch if no prior gather)
+  const since = alignmentInfo?.createdAt ?? new Date(0).toISOString();
+  let newCommentCount: number;
+  try {
+    newCommentCount = await issues.countNonBotCommentsSince(ref, since);
+  } catch (error) {
+    log.warn(`Auto-gather: failed to count comments for #${issueNumber}: ${error instanceof Error ? error.message : String(error)}`);
+    return;
+  }
+
+  if (newCommentCount < autoGatherConfig.minNewComments) {
+    return;
+  }
+
+  log.info(`Auto-gather triggered for #${issueNumber}: ${newCommentCount} new comments since last gather`);
+
+  try {
+    const context = await issues.getIssueContext(ref);
+    const generator = new BlueprintGenerator();
+    const result = await generator.generate(context);
+    const triggerLabel = "auto-gather";
+
+    let blueprintContent: string;
+    if (result.success) {
+      blueprintContent = buildBlueprintContent(result.plan, "", { triggerLabel });
+    } else {
+      log.warn(`Auto-gather fallback for #${issueNumber}: ${result.reason}`);
+      blueprintContent = buildFallbackBlueprintContent(context, "", { triggerLabel });
+    }
+
+    const body = buildAlignmentComment(blueprintContent, issueNumber);
+
+    if (alignmentInfo) {
+      await octokit.rest.issues.updateComment({
+        owner,
+        repo,
+        comment_id: alignmentInfo.id,
+        body,
+      });
+    } else {
+      await issues.comment(ref, body);
+    }
+
+    log.info(`Auto-gather complete for #${issueNumber}`);
+  } catch (error) {
+    log.warn(`Auto-gather failed for #${issueNumber}: ${error instanceof Error ? error.message : String(error)}`);
+    // Fail silently — best-effort; next comment will re-evaluate
   }
 }

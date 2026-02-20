@@ -46,6 +46,9 @@ vi.mock("../../lib/index.js", async () => {
     ...actual,
     loadRepositoryConfig: vi.fn().mockResolvedValue({
       governance: {
+        alignment: {
+          autoGather: { enabled: false, minNewComments: 5, cooldownMinutes: 60 },
+        },
         proposals: {
           discussion: {
             exits: [{ type: "manual" }],

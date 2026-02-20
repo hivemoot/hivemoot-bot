@@ -7,5 +7,5 @@
 
 export { parseCommand } from "./parser.js";
 export type { ParsedCommand } from "./parser.js";
-export { executeCommand } from "./handlers.js";
-export type { CommandContext, CommandOctokit, CommandResult } from "./handlers.js";
+export { executeCommand, autoGatherIfEligible } from "./handlers.js";
+export type { CommandContext, CommandOctokit, CommandResult, AutoGatherParams } from "./handlers.js";

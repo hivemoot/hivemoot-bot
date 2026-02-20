@@ -123,19 +123,39 @@ const RESOLVED_MERGEABLE_STATES = new Set([
   "unstable",
   "has_hooks",
 ]);
+type CommandFailureClassification = "permission" | "validation" | "transient" | "unexpected";
+
+interface AuthorizationResult {
+  authorized: boolean;
+  permission: string | null;
+}
+
+interface CommandLogContext {
+  command: string;
+  owner: string;
+  repo: string;
+  issueNumber: number;
+  commentId: number;
+  senderLogin: string;
+  senderPermission: string;
+  isPullRequest: boolean;
+}
 
 /**
  * Check if the sender has sufficient repo permissions to run commands.
- * Returns true if authorized, false otherwise.
+ * Returns authorization status and the sender's resolved permission (when known).
  */
-async function isAuthorized(ctx: CommandContext): Promise<boolean> {
+async function isAuthorized(ctx: CommandContext): Promise<AuthorizationResult> {
   try {
     const { data } = await ctx.octokit.rest.repos.getCollaboratorPermissionLevel({
       owner: ctx.owner,
       repo: ctx.repo,
       username: ctx.senderLogin,
     });
-    return AUTHORIZED_PERMISSIONS.has(data.permission);
+    return {
+      authorized: AUTHORIZED_PERMISSIONS.has(data.permission),
+      permission: data.permission,
+    };
   } catch (error) {
     // If we can't check permissions (e.g., user is not a collaborator), deny.
     // Log so persistent failures (expired token, rate limit) are visible.
@@ -143,8 +163,78 @@ async function isAuthorized(ctx: CommandContext): Promise<boolean> {
       { err: error, user: ctx.senderLogin, issue: ctx.issueNumber },
       `Permission check failed for ${ctx.senderLogin} — denying command`,
     );
-    return false;
+    return { authorized: false, permission: null };
   }
+}
+
+function getErrorStatus(error: unknown): number | null {
+  if (typeof error !== "object" || error === null || !("status" in error)) {
+    return null;
+  }
+  const status = (error as { status?: unknown }).status;
+  return typeof status === "number" ? status : null;
+}
+
+function classifyCommandFailure(error: unknown): CommandFailureClassification {
+  const status = getErrorStatus(error);
+  if (status === 401 || status === 403) {
+    return "permission";
+  }
+  if (status === 400 || status === 404 || status === 409 || status === 422) {
+    return "validation";
+  }
+  if (status === 429 || (status !== null && status >= 500)) {
+    return "transient";
+  }
+  return "unexpected";
+}
+
+function buildFailureCode(verb: string, classification: CommandFailureClassification): string {
+  return `CMD_${verb.toUpperCase()}_${classification.toUpperCase()}`;
+}
+
+function buildCommandCorrelationId(ctx: CommandContext): string {
+  return `cmd-${ctx.commentId.toString(36)}`;
+}
+
+function buildCommandFailureReply(
+  ctx: CommandContext,
+  failureCode: string,
+  correlationId: string,
+  classification: CommandFailureClassification,
+): string {
+  let guidance = "Retry the command once. If it fails again, ask a maintainer to inspect logs.";
+  if (classification === "permission") {
+    guidance = "Check repository/app permissions for this command, then retry.";
+  } else if (classification === "validation") {
+    guidance = "Verify repository configuration and pull request state, then retry.";
+  } else if (classification === "transient") {
+    guidance = "This looks transient (GitHub/API). Retry the command shortly.";
+  }
+
+  return [
+    "## 🐝 Command failed",
+    "",
+    `I couldn't complete \`/${ctx.verb}\` due to an internal command error.`,
+    "",
+    `- Failure code: \`${failureCode}\``,
+    `- Correlation id: \`${correlationId}\``,
+    "",
+    guidance,
+  ].join("\n");
+}
+
+function buildCommandLogContext(ctx: CommandContext, permission: string | null): CommandLogContext {
+  return {
+    command: ctx.verb,
+    owner: ctx.owner,
+    repo: ctx.repo,
+    issueNumber: ctx.issueNumber,
+    commentId: ctx.commentId,
+    senderLogin: ctx.senderLogin,
+    senderPermission: permission ?? "unknown",
+    isPullRequest: ctx.isPullRequest,
+  };
 }
 
 /**
@@ -1265,14 +1355,15 @@ export async function executeCommand(ctx: CommandContext): Promise<CommandResult
   }
 
   // Authorization: only maintainers can use commands
-  const authorized = await isAuthorized(ctx);
-  if (!authorized) {
+  const authorization = await isAuthorized(ctx);
+  if (!authorization.authorized) {
     // Per issue #81: "for everyone else this should be ignored"
     ctx.log.info(
       `Command /${ctx.verb} from unauthorized user ${ctx.senderLogin} on #${ctx.issueNumber} — ignoring`,
     );
     return { status: "ignored" };
   }
+  const logContext = buildCommandLogContext(ctx, authorization.permission);
 
   // Idempotency guard: if we already reacted with 👀, this is a webhook
   // retry and the command was already executed. Skip to prevent duplicates.
@@ -1287,6 +1378,7 @@ export async function executeCommand(ctx: CommandContext): Promise<CommandResult
   await react(ctx, "eyes");
 
   ctx.log.info(
+    logContext,
     `Executing command /${ctx.verb} from ${ctx.senderLogin} on #${ctx.issueNumber}`,
   );
 
@@ -1302,10 +1394,20 @@ export async function executeCommand(ctx: CommandContext): Promise<CommandResult
 
     return result;
   } catch (error) {
+    const classification = classifyCommandFailure(error);
+    const failureCode = buildFailureCode(ctx.verb, classification);
+    const correlationId = buildCommandCorrelationId(ctx);
     await react(ctx, "confused");
+    await reply(ctx, buildCommandFailureReply(ctx, failureCode, correlationId, classification));
     ctx.log.error(
-      { err: error, verb: ctx.verb, issue: ctx.issueNumber },
-      `Command /${ctx.verb} failed`,
+      {
+        err: error,
+        ...logContext,
+        failureCode,
+        correlationId,
+        classification,
+      },
+      `Command /${ctx.verb} failed [${failureCode}]`,
     );
     throw error;
   }

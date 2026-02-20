@@ -1188,7 +1188,7 @@ async function runConfigDoctorCheck(
       detail: `Loaded \`${configPath}\` (intake: ${intakeMethods || "none"})`,
     };
   } catch (err) {
-    const status = (err as { status?: number }).status;
+    const status = getErrorStatus(err);
     if (status === 404) {
       return {
         name: "Config",

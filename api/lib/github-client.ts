@@ -257,7 +257,7 @@ export class IssueOperations {
             });
             return;
           } catch (e) {
-            if ((e as { status?: number }).status !== 404) throw e;
+            if (getErrorStatus(e) !== 404) throw e;
           }
         }
       }

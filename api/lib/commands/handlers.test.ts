@@ -146,11 +146,11 @@ describe("executeCommand", () => {
     };
     mockLabelService = {
       auditRequiredLabels: vi.fn().mockResolvedValue({
-        created: 2,
-        renamed: 1,
-        updated: 0,
-        skipped: REQUIRED_REPOSITORY_LABELS.length - 3,
-        renamedLabels: [{ from: "phase:voting", to: "hivemoot:voting" }],
+        missing: 2,
+        legacyAliases: 1,
+        metadataDrift: 0,
+        alreadyCorrect: REQUIRED_REPOSITORY_LABELS.length - 3,
+        renameableLabels: [{ from: "phase:voting", to: "hivemoot:voting" }],
       }),
       ensureRequiredLabels: vi.fn().mockResolvedValue({
         created: 2,
@@ -460,11 +460,11 @@ describe("executeCommand", () => {
 
     it("should report when no legacy labels were renamed", async () => {
       mockLabelService.auditRequiredLabels.mockResolvedValueOnce({
-        created: 0,
-        renamed: 0,
-        updated: 0,
-        skipped: REQUIRED_REPOSITORY_LABELS.length,
-        renamedLabels: [],
+        missing: 0,
+        legacyAliases: 0,
+        metadataDrift: 0,
+        alreadyCorrect: REQUIRED_REPOSITORY_LABELS.length,
+        renameableLabels: [],
       });
 
       const ctx = createCtx({ verb: "doctor" });

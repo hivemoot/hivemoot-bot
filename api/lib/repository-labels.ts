@@ -68,6 +68,14 @@ export interface EnsureLabelsResult {
   renamedLabels: Array<{ from: string; to: string }>;
 }
 
+export interface AuditLabelsResult {
+  missing: number;
+  legacyAliases: number;
+  metadataDrift: number;
+  alreadyCorrect: number;
+  renameableLabels: Array<{ from: string; to: string }>;
+}
+
 export function createRepositoryLabelService(octokit: unknown): RepositoryLabelService {
   if (!isValidRepositoryLabelClient(octokit)) {
     throw new Error(
@@ -117,8 +125,15 @@ export class RepositoryLabelService {
     owner: string,
     repo: string,
     requiredLabels: readonly RepositoryLabelDefinition[] = REQUIRED_REPOSITORY_LABELS
-  ): Promise<EnsureLabelsResult> {
-    return this.reconcileRequiredLabels(owner, repo, requiredLabels, false);
+  ): Promise<AuditLabelsResult> {
+    const result = await this.reconcileRequiredLabels(owner, repo, requiredLabels, false);
+    return {
+      missing: result.created,
+      legacyAliases: result.renamed,
+      metadataDrift: result.updated,
+      alreadyCorrect: result.skipped,
+      renameableLabels: result.renamedLabels,
+    };
   }
 
   /**

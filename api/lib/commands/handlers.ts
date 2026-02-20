@@ -1059,37 +1059,37 @@ async function runLabelDoctorCheck(
   mode: DoctorLabelMode
 ): Promise<DoctorCheckResult> {
   const labels = createRepositoryLabelService(ctx.octokit as unknown);
-  const result = mode === "repair"
-    ? await labels.ensureRequiredLabels(ctx.owner, ctx.repo)
-    : await labels.auditRequiredLabels(ctx.owner, ctx.repo);
-  const maybeUpdated = (result as { updated?: unknown }).updated;
-  const updatedCount = typeof maybeUpdated === "number" ? maybeUpdated : 0;
   const totalExpected = REQUIRED_REPOSITORY_LABELS.length;
-  const pendingChanges = result.created + result.renamed + updatedCount;
-  const status: DoctorCheckStatus = mode === "repair"
-    ? "pass"
-    : (pendingChanges > 0 ? "advisory" : "pass");
 
-  const detail = mode === "repair"
-    ? `${totalExpected}/${totalExpected} labels accounted for (created ${result.created}, renamed ${result.renamed}, updated ${updatedCount}, already present ${result.skipped})`
-    : `${result.skipped}/${totalExpected} labels already correct (missing ${result.created}, legacy aliases ${result.renamed}, metadata drift ${updatedCount})`;
+  if (mode === "repair") {
+    const result = await labels.ensureRequiredLabels(ctx.owner, ctx.repo);
+    const subItems: string[] = [];
+    if (result.renamedLabels.length > 0) {
+      subItems.push(...result.renamedLabels.map((entry) => `Renamed \`${entry.from}\` -> \`${entry.to}\``));
+    } else {
+      subItems.push("No legacy labels were renamed");
+    }
 
-  const renamedPrefix = mode === "repair" ? "Renamed" : "Would rename";
+    return {
+      name: "Labels",
+      status: "pass",
+      detail: `${totalExpected}/${totalExpected} labels accounted for (created ${result.created}, renamed ${result.renamed}, updated ${result.updated}, already present ${result.skipped})`,
+      subItems,
+    };
+  }
+
+  const result = await labels.auditRequiredLabels(ctx.owner, ctx.repo);
+  const pendingChanges = result.missing + result.legacyAliases + result.metadataDrift;
   const subItems: string[] = [];
-  if (result.renamedLabels.length > 0) {
-    subItems.push(...result.renamedLabels.map((entry) => `${renamedPrefix} \`${entry.from}\` -> \`${entry.to}\``));
+  if (result.renameableLabels.length > 0) {
+    subItems.push(...result.renameableLabels.map((entry) => `Would rename \`${entry.from}\` -> \`${entry.to}\``));
   }
-  if (mode === "repair" && subItems.length === 0) {
-    subItems.push("No legacy labels were renamed");
-  }
-  if (mode === "audit") {
-    subItems.push(pendingChanges > 0 ? "Run `/doctor repair` to apply label fixes" : "No label repairs needed");
-  }
+  subItems.push(pendingChanges > 0 ? "Run `/doctor repair` to apply label fixes" : "No label repairs needed");
 
   return {
     name: "Labels",
-    status,
-    detail,
+    status: pendingChanges > 0 ? "advisory" : "pass",
+    detail: `${result.alreadyCorrect}/${totalExpected} labels already correct (missing ${result.missing}, legacy aliases ${result.legacyAliases}, metadata drift ${result.metadataDrift})`,
     subItems,
   };
 }

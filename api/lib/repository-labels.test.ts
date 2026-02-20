@@ -381,11 +381,11 @@ describe("RepositoryLabelService", () => {
     );
 
     expect(result).toEqual({
-      created: 1,
-      renamed: 1,
-      updated: 1,
-      skipped: 1,
-      renamedLabels: [{ from: "phase:voting", to: LABELS.VOTING }],
+      missing: 1,
+      legacyAliases: 1,
+      metadataDrift: 1,
+      alreadyCorrect: 1,
+      renameableLabels: [{ from: "phase:voting", to: LABELS.VOTING }],
     });
     expect(client.rest.issues.createLabel).not.toHaveBeenCalled();
     expect(client.rest.issues.updateLabel).not.toHaveBeenCalled();
@@ -401,7 +401,13 @@ describe("RepositoryLabelService", () => {
 
     const result = await service.auditRequiredLabels("hivemoot", "colony", [votingLabel]);
 
-    expect(result).toEqual({ created: 0, renamed: 0, updated: 0, skipped: 1, renamedLabels: [] });
+    expect(result).toEqual({
+      missing: 0,
+      legacyAliases: 0,
+      metadataDrift: 0,
+      alreadyCorrect: 1,
+      renameableLabels: [],
+    });
     expect(client.rest.issues.createLabel).not.toHaveBeenCalled();
     expect(client.rest.issues.updateLabel).not.toHaveBeenCalled();
   });

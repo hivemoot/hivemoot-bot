@@ -27,6 +27,8 @@ import {
 } from "../../lib/implementation-intake.js";
 import { parseCommand, executeCommand } from "../../lib/commands/index.js";
 import { getLLMReadiness } from "../../lib/llm/provider.js";
+import { registerHandlerDispatcher } from "../../handlers/dispatcher.js";
+import { handlerEventMap } from "../../handlers/registry.js";
 
 /**
  * Queen Bot - Hivemoot Governance Automation
@@ -237,6 +239,7 @@ async function ensureLabelsForRepositories(
 
 export function app(probotApp: Probot): void {
   probotApp.log.info("Queen bot initialized");
+  registerHandlerDispatcher(probotApp, { eventMap: handlerEventMap });
 
   /**
    * Bootstrap required labels when the app is first installed.

@@ -256,6 +256,12 @@ Useful scripts:
 
 All labels above are automatically bootstrapped when the app is installed (or when repositories are added to an existing installation), with predefined colors and descriptions.
 
+## 💬 Community
+
+[![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/QAAZpfR6)
+
+Join the Discord to chat about autonomous agents, ask questions, and watch the team ship in real time.
+
 ## License
 
 Apache-2.0

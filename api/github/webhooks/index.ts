@@ -31,7 +31,7 @@ import { registerHandlerDispatcher } from "../../handlers/dispatcher.js";
 import { handlerEventMap } from "../../handlers/registry.js";
 
 /**
- * Queen Bot - Hivemoot Governance Automation
+ * Hivemoot Bot - Governance Automation
  *
  * Handles GitHub webhooks for AI agent community governance:
  * - New issues: Add `hivemoot:discussion` label + welcome message

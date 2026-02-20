@@ -53,6 +53,7 @@ export interface CommandOctokit {
         comment_id: number;
         content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
         per_page?: number;
+        page?: number;
       }) => Promise<{ data: Array<{ user: { login: string } | null }> }>;
     };
     issues: {
@@ -68,6 +69,18 @@ export interface CommandOctokit {
         comment_id: number;
         body: string;
       }) => Promise<unknown>;
+      listComments: (params: {
+        owner: string;
+        repo: string;
+        issue_number: number;
+        per_page?: number;
+        page?: number;
+      }) => Promise<{
+        data: Array<{
+          user: { login: string } | null;
+          performed_via_github_app?: { id: number; name: string } | null;
+        }>;
+      }>;
     };
   };
 }
@@ -286,23 +299,101 @@ async function reply(ctx: CommandContext, body: string): Promise<void> {
  * Check if the bot has already reacted with 👀 to this comment.
  * Used as an idempotency guard against webhook retries — if we already
  * processed a command (indicated by our eyes reaction), skip re-execution.
+ *
+ * Security: Only trust reactions from THIS app's bot identity, not any [bot].
+ * This prevents unrelated bots from suppressing command execution.
  */
 async function alreadyProcessed(ctx: CommandContext): Promise<boolean> {
   try {
-    const { data: reactions } = await ctx.octokit.rest.reactions.listForIssueComment({
-      owner: ctx.owner,
-      repo: ctx.repo,
-      comment_id: ctx.commentId,
-      content: "eyes",
-      per_page: 100,
-    });
-    // Check if any eyes reaction was created by our app's bot account.
+    // Resolve this app's bot login from comments authored via this app.
     // GitHub App bot usernames follow the pattern "<app-slug>[bot]".
-    return reactions.some((r) => r.user?.login.endsWith("[bot]"));
-  } catch {
+    const botLogin = await resolveAppBotLogin(ctx);
+    if (!botLogin) {
+      // Can't resolve bot identity — proceed to avoid silently dropping commands
+      ctx.log.info("Could not resolve app bot login for idempotency check — proceeding");
+      return false;
+    }
+
+    const perPage = 100;
+    let page = 1;
+
+    while (true) {
+      const { data: reactions } = await ctx.octokit.rest.reactions.listForIssueComment({
+        owner: ctx.owner,
+        repo: ctx.repo,
+        comment_id: ctx.commentId,
+        content: "eyes",
+        per_page: perPage,
+        page,
+      });
+
+      // Only skip if THIS app's bot left the eyes reaction.
+      const processedByUs = reactions.some((r) => r.user?.login === botLogin);
+      if (processedByUs) {
+        ctx.log.info({ botLogin, reactionCount: reactions.length, page }, "Found our own eyes reaction — already processed");
+        return true;
+      }
+
+      // Last page reached.
+      if (reactions.length < perPage) {
+        return false;
+      }
+
+      page += 1;
+    }
+  } catch (error) {
     // If we can't check reactions, proceed with execution to avoid
     // silently dropping commands due to transient API failures.
+    ctx.log.error(
+      { err: error, commentId: ctx.commentId },
+      "Idempotency check failed — proceeding to avoid silent command drop",
+    );
     return false;
+  }
+}
+
+/**
+ * Resolve this GitHub App's bot login by finding a comment authored via this app.
+ * Returns the bot username (e.g., "hivemoot[bot]") or undefined if not found.
+ */
+async function resolveAppBotLogin(ctx: CommandContext): Promise<string | undefined> {
+  try {
+    const perPage = 100;
+    let page = 1;
+
+    while (true) {
+      const { data: comments } = await ctx.octokit.rest.issues.listComments({
+        owner: ctx.owner,
+        repo: ctx.repo,
+        issue_number: ctx.issueNumber,
+        per_page: perPage,
+        page,
+      });
+
+      // Find a comment authored by this GitHub App (via performed_via_github_app)
+      // The API response includes performed_via_github_app.id when the app authored the comment
+      for (const comment of comments) {
+        const app = comment.performed_via_github_app;
+        if (app && typeof app === "object" && "id" in app && app.id === ctx.appId) {
+          // The author field contains the bot user
+          if (comment.user) {
+            return comment.user.login;
+          }
+        }
+      }
+
+      if (comments.length < perPage) {
+        return undefined;
+      }
+
+      page += 1;
+    }
+  } catch (error) {
+    ctx.log.error(
+      { err: error, issue: ctx.issueNumber },
+      "Failed to resolve app bot login for idempotency check",
+    );
+    return undefined;
   }
 }
 

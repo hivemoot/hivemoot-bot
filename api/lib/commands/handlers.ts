@@ -314,31 +314,15 @@ async function alreadyProcessed(ctx: CommandContext): Promise<boolean> {
       return false;
     }
 
-    // Check both marker reactions: eyes (known commands) and confused (unknown commands)
-    const [eyesRes, confusedRes] = await Promise.all([
-      ctx.octokit.rest.reactions.listForIssueComment({
-        owner: ctx.owner,
-        repo: ctx.repo,
-        comment_id: ctx.commentId,
-        content: "eyes",
-        per_page: 100,
-      }),
-      ctx.octokit.rest.reactions.listForIssueComment({
-        owner: ctx.owner,
-        repo: ctx.repo,
-        comment_id: ctx.commentId,
-        content: "confused",
-        per_page: 100,
-      }),
-    ]);
-
-    // Only skip if THIS app's bot left a marker reaction.
-    const processedByUs = (reactions: typeof eyesRes.data) =>
-      reactions.some((r) => r.user?.login === botLogin);
-
-    if (processedByUs(eyesRes.data) || processedByUs(confusedRes.data)) {
-      ctx.log.info({ botLogin }, "Found our own marker reaction — already processed");
-      return true;
+    // Check both marker reactions with full pagination.
+    // Eyes = known commands processed; confused = unknown commands processed.
+    // Must paginate: the app's marker reaction may be on page 2+ in high-reaction threads.
+    for (const content of ["eyes", "confused"] as const) {
+      const found = await isMarkerReactionPresent(ctx, botLogin, content);
+      if (found) {
+        ctx.log.info({ botLogin, content }, "Found our own marker reaction — already processed");
+        return true;
+      }
     }
 
     return false;
@@ -350,6 +334,40 @@ async function alreadyProcessed(ctx: CommandContext): Promise<boolean> {
       "Idempotency check failed — proceeding to avoid silent command drop",
     );
     return false;
+  }
+}
+
+/**
+ * Paginate through all reactions of a given type and return true if botLogin left one.
+ * Must paginate: in high-reaction threads the app's marker reaction can be on page 2+.
+ */
+async function isMarkerReactionPresent(
+  ctx: CommandContext,
+  botLogin: string,
+  content: "eyes" | "confused",
+): Promise<boolean> {
+  const perPage = 100;
+  let page = 1;
+
+  while (true) {
+    const { data: reactions } = await ctx.octokit.rest.reactions.listForIssueComment({
+      owner: ctx.owner,
+      repo: ctx.repo,
+      comment_id: ctx.commentId,
+      content,
+      per_page: perPage,
+      page,
+    });
+
+    if (reactions.some((r) => r.user?.login === botLogin)) {
+      return true;
+    }
+
+    if (reactions.length < perPage) {
+      return false;
+    }
+
+    page += 1;
   }
 }
 

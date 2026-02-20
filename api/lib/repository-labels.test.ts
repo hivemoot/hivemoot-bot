@@ -314,4 +314,51 @@ describe("RepositoryLabelService", () => {
     expect(result).toEqual({ created: 0, renamed: 0, updated: 0, skipped: 1, renamedLabels: [] });
     expect(client.rest.issues.updateLabel).not.toHaveBeenCalled();
   });
+
+  it("should audit required labels without mutating repository labels", async () => {
+    const discussionLabel = requiredDef(LABELS.DISCUSSION);
+    const votingLabel = requiredDef(LABELS.VOTING);
+    const rejectedLabel = requiredDef(LABELS.REJECTED);
+    const readyLabel = requiredDef(LABELS.READY_TO_IMPLEMENT);
+    vi.mocked(client.paginate.iterator).mockReturnValue(
+      buildIterator([
+        [
+          label(LABELS.DISCUSSION, discussionLabel.color, discussionLabel.description),
+          label("phase:voting", "5319e7", "Voting phase."),
+          label(LABELS.REJECTED, "000000", rejectedLabel.description),
+        ],
+      ])
+    );
+
+    const result = await service.auditRequiredLabels(
+      "hivemoot",
+      "colony",
+      [discussionLabel, votingLabel, rejectedLabel, readyLabel]
+    );
+
+    expect(result).toEqual({
+      created: 1,
+      renamed: 1,
+      updated: 1,
+      skipped: 1,
+      renamedLabels: [{ from: "phase:voting", to: LABELS.VOTING }],
+    });
+    expect(client.rest.issues.createLabel).not.toHaveBeenCalled();
+    expect(client.rest.issues.updateLabel).not.toHaveBeenCalled();
+  });
+
+  it("should report all labels healthy in audit mode when no repairs are needed", async () => {
+    const votingLabel = requiredDef(LABELS.VOTING);
+    vi.mocked(client.paginate.iterator).mockReturnValue(
+      buildIterator([
+        [label(LABELS.VOTING, votingLabel.color, votingLabel.description)],
+      ])
+    );
+
+    const result = await service.auditRequiredLabels("hivemoot", "colony", [votingLabel]);
+
+    expect(result).toEqual({ created: 0, renamed: 0, updated: 0, skipped: 1, renamedLabels: [] });
+    expect(client.rest.issues.createLabel).not.toHaveBeenCalled();
+    expect(client.rest.issues.updateLabel).not.toHaveBeenCalled();
+  });
 });

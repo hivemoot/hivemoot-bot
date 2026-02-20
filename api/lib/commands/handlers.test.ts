@@ -145,6 +145,13 @@ describe("executeCommand", () => {
       transitionToVoting: vi.fn().mockResolvedValue(undefined),
     };
     mockLabelService = {
+      auditRequiredLabels: vi.fn().mockResolvedValue({
+        created: 2,
+        renamed: 1,
+        updated: 0,
+        skipped: REQUIRED_REPOSITORY_LABELS.length - 3,
+        renamedLabels: [{ from: "phase:voting", to: "hivemoot:voting" }],
+      }),
       ensureRequiredLabels: vi.fn().mockResolvedValue({
         created: 2,
         renamed: 1,
@@ -428,16 +435,19 @@ describe("executeCommand", () => {
         status: "executed",
         message: "Doctor report posted.",
       });
-      expect(mockLabelService.ensureRequiredLabels).toHaveBeenCalledWith("test-org", "test-repo");
+      expect(mockLabelService.auditRequiredLabels).toHaveBeenCalledWith("test-org", "test-repo");
+      expect(mockLabelService.ensureRequiredLabels).not.toHaveBeenCalled();
       expect(ctx.octokit.rest.issues.createComment).toHaveBeenCalledTimes(1);
 
       const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
       expect(commentArgs.body).toContain("Doctor Report");
+      expect(commentArgs.body).toContain("Read-only mode");
       expect(commentArgs.body).toContain("**Labels**");
       expect(commentArgs.body).toContain(
-        `${REQUIRED_REPOSITORY_LABELS.length}/${REQUIRED_REPOSITORY_LABELS.length} labels accounted for`,
+        `${REQUIRED_REPOSITORY_LABELS.length - 3}/${REQUIRED_REPOSITORY_LABELS.length} labels already correct`,
       );
-      expect(commentArgs.body).toContain("Renamed `phase:voting` -> `hivemoot:voting`");
+      expect(commentArgs.body).toContain("Would rename `phase:voting` -> `hivemoot:voting`");
+      expect(commentArgs.body).toContain("Run `/doctor repair` to apply label fixes");
       expect(commentArgs.body).toContain("**Config**");
       expect(commentArgs.body).toContain("Loaded `.github/hivemoot.yml`");
       expect(commentArgs.body).toContain("**PR Workflow**");
@@ -449,7 +459,7 @@ describe("executeCommand", () => {
     });
 
     it("should report when no legacy labels were renamed", async () => {
-      mockLabelService.ensureRequiredLabels.mockResolvedValueOnce({
+      mockLabelService.auditRequiredLabels.mockResolvedValueOnce({
         created: 0,
         renamed: 0,
         updated: 0,
@@ -461,7 +471,34 @@ describe("executeCommand", () => {
       await executeCommand(ctx);
 
       const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
-      expect(commentArgs.body).toContain("No legacy labels were renamed");
+      expect(commentArgs.body).toContain("No label repairs needed");
+    });
+
+    it("should run repair mode when /doctor repair is requested", async () => {
+      const ctx = createCtx({ verb: "doctor", freeText: "repair" });
+      await executeCommand(ctx);
+
+      expect(mockLabelService.ensureRequiredLabels).toHaveBeenCalledWith("test-org", "test-repo");
+      expect(mockLabelService.auditRequiredLabels).not.toHaveBeenCalled();
+
+      const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
+      expect(commentArgs.body).toContain("Repair mode");
+      expect(commentArgs.body).toContain("Renamed `phase:voting` -> `hivemoot:voting`");
+    });
+
+    it("should reject unknown /doctor options", async () => {
+      const ctx = createCtx({ verb: "doctor", freeText: "fix" });
+      const result = await executeCommand(ctx);
+
+      expect(result).toEqual({
+        status: "rejected",
+        reason: "Unknown `/doctor` option `fix`. Use `/doctor` or `/doctor repair`.",
+      });
+      expect(mockLabelService.auditRequiredLabels).not.toHaveBeenCalled();
+      expect(mockLabelService.ensureRequiredLabels).not.toHaveBeenCalled();
+
+      const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
+      expect(commentArgs.body).toContain("Unknown `/doctor` option `fix`");
     });
 
     it("should fail PR workflow check when approval is enabled without trusted reviewers", async () => {
@@ -533,7 +570,7 @@ describe("executeCommand", () => {
     });
 
     it("should continue report generation when a check throws unexpectedly", async () => {
-      mockLabelService.ensureRequiredLabels.mockRejectedValueOnce(new Error("boom"));
+      mockLabelService.auditRequiredLabels.mockRejectedValueOnce(new Error("boom"));
 
       const ctx = createCtx({ verb: "doctor" });
       await executeCommand(ctx);

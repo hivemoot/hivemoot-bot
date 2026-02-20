@@ -950,11 +950,46 @@ describe("Queen Bot", () => {
       expect(octokit.graphql).not.toHaveBeenCalled();
     });
 
-    it("should ignore non-command comments on issues (non-PR)", async () => {
+    it("should fast-exit without loading config for non-discussion issues", async () => {
       const { handlers } = createWebhookHarness();
       const handler = handlers.get("issue_comment.created")!;
       const octokit = createCommandOctokit();
       const log = { info: vi.fn(), error: vi.fn(), warn: vi.fn() };
+
+      await handler({
+        octokit,
+        log,
+        payload: {
+          issue: {
+            number: 11,
+            labels: [{ name: LABELS.READY_TO_IMPLEMENT }],
+          },
+          comment: {
+            id: 201,
+            body: "This needs more details.",
+            user: { login: "maintainer" },
+            performed_via_github_app: null,
+          },
+          repository: {
+            name: "test-repo",
+            full_name: "hivemoot/test-repo",
+            owner: { login: "hivemoot" },
+          },
+        },
+      });
+
+      // Non-discussion issues must not load config — fast-exit path
+      expect(octokit.graphql).not.toHaveBeenCalled();
+      expect(octokit.rest.repos.getContent).not.toHaveBeenCalled();
+    });
+
+    it("should load config for discussion issues but not run auto-gather when disabled", async () => {
+      const { handlers } = createWebhookHarness();
+      const handler = handlers.get("issue_comment.created")!;
+      const octokit = createCommandOctokit();
+      const log = { info: vi.fn(), error: vi.fn(), warn: vi.fn() };
+
+      const callsBefore = vi.mocked(loadRepositoryConfig).mock.calls.length;
 
       await handler({
         octokit,
@@ -978,8 +1013,10 @@ describe("Queen Bot", () => {
         },
       });
 
+      // Config is loaded to check if auto-gather is enabled (it's disabled in default mock)
+      expect(vi.mocked(loadRepositoryConfig).mock.calls.length).toBe(callsBefore + 1);
+      // But no gather should run
       expect(octokit.graphql).not.toHaveBeenCalled();
-      expect(octokit.rest.repos.getContent).not.toHaveBeenCalled();
     });
 
     it("should process non-command comments on PRs through intake path", async () => {

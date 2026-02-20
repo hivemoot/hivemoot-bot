@@ -459,10 +459,15 @@ export class IssueOperations {
   }
 
   /**
-   * Count non-queen comments on an issue created after the given ISO timestamp.
+   * Count non-bot substantive comments on an issue created after the given ISO timestamp.
    *
    * Used by auto-gather to determine how many new human/agent comments have
-   * arrived since the last gather, without double-counting bot-generated content.
+   * arrived since the last gather, without counting bot chatter or commands.
+   *
+   * Skips:
+   * - The queen's own app comments (performed_via_github_app.id === this.appId)
+   * - Any GitHub Bot-type user account (other apps, bots)
+   * - Command comments (body starting with `/` or `@hivemoot`)
    */
   async countNonBotCommentsSince(ref: IssueRef, since: string): Promise<number> {
     const sinceMs = new Date(since).getTime();
@@ -474,14 +479,20 @@ export class IssueOperations {
         owner: ref.owner,
         repo: ref.repo,
         issue_number: ref.issueNumber,
+        since,
         per_page: 100,
       }
     );
 
     for await (const { data: comments } of iterator) {
       for (const comment of comments) {
-        // Skip queen's own comments
+        // Skip the queen's own app comments
         if (comment.performed_via_github_app?.id === this.appId) continue;
+        // Skip any GitHub Bot-type account (other apps, automation)
+        if (comment.user?.type === "Bot") continue;
+        // Skip command comments — they don't add discussion signal
+        const body = (comment.body ?? "").trimStart();
+        if (body.startsWith("/") || body.startsWith("@hivemoot")) continue;
         const commentMs = new Date(comment.created_at ?? "").getTime();
         if (commentMs > sinceMs) {
           count++;

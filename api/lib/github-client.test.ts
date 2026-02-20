@@ -736,6 +736,141 @@ describe("IssueOperations", () => {
     });
   });
 
+  describe("findAlignmentCommentInfo", () => {
+    it("should return id and createdAt from alignment comment metadata", async () => {
+      const createdAt = "2024-01-15T10:00:00.000Z";
+      const body = `<!-- hivemoot-metadata: {"version":1,"type":"alignment","createdAt":"${createdAt}","issueNumber":42} -->\n# Blueprint`;
+      mockClient.paginate.iterator = vi.fn().mockReturnValue({
+        async *[Symbol.asyncIterator]() {
+          yield {
+            data: [
+              { id: 100, body: "Regular comment", performed_via_github_app: null },
+              { id: 200, body, performed_via_github_app: { id: TEST_APP_ID } },
+            ],
+          };
+        },
+      });
+
+      const result = await issueOps.findAlignmentCommentInfo(testRef);
+      expect(result).not.toBeNull();
+      expect(result!.id).toBe(200);
+      expect(result!.createdAt).toBe(createdAt);
+    });
+
+    it("should return null when no alignment comment exists", async () => {
+      mockClient.paginate.iterator = vi.fn().mockReturnValue({
+        async *[Symbol.asyncIterator]() {
+          yield { data: [{ id: 100, body: "Regular comment", performed_via_github_app: null }] };
+        },
+      });
+
+      const result = await issueOps.findAlignmentCommentInfo(testRef);
+      expect(result).toBeNull();
+    });
+  });
+
+  describe("countNonBotCommentsSince", () => {
+    const since = new Date(Date.now() - 60 * 60 * 1000).toISOString(); // 1 hour ago
+    const recent = new Date(Date.now() - 10 * 60 * 1000).toISOString(); // 10 min ago
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(); // 2 hours ago
+
+    it("should count only comments after the given timestamp", async () => {
+      mockClient.paginate.iterator = vi.fn().mockReturnValue({
+        async *[Symbol.asyncIterator]() {
+          yield {
+            data: [
+              { id: 1, body: "Old comment", created_at: old, user: { login: "alice", type: "User" }, performed_via_github_app: null },
+              { id: 2, body: "New comment", created_at: recent, user: { login: "alice", type: "User" }, performed_via_github_app: null },
+            ],
+          };
+        },
+      });
+
+      const count = await issueOps.countNonBotCommentsSince(testRef, since);
+      expect(count).toBe(1);
+    });
+
+    it("should skip queen app comments", async () => {
+      mockClient.paginate.iterator = vi.fn().mockReturnValue({
+        async *[Symbol.asyncIterator]() {
+          yield {
+            data: [
+              { id: 1, body: "Queen comment", created_at: recent, user: { login: "hivemoot[bot]", type: "Bot" }, performed_via_github_app: { id: TEST_APP_ID } },
+              { id: 2, body: "Human comment", created_at: recent, user: { login: "alice", type: "User" }, performed_via_github_app: null },
+            ],
+          };
+        },
+      });
+
+      const count = await issueOps.countNonBotCommentsSince(testRef, since);
+      expect(count).toBe(1);
+    });
+
+    it("should skip Bot-type user accounts", async () => {
+      mockClient.paginate.iterator = vi.fn().mockReturnValue({
+        async *[Symbol.asyncIterator]() {
+          yield {
+            data: [
+              { id: 1, body: "Leaderboard update", created_at: recent, user: { login: "some-bot", type: "Bot" }, performed_via_github_app: null },
+              { id: 2, body: "Human comment", created_at: recent, user: { login: "alice", type: "User" }, performed_via_github_app: null },
+            ],
+          };
+        },
+      });
+
+      const count = await issueOps.countNonBotCommentsSince(testRef, since);
+      expect(count).toBe(1);
+    });
+
+    it("should skip command comments starting with /", async () => {
+      mockClient.paginate.iterator = vi.fn().mockReturnValue({
+        async *[Symbol.asyncIterator]() {
+          yield {
+            data: [
+              { id: 1, body: "/gather", created_at: recent, user: { login: "alice", type: "User" }, performed_via_github_app: null },
+              { id: 2, body: "Discussion content", created_at: recent, user: { login: "bob", type: "User" }, performed_via_github_app: null },
+            ],
+          };
+        },
+      });
+
+      const count = await issueOps.countNonBotCommentsSince(testRef, since);
+      expect(count).toBe(1);
+    });
+
+    it("should skip command comments starting with @hivemoot", async () => {
+      mockClient.paginate.iterator = vi.fn().mockReturnValue({
+        async *[Symbol.asyncIterator]() {
+          yield {
+            data: [
+              { id: 1, body: "@hivemoot implement", created_at: recent, user: { login: "alice", type: "User" }, performed_via_github_app: null },
+              { id: 2, body: "Discussion content", created_at: recent, user: { login: "bob", type: "User" }, performed_via_github_app: null },
+            ],
+          };
+        },
+      });
+
+      const count = await issueOps.countNonBotCommentsSince(testRef, since);
+      expect(count).toBe(1);
+    });
+
+    it("should return 0 when all comments are filtered", async () => {
+      mockClient.paginate.iterator = vi.fn().mockReturnValue({
+        async *[Symbol.asyncIterator]() {
+          yield {
+            data: [
+              { id: 1, body: "/gather", created_at: recent, user: { login: "alice", type: "User" }, performed_via_github_app: null },
+              { id: 2, body: "Bot message", created_at: recent, user: { login: "some-bot", type: "Bot" }, performed_via_github_app: null },
+            ],
+          };
+        },
+      });
+
+      const count = await issueOps.countNonBotCommentsSince(testRef, since);
+      expect(count).toBe(0);
+    });
+  });
+
   describe("hasHumanHelpComment", () => {
     it("should return true when human help comment with matching error code exists", async () => {
       mockClient.paginate.iterator = vi.fn().mockReturnValue({

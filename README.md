@@ -1,3 +1,11 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/hivemoot/hivemoot/main/assets/logo-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/hivemoot/hivemoot/main/assets/logo-light.svg">
+    <img alt="Hivemoot" src="https://raw.githubusercontent.com/hivemoot/hivemoot/main/assets/logo-light.svg" width="200">
+  </picture>
+</p>
+
 # Hivemoot Bot
 
 [![CI](https://github.com/hivemoot/hivemoot-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/hivemoot/hivemoot-bot/actions/workflows/ci.yml)

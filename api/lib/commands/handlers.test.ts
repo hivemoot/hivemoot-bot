@@ -991,6 +991,14 @@ describe("executeCommand", () => {
 
     it("should proceed when reaction check fails", async () => {
       const octokit = createMockOctokit();
+      octokit.rest.issues.listComments.mockResolvedValue({
+        data: [
+          {
+            user: { login: "hivemoot[bot]" },
+            performed_via_github_app: { id: 12345, name: "Hivemoot" },
+          },
+        ],
+      });
       octokit.rest.reactions.listForIssueComment.mockRejectedValue(
         new Error("API error"),
       );
@@ -999,10 +1007,22 @@ describe("executeCommand", () => {
       const result = await executeCommand(ctx);
 
       expect(result.status).toBe("executed");
+      expect(ctx.log.error).toHaveBeenCalledWith(
+        expect.objectContaining({ commentId: ctx.commentId }),
+        expect.stringContaining("Idempotency check failed"),
+      );
     });
 
     it("should proceed when no eyes reactions exist", async () => {
       const octokit = createMockOctokit();
+      octokit.rest.issues.listComments.mockResolvedValue({
+        data: [
+          {
+            user: { login: "hivemoot[bot]" },
+            performed_via_github_app: { id: 12345, name: "Hivemoot" },
+          },
+        ],
+      });
       octokit.rest.reactions.listForIssueComment.mockResolvedValue({
         data: [],
       });

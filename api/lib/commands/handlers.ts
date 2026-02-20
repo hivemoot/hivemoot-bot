@@ -6,9 +6,18 @@
  * and performs the corresponding governance action.
  */
 
-import { LABELS, SIGNATURE, isLabelMatch } from "../../config.js";
+import * as yaml from "js-yaml";
+import { LABELS, REQUIRED_REPOSITORY_LABELS, SIGNATURE, isLabelMatch } from "../../config.js";
 import { SIGNATURES, buildAlignmentComment } from "../bot-comments.js";
-import { createIssueOperations, createGovernanceService, createPROperations, loadRepositoryConfig } from "../index.js";
+import {
+  createIssueOperations,
+  createGovernanceService,
+  createPROperations,
+  createRepositoryLabelService,
+  loadRepositoryConfig,
+} from "../index.js";
+import { getRepoDiscussionInfo } from "../discussions.js";
+import { getLLMReadiness } from "../llm/provider.js";
 import { BlueprintGenerator, createMinimalPlan } from "../llm/blueprint.js";
 import type { ImplementationPlan, IssueContext } from "../llm/types.js";
 import { evaluatePreflightChecks } from "../merge-readiness.js";
@@ -16,6 +25,7 @@ import type { PreflightCheckItem } from "../merge-readiness.js";
 import { CommitMessageGenerator, formatCommitMessage } from "../llm/commit-message.js";
 import type { PRContext } from "../llm/types.js";
 import type { IssueRef, PRRef } from "../types.js";
+import type { EffectiveConfig } from "../repo-config.js";
 
 /**
  * Minimal interface for the octokit client needed by command handlers.
@@ -959,6 +969,360 @@ async function gatherPRContext(
   return prContext;
 }
 
+/**
+ * Doctor check item severity.
+ */
+type DoctorCheckStatus = "pass" | "advisory" | "fail";
+
+interface DoctorCheckResult {
+  name: string;
+  status: DoctorCheckStatus;
+  detail: string;
+  subItems?: string[];
+}
+
+type DoctorRepoOctokit = {
+  rest: {
+    repos: {
+      getContent: (params: { owner: string; repo: string; path: string }) => Promise<{ data: unknown }>;
+      get: (params: { owner: string; repo: string }) => Promise<unknown>;
+    };
+    pulls: {
+      list: (params: { owner: string; repo: string; state?: "open" | "closed" | "all"; per_page?: number }) => Promise<unknown>;
+    };
+    issues: {
+      listLabelsForRepo: (params: { owner: string; repo: string; per_page?: number }) => Promise<unknown>;
+    };
+  };
+  graphql: <T>(query: string, variables?: Record<string, unknown>) => Promise<T>;
+};
+
+function formatDoctorCheckItem(check: DoctorCheckResult): string {
+  const icon = check.status === "pass" ? "[x]" : (check.status === "advisory" ? "[!]" : "[ ]");
+  return `- ${icon} **${check.name}**: ${check.detail}`;
+}
+
+function formatDoctorSubItem(item: string): string {
+  return `  - ${item}`;
+}
+
+function summarizeDoctorChecks(checks: DoctorCheckResult[]): string {
+  const passed = checks.filter((c) => c.status === "pass").length;
+  const advisories = checks.filter((c) => c.status === "advisory").length;
+  const failed = checks.filter((c) => c.status === "fail").length;
+  return `**${passed}/${checks.length} checks passed, ${advisories} advisories, ${failed} failures.**`;
+}
+
+function errorMessage(err: unknown): string {
+  if (err instanceof Error && err.message.trim().length > 0) {
+    return err.message;
+  }
+  return String(err);
+}
+
+async function runDoctorCheck(
+  name: string,
+  run: () => Promise<DoctorCheckResult>,
+): Promise<DoctorCheckResult> {
+  try {
+    return await run();
+  } catch (err) {
+    return {
+      name,
+      status: "fail",
+      detail: `Check failed: ${errorMessage(err)}`,
+    };
+  }
+}
+
+async function runLabelDoctorCheck(ctx: CommandContext): Promise<DoctorCheckResult> {
+  const labels = createRepositoryLabelService(ctx.octokit as unknown);
+  const result = await labels.ensureRequiredLabels(ctx.owner, ctx.repo);
+  const maybeUpdated = (result as { updated?: unknown }).updated;
+  const updatedCount = typeof maybeUpdated === "number" ? maybeUpdated : 0;
+  const totalExpected = REQUIRED_REPOSITORY_LABELS.length;
+  const totalFound = result.created + result.renamed + result.skipped + updatedCount;
+  const status: DoctorCheckStatus = totalFound >= totalExpected ? "pass" : "fail";
+  const detail = `${totalFound}/${totalExpected} labels accounted for (created ${result.created}, renamed ${result.renamed}, updated ${updatedCount}, already present ${result.skipped})`;
+  const subItems = result.renamedLabels.length > 0
+    ? result.renamedLabels.map((entry) => `Renamed \`${entry.from}\` -> \`${entry.to}\``)
+    : ["No legacy labels were renamed"];
+
+  return {
+    name: "Labels",
+    status,
+    detail,
+    subItems,
+  };
+}
+
+async function runConfigDoctorCheck(
+  ctx: CommandContext,
+  repoConfig: EffectiveConfig,
+): Promise<DoctorCheckResult> {
+  const octokit = ctx.octokit as unknown as DoctorRepoOctokit;
+  const configPath = ".github/hivemoot.yml";
+
+  try {
+    const response = await octokit.rest.repos.getContent({
+      owner: ctx.owner,
+      repo: ctx.repo,
+      path: configPath,
+    });
+    const data = response.data as { type?: string; content?: string } | unknown[];
+
+    if (Array.isArray(data) || typeof data !== "object" || data === null || data.type !== "file" || !data.content) {
+      return {
+        name: "Config",
+        status: "advisory",
+        detail: `\`${configPath}\` exists but is not a valid file payload; defaults are active`,
+      };
+    }
+
+    const content = Buffer.from(data.content, "base64").toString("utf-8");
+    const parsed = yaml.load(content);
+    if (parsed === null || parsed === undefined) {
+      return {
+        name: "Config",
+        status: "advisory",
+        detail: `\`${configPath}\` is empty; defaults are active`,
+      };
+    }
+    if (typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {
+        name: "Config",
+        status: "fail",
+        detail: `\`${configPath}\` must be a YAML object`,
+      };
+    }
+
+    const intakeMethods = repoConfig.governance.pr.intake.map((entry) => entry.method).join(", ");
+    return {
+      name: "Config",
+      status: "pass",
+      detail: `Loaded \`${configPath}\` (intake: ${intakeMethods || "none"})`,
+    };
+  } catch (err) {
+    const status = (err as { status?: number }).status;
+    if (status === 404) {
+      return {
+        name: "Config",
+        status: "advisory",
+        detail: `\`${configPath}\` not found; defaults are active`,
+      };
+    }
+
+    if (err instanceof yaml.YAMLException) {
+      return {
+        name: "Config",
+        status: "fail",
+        detail: `Invalid YAML in \`${configPath}\`: ${err.message}`,
+      };
+    }
+
+    return {
+      name: "Config",
+      status: "fail",
+      detail: `Unable to load \`${configPath}\`: ${errorMessage(err)}`,
+    };
+  }
+}
+
+function runPRWorkflowDoctorCheck(repoConfig: EffectiveConfig): DoctorCheckResult {
+  const intake = repoConfig.governance.pr.intake;
+  const trustedReviewers = repoConfig.governance.pr.trustedReviewers;
+  const usesApprovalIntake = intake.some((method) => method.method === "approval");
+  const hasMergeReady = repoConfig.governance.pr.mergeReady !== null;
+  const requiresTrustedReviewers = usesApprovalIntake || hasMergeReady;
+
+  if (requiresTrustedReviewers && trustedReviewers.length === 0) {
+    return {
+      name: "PR Workflow",
+      status: "fail",
+      detail: "Approval-based intake/merge-ready is configured but `trustedReviewers` is empty",
+    };
+  }
+
+  if (intake.length === 0) {
+    return {
+      name: "PR Workflow",
+      status: "fail",
+      detail: "No PR intake methods are configured",
+    };
+  }
+
+  if (trustedReviewers.length === 0) {
+    return {
+      name: "PR Workflow",
+      status: "advisory",
+      detail: "No trusted reviewers configured; approval-based workflows are disabled",
+    };
+  }
+
+  return {
+    name: "PR Workflow",
+    status: "pass",
+    detail: `Configured intake methods: ${intake.map((method) => method.method).join(", ")} (trusted reviewers: ${trustedReviewers.length})`,
+  };
+}
+
+async function runStandupDoctorCheck(
+  ctx: CommandContext,
+  repoConfig: EffectiveConfig,
+): Promise<DoctorCheckResult> {
+  if (!repoConfig.standup.enabled) {
+    return {
+      name: "Standup",
+      status: "pass",
+      detail: "Disabled (no action required)",
+    };
+  }
+
+  if (!repoConfig.standup.category.trim()) {
+    return {
+      name: "Standup",
+      status: "fail",
+      detail: "`standup.enabled` is true but `standup.category` is empty",
+    };
+  }
+
+  const discussions = await getRepoDiscussionInfo(ctx.octokit as unknown as DoctorRepoOctokit, ctx.owner, ctx.repo);
+  if (!discussions.hasDiscussions) {
+    return {
+      name: "Standup",
+      status: "fail",
+      detail: "GitHub Discussions are disabled for this repository",
+    };
+  }
+
+  const category = discussions.categories.find((entry) => entry.name === repoConfig.standup.category);
+  if (!category) {
+    return {
+      name: "Standup",
+      status: "fail",
+      detail: `Category \`${repoConfig.standup.category}\` was not found`,
+    };
+  }
+
+  return {
+    name: "Standup",
+    status: "pass",
+    detail: `Category \`${repoConfig.standup.category}\` is available`,
+  };
+}
+
+async function runPermissionsDoctorCheck(ctx: CommandContext): Promise<DoctorCheckResult> {
+  const octokit = ctx.octokit as unknown as DoctorRepoOctokit;
+  const failures: string[] = [];
+
+  const probes: Array<{ label: string; run: () => Promise<void> }> = [
+    {
+      label: "issues",
+      run: async () => {
+        await octokit.rest.issues.listLabelsForRepo({ owner: ctx.owner, repo: ctx.repo, per_page: 1 });
+      },
+    },
+    {
+      label: "pull_requests",
+      run: async () => {
+        await octokit.rest.pulls.list({ owner: ctx.owner, repo: ctx.repo, state: "open", per_page: 1 });
+      },
+    },
+    {
+      label: "metadata",
+      run: async () => {
+        await octokit.rest.repos.get({ owner: ctx.owner, repo: ctx.repo });
+      },
+    },
+  ];
+
+  for (const probe of probes) {
+    try {
+      await probe.run();
+    } catch (err) {
+      failures.push(`${probe.label}: ${errorMessage(err)}`);
+    }
+  }
+
+  if (failures.length > 0) {
+    return {
+      name: "Permissions",
+      status: "fail",
+      detail: `${failures.length}/${probes.length} capability probes failed`,
+      subItems: failures,
+    };
+  }
+
+  return {
+    name: "Permissions",
+    status: "pass",
+    detail: "Issues, pull requests, and metadata capability probes succeeded",
+  };
+}
+
+function runLLMDoctorCheck(): DoctorCheckResult {
+  const readiness = getLLMReadiness();
+  if (readiness.ready) {
+    return {
+      name: "LLM",
+      status: "pass",
+      detail: "Provider, model, and API key are configured",
+    };
+  }
+
+  if (readiness.reason === "api_key_missing") {
+    return {
+      name: "LLM",
+      status: "fail",
+      detail: "Provider/model configured but API key is missing",
+    };
+  }
+
+  return {
+    name: "LLM",
+    status: "advisory",
+    detail: "LLM integration is not configured",
+  };
+}
+
+/**
+ * Handle /doctor command: run a setup health report for the current repository.
+ */
+async function handleDoctor(ctx: CommandContext): Promise<CommandResult> {
+  const octokit = ctx.octokit as unknown as DoctorRepoOctokit;
+  const repoConfig = await loadRepositoryConfig(octokit, ctx.owner, ctx.repo);
+
+  const checks: DoctorCheckResult[] = [];
+  checks.push(await runDoctorCheck("Labels", async () => runLabelDoctorCheck(ctx)));
+  checks.push(await runDoctorCheck("Config", async () => runConfigDoctorCheck(ctx, repoConfig)));
+  checks.push(await runDoctorCheck("PR Workflow", async () => runPRWorkflowDoctorCheck(repoConfig)));
+  checks.push(await runDoctorCheck("Standup", async () => runStandupDoctorCheck(ctx, repoConfig)));
+  checks.push(await runDoctorCheck("Permissions", async () => runPermissionsDoctorCheck(ctx)));
+  checks.push(await runDoctorCheck("LLM", async () => runLLMDoctorCheck()));
+
+  const lines: string[] = [
+    "## 🐝 Doctor Report",
+    "",
+  ];
+  for (const check of checks) {
+    lines.push(formatDoctorCheckItem(check));
+    if (check.subItems) {
+      for (const subItem of check.subItems) {
+        lines.push(formatDoctorSubItem(subItem));
+      }
+    }
+  }
+  lines.push("");
+  lines.push(summarizeDoctorChecks(checks));
+
+  await reply(
+    ctx,
+    lines.join("\n"),
+  );
+
+  return { status: "executed", message: "Doctor report posted." };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Command Router
 // ─────────────────────────────────────────────────────────────────────────────
@@ -967,6 +1331,7 @@ async function gatherPRContext(
 const COMMAND_HANDLERS: Record<string, (ctx: CommandContext) => Promise<CommandResult>> = {
   vote: handleVote,
   implement: handleImplement,
+  doctor: handleDoctor,
   gather: handleGather,
   preflight: handlePreflight,
   squash: handleSquash,

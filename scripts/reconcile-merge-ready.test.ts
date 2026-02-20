@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
  * Tests for reconcile-merge-ready script.
  *
  * Verifies:
- * - processRepository: skips repos without mergeReady config, processes implementation PRs
+ * - processRepository: skips repos without mergeReady config, processes all open PRs
  * - Error isolation: one PR failure doesn't block others, AggregateError preserves causes
  */
 
@@ -23,11 +23,11 @@ vi.mock("@actions/core", () => ({
 process.on("unhandledRejection", () => {});
 
 const mockEvaluateMergeReadiness = vi.fn().mockResolvedValue({ action: "noop", labeled: false });
-const mockFindPRsWithLabel = vi.fn().mockResolvedValue([]);
+const mockFindAllOpenPRs = vi.fn().mockResolvedValue([]);
 
 vi.mock("../api/lib/index.js", () => ({
   createPROperations: vi.fn(() => ({
-    findPRsWithLabel: mockFindPRsWithLabel,
+    findAllOpenPRs: mockFindAllOpenPRs,
   })),
   loadRepositoryConfig: vi.fn().mockResolvedValue({
     governance: { pr: { mergeReady: null, trustedReviewers: [] } },
@@ -76,11 +76,11 @@ describe("reconcile-merge-ready", () => {
 
       await processRepository({} as never, testRepo, testAppId);
 
-      expect(mockFindPRsWithLabel).not.toHaveBeenCalled();
+      expect(mockFindAllOpenPRs).not.toHaveBeenCalled();
       expect(mockEvaluateMergeReadiness).not.toHaveBeenCalled();
     });
 
-    it("should process all implementation PRs", async () => {
+    it("should process all open PRs regardless of labels", async () => {
       mockLoadRepositoryConfig.mockResolvedValue({
         governance: {
           pr: {
@@ -90,19 +90,20 @@ describe("reconcile-merge-ready", () => {
         },
       } as ReturnType<typeof loadRepositoryConfig> extends Promise<infer T> ? T : never);
 
-      mockFindPRsWithLabel.mockResolvedValue([
+      mockFindAllOpenPRs.mockResolvedValue([
         { number: 1, labels: [{ name: "hivemoot:candidate" }] },
         { number: 2, labels: [{ name: "hivemoot:candidate" }, { name: "hivemoot:merge-ready" }] },
+        { number: 3, labels: [] },
       ]);
 
       mockEvaluateMergeReadiness.mockResolvedValue({ action: "noop", labeled: false });
 
       await processRepository({} as never, testRepo, testAppId);
 
-      expect(mockEvaluateMergeReadiness).toHaveBeenCalledTimes(2);
+      expect(mockEvaluateMergeReadiness).toHaveBeenCalledTimes(3);
     });
 
-    it("should skip repos with no implementation PRs", async () => {
+    it("should skip repos with no open PRs", async () => {
       mockLoadRepositoryConfig.mockResolvedValue({
         governance: {
           pr: {
@@ -112,7 +113,7 @@ describe("reconcile-merge-ready", () => {
         },
       } as ReturnType<typeof loadRepositoryConfig> extends Promise<infer T> ? T : never);
 
-      mockFindPRsWithLabel.mockResolvedValue([]);
+      mockFindAllOpenPRs.mockResolvedValue([]);
 
       await processRepository({} as never, testRepo, testAppId);
 
@@ -129,10 +130,10 @@ describe("reconcile-merge-ready", () => {
         },
       } as ReturnType<typeof loadRepositoryConfig> extends Promise<infer T> ? T : never);
 
-      mockFindPRsWithLabel.mockResolvedValue([
-        { number: 1, labels: [{ name: "hivemoot:candidate" }] },
-        { number: 2, labels: [{ name: "hivemoot:candidate" }] },
-        { number: 3, labels: [{ name: "hivemoot:candidate" }] },
+      mockFindAllOpenPRs.mockResolvedValue([
+        { number: 1, labels: [] },
+        { number: 2, labels: [] },
+        { number: 3, labels: [] },
       ]);
 
       mockEvaluateMergeReadiness
@@ -162,7 +163,7 @@ describe("reconcile-merge-ready", () => {
         },
       } as ReturnType<typeof loadRepositoryConfig> extends Promise<infer T> ? T : never);
 
-      mockFindPRsWithLabel.mockResolvedValue([
+      mockFindAllOpenPRs.mockResolvedValue([
         { number: 1, labels: [{ name: "hivemoot:candidate" }, { name: "bug" }] },
       ]);
 

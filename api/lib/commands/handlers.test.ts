@@ -1095,28 +1095,21 @@ describe("executeCommand", () => {
           },
         ],
       });
-      // Eyes has bot reaction among others; confused has none
-      octokit.rest.reactions.listForIssueComment
-        .mockResolvedValueOnce({
-          data: [
-            ...Array.from({ length: 5 }, (_, i) => ({ user: { login: `human-${i}` } })),
-            { user: { login: "hivemoot[bot]" } },
-          ],
-        }) // eyes check — bot present
-        .mockResolvedValueOnce({ data: [] }); // confused check — none
+      // Eyes has bot reaction among others — short-circuits before confused check
+      octokit.rest.reactions.listForIssueComment.mockResolvedValueOnce({
+        data: [
+          ...Array.from({ length: 5 }, (_, i) => ({ user: { login: `human-${i}` } })),
+          { user: { login: "hivemoot[bot]" } },
+        ],
+      }); // eyes check — bot present, short-circuit
 
       const ctx = createCtx({ octokit });
       const result = await executeCommand(ctx);
 
       expect(result).toEqual({ status: "ignored" });
-      expect(octokit.rest.reactions.listForIssueComment).toHaveBeenCalledTimes(2);
-      expect(octokit.rest.reactions.listForIssueComment).toHaveBeenNthCalledWith(
-        1,
+      expect(octokit.rest.reactions.listForIssueComment).toHaveBeenCalledTimes(1);
+      expect(octokit.rest.reactions.listForIssueComment).toHaveBeenCalledWith(
         expect.objectContaining({ per_page: 100, content: "eyes" }),
-      );
-      expect(octokit.rest.reactions.listForIssueComment).toHaveBeenNthCalledWith(
-        2,
-        expect.objectContaining({ per_page: 100, content: "confused" }),
       );
     });
 

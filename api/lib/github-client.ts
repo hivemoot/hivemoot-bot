@@ -683,10 +683,16 @@ export class IssueOperations {
           continue;
         }
 
+        const thumbsUp = comment.reactions?.["+1"] ?? 0;
+        const thumbsDown = comment.reactions?.["-1"] ?? 0;
+
         comments.push({
           author: comment.user.login,
           body: comment.body,
           createdAt: comment.created_at ?? new Date().toISOString(),
+          ...(thumbsUp > 0 || thumbsDown > 0
+            ? { reactions: { thumbsUp, thumbsDown } }
+            : {}),
         });
       }
     }

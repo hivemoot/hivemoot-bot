@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { GovernanceService } from "../../lib/governance.js";
 import { createIssueOperations } from "../../lib/github-client.js";
-import { getLinkedIssues } from "../../lib/graphql-queries.js";
+import { getLinkedIssues, getOpenPRsForIssue } from "../../lib/graphql-queries.js";
 import { processImplementationIntake, recalculateLeaderboardForPR } from "../../lib/implementation-intake.js";
 import { evaluateMergeReadiness, loadRepositoryConfig } from "../../lib/index.js";
 import { LABELS, MESSAGES, REQUIRED_REPOSITORY_LABELS } from "../../config.js";
@@ -31,6 +31,7 @@ vi.mock("../../lib/graphql-queries.js", async (importOriginal) => {
   return {
     ...actual,
     getLinkedIssues: vi.fn().mockResolvedValue([]),
+    getOpenPRsForIssue: vi.fn().mockResolvedValue([]),
   };
 });
 
@@ -1324,6 +1325,124 @@ describe("Queen Bot", () => {
           log,
         })
       );
+    });
+  });
+
+  describe("pull_request.closed handler", () => {
+    const createClosedPROctokit = () => ({
+      rest: {
+        pulls: {
+          get: vi.fn().mockResolvedValue({
+            data: {
+              number: 1,
+              state: "open",
+              merged: false,
+              created_at: "2026-01-01T00:00:00Z",
+              updated_at: "2026-01-01T00:00:00Z",
+              user: { login: "author" },
+              head: { sha: "abc123" },
+              mergeable: true,
+            },
+          }),
+          update: vi.fn().mockResolvedValue({}),
+          listReviews: vi.fn().mockResolvedValue({ data: [] }),
+          listCommits: vi.fn().mockResolvedValue({ data: [] }),
+          listReviewComments: vi.fn().mockResolvedValue({ data: [] }),
+        },
+        issues: {
+          get: vi.fn().mockResolvedValue({ data: { labels: [] } }),
+          addLabels: vi.fn().mockResolvedValue({}),
+          removeLabel: vi.fn().mockResolvedValue({}),
+          createComment: vi.fn().mockResolvedValue({}),
+          update: vi.fn().mockResolvedValue({}),
+          listForRepo: vi.fn().mockResolvedValue({ data: [] }),
+          listEventsForTimeline: vi.fn().mockResolvedValue({ data: [] }),
+          listComments: vi.fn().mockResolvedValue({ data: [] }),
+          lock: vi.fn().mockResolvedValue({}),
+          unlock: vi.fn().mockResolvedValue({}),
+        },
+        checks: {
+          listForRef: vi.fn().mockResolvedValue({ data: { total_count: 0, check_runs: [] } }),
+        },
+        repos: {
+          getCombinedStatusForRef: vi.fn().mockResolvedValue({
+            data: {
+              state: "success",
+              total_count: 0,
+              statuses: [],
+            },
+          }),
+        },
+        reactions: {
+          listForIssueComment: vi.fn().mockResolvedValue({ data: [] }),
+          listForIssue: vi.fn().mockResolvedValue({ data: [] }),
+        },
+      },
+      paginate: {
+        iterator: vi.fn().mockImplementation(() => ({
+          async *[Symbol.asyncIterator]() {
+            yield { data: [] };
+          },
+        })),
+      },
+    });
+
+    beforeEach(() => {
+      vi.mocked(getLinkedIssues).mockReset();
+      vi.mocked(getOpenPRsForIssue).mockReset();
+    });
+
+    it("should close competing PR before posting superseded comment", async () => {
+      const { handlers } = createWebhookHarness();
+      const handler = handlers.get("pull_request.closed");
+      expect(handler).toBeDefined();
+
+      const octokit = createClosedPROctokit();
+      const log = { info: vi.fn(), error: vi.fn() };
+
+      vi.mocked(getLinkedIssues).mockResolvedValueOnce([
+        {
+          number: 79,
+          title: "coverage gap",
+          state: "OPEN",
+          labels: { nodes: [{ name: LABELS.READY_TO_IMPLEMENT }] },
+        },
+      ] as any);
+      vi.mocked(getOpenPRsForIssue).mockResolvedValueOnce([
+        { number: 22, state: "OPEN", title: "winner" },
+        { number: 24, state: "OPEN", title: "competing" },
+      ] as any);
+
+      await handler!({
+        octokit,
+        log,
+        payload: {
+          pull_request: { number: 22, merged: true },
+          repository: {
+            name: "test-repo",
+            full_name: "hivemoot/test-repo",
+            owner: { login: "hivemoot" },
+          },
+        },
+      });
+
+      expect(octokit.rest.pulls.update).toHaveBeenCalledWith(
+        expect.objectContaining({ pull_number: 24, state: "closed" })
+      );
+
+      const supersededCommentCall = octokit.rest.issues.createComment.mock.calls.find(
+        (call: [{ issue_number: number; body: string }]) =>
+          call[0].issue_number === 24 && call[0].body.includes("Superseded")
+      );
+      expect(supersededCommentCall).toBeDefined();
+
+      const closeCallOrder = octokit.rest.pulls.update.mock.invocationCallOrder[0];
+      const supersededCallOrder = supersededCommentCall
+        ? octokit.rest.issues.createComment.mock.invocationCallOrder[
+            octokit.rest.issues.createComment.mock.calls.indexOf(supersededCommentCall as never)
+          ]
+        : Number.MAX_SAFE_INTEGER;
+      expect(closeCallOrder).toBeLessThan(supersededCallOrder);
     });
   });
 

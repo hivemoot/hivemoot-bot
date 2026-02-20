@@ -127,6 +127,20 @@ export const LLM_DEFAULTS = {
   // structured JSON in practice without depending on provider-specific limits.
   maxTokens: 4_096,
   temperature: 0.3,
+  // Per-call timeout for individual LLM API requests (ms).
+  // Bounds each generateObject() invocation independently of the retry
+  // wrapper's total budget. Large PRs can send ~50KB of context, so the
+  // LLM may need well over 15s to respond (hivemoot-agent#118 timed out
+  // at 15s). 90s is generous but safe within the 120s function budget.
+  //
+  // ⚠️  Budget alignment (update together):
+  //   vercel.json  maxDuration .............. 120s (hard ceiling)
+  //   retry.ts     maxTotalElapsedMs ........ 105s (retry sequence budget)
+  //   types.ts     perCallTimeoutMs ......... 90s  (single LLM call)
+  //
+  // Vercel function limits as of Feb 2026:
+  //   https://vercel.com/docs/functions/configuring-functions/duration
+  perCallTimeoutMs: 90_000,
 } as const;
 
 /**

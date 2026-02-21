@@ -1,7 +1,7 @@
 import { createCipheriv, randomBytes } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { resolveInstallationBYOKConfig } from "./byok.js";
+import { _resetMasterKeysCache, resolveInstallationBYOKConfig } from "./byok.js";
 
 type EnvelopeOverrides = Partial<{
   ciphertext: string;
@@ -99,6 +99,7 @@ describe("resolveInstallationBYOKConfig", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     process.env = originalEnv;
+    _resetMasterKeysCache();
   });
 
   it("returns null when Redis runtime config is blank or missing", async () => {

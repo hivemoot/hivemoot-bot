@@ -109,7 +109,7 @@ function parseProvider(raw: unknown): LLMProvider {
   }
 }
 
-function parseMasterKeys(): ReadonlyMap<string, Buffer> {
+function parseMasterKeysFromEnv(): ReadonlyMap<string, Buffer> {
   const raw = normalizeEnvString(process.env[MASTER_KEYS_ENV]);
   if (!raw) {
     throw new Error(`BYOK master keys are not configured: set ${MASTER_KEYS_ENV}`);
@@ -144,6 +144,17 @@ function parseMasterKeys(): ReadonlyMap<string, Buffer> {
   }
 
   return result;
+}
+
+let _masterKeysCache: ReadonlyMap<string, Buffer> | undefined;
+
+function parseMasterKeys(): ReadonlyMap<string, Buffer> {
+  return (_masterKeysCache ??= parseMasterKeysFromEnv());
+}
+
+/** Reset the master keys cache. Intended for use in tests only. */
+export function _resetMasterKeysCache(): void {
+  _masterKeysCache = undefined;
 }
 
 function decodeBase64Field(fieldName: string, value: string): Buffer {

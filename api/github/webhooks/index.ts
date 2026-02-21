@@ -4,6 +4,7 @@ import {
   LABELS,
   MESSAGES,
   PR_MESSAGES,
+  isLabelMatch,
 } from "../../config.js";
 import {
   createIssueOperations,
@@ -17,19 +18,28 @@ import {
 import {
   getLinkedIssues,
 } from "../../lib/graphql-queries.js";
+import { hasSameRepoClosingKeywordRef } from "../../lib/closing-keywords.js";
 import { filterByLabel } from "../../lib/types.js";
 import { validateEnv, getAppId } from "../../lib/env-validation.js";
 import {
   processImplementationIntake,
   recalculateLeaderboardForPR,
 } from "../../lib/implementation-intake.js";
+import { parseCommand, executeCommand } from "../../lib/commands/index.js";
+import { getLLMReadiness } from "../../lib/llm/provider.js";
+import { registerHandlerDispatcher } from "../../handlers/dispatcher.js";
+import { handlerEventMap } from "../../handlers/registry.js";
 
 /**
- * Queen Bot - Hivemoot Governance Automation
+ * Hivemoot Bot - Governance Automation
  *
  * Handles GitHub webhooks for AI agent community governance:
- * - New issues: Add 'phase:discussion' label + welcome message
- * - New PRs: Post review checklist
+ * - New issues: Add `hivemoot:discussion` label + welcome message
+ * - New PRs: Link validation, implementation intake, and leaderboard tracking
+ * - Issue/PR comments: @mention + /command dispatch and PR intake updates
+ * - PR lifecycle: Merge outcomes, competing PR closure, stale management
+ * - Reviews & CI: Leaderboard recalculation, merge-readiness evaluation
+ * - Installation: Label bootstrapping for new repositories
  */
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -64,6 +74,8 @@ interface LabelBootstrapSummary {
   reposProcessed: number;
   reposFailed: number;
   labelsCreated: number;
+  labelsRenamed: number;
+  labelsUpdated: number;
   labelsSkipped: number;
 }
 
@@ -89,10 +101,19 @@ interface InstallationRepoListClient {
 }
 
 const INSTALLATION_REPO_PAGE_SIZE = 100;
+const PR_OPENED_LINK_RETRY_DELAY_MS = 2000;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper Functions
 // ─────────────────────────────────────────────────────────────────────────────
+
+/** Check if a PR targets the repository's default branch */
+function targetsDefaultBranch(
+  pullRequest: { base: { ref: string } },
+  repository: { default_branch?: string },
+): boolean {
+  return !repository.default_branch || pullRequest.base.ref === repository.default_branch;
+}
 
 /** Extract repository context from webhook payload */
 function getRepoContext(repository: InstallationRepoPayload): RepoContext {
@@ -173,7 +194,7 @@ async function ensureLabelsForRepositories(
   if (targetRepositories.length === 0) {
     context.log.info(`[${eventName}] No installation repositories available; skipping label bootstrap`);
     context.log.info(
-      `[${eventName}] Label bootstrap summary: reposProcessed=0, reposFailed=0, labelsCreated=0, labelsSkipped=0`
+      `[${eventName}] Label bootstrap summary: reposProcessed=0, reposFailed=0, labelsCreated=0, labelsRenamed=0, labelsUpdated=0, labelsSkipped=0`
     );
     return;
   }
@@ -184,6 +205,8 @@ async function ensureLabelsForRepositories(
     reposProcessed: targetRepositories.length,
     reposFailed: 0,
     labelsCreated: 0,
+    labelsRenamed: 0,
+    labelsUpdated: 0,
     labelsSkipped: 0,
   };
 
@@ -192,9 +215,11 @@ async function ensureLabelsForRepositories(
     try {
       const result = await labelService.ensureRequiredLabels(owner, repo);
       summary.labelsCreated += result.created;
+      summary.labelsRenamed += result.renamed;
+      summary.labelsUpdated += result.updated;
       summary.labelsSkipped += result.skipped;
       context.log.info(
-        `[${eventName}] Ensured labels in ${fullName}: created=${result.created}, skipped=${result.skipped}`
+        `[${eventName}] Ensured labels in ${fullName}: created=${result.created}, renamed=${result.renamed}, updated=${result.updated}, skipped=${result.skipped}`
       );
     } catch (error) {
       summary.reposFailed += 1;
@@ -204,7 +229,7 @@ async function ensureLabelsForRepositories(
   }
 
   context.log.info(
-    `[${eventName}] Label bootstrap summary: reposProcessed=${summary.reposProcessed}, reposFailed=${summary.reposFailed}, labelsCreated=${summary.labelsCreated}, labelsSkipped=${summary.labelsSkipped}`
+    `[${eventName}] Label bootstrap summary: reposProcessed=${summary.reposProcessed}, reposFailed=${summary.reposFailed}, labelsCreated=${summary.labelsCreated}, labelsRenamed=${summary.labelsRenamed}, labelsUpdated=${summary.labelsUpdated}, labelsSkipped=${summary.labelsSkipped}`
   );
 
   if (errors.length > 0) {
@@ -214,6 +239,7 @@ async function ensureLabelsForRepositories(
 
 export function app(probotApp: Probot): void {
   probotApp.log.info("Queen bot initialized");
+  registerHandlerDispatcher(probotApp, { eventMap: handlerEventMap });
 
   /**
    * Bootstrap required labels when the app is first installed.
@@ -252,8 +278,12 @@ export function app(probotApp: Probot): void {
       );
       const issueWelcomeMessage =
         hasAutomaticDiscussion ? MESSAGES.ISSUE_WELCOME_VOTING : MESSAGES.ISSUE_WELCOME_MANUAL;
+      const installationId = context.payload.installation?.id;
 
-      await governance.startDiscussion({ owner, repo, issueNumber: number }, issueWelcomeMessage);
+      await governance.startDiscussion(
+        { owner, repo, issueNumber: number, installationId },
+        issueWelcomeMessage
+      );
     } catch (error) {
       context.log.error({ err: error, issue: number, repo: fullName }, "Failed to process issue");
       throw error;
@@ -265,19 +295,64 @@ export function app(probotApp: Probot): void {
     const { owner, repo, fullName } = getRepoContext(context.payload.repository);
     context.log.info(`Processing PR #${number} in ${fullName}`);
 
+    // Skip governance processing for PRs targeting non-default branches (stacked PRs)
+    if (!targetsDefaultBranch(context.payload.pull_request, context.payload.repository)) {
+      context.log.info(
+        { owner, repo, pr: number, base: context.payload.pull_request.base.ref },
+        "Skipping PR intake — targets non-default branch"
+      );
+      return;
+    }
+
     try {
       const appId = getAppId();
       const issues = createIssueOperations(context.octokit, { appId });
       const prs = createPROperations(context.octokit, { appId });
-
-      const [linkedIssues, repoConfig] = await Promise.all([
+      const [initialLinkedIssues, repoConfig] = await Promise.all([
         getLinkedIssues(context.octokit, owner, repo, number),
         loadRepositoryConfig(context.octokit, owner, repo),
       ]);
+      let linkedIssues = initialLinkedIssues;
+      const hasBodyClosingKeyword = linkedIssues.length === 0
+        ? hasSameRepoClosingKeywordRef(context.payload.pull_request.body, { owner, repo })
+        : false;
+      let didRetry = false;
+
+      if (linkedIssues.length === 0 && hasBodyClosingKeyword) {
+        context.log.info(
+          {
+            owner,
+            repo,
+            pr: number,
+            retryDelayMs: PR_OPENED_LINK_RETRY_DELAY_MS,
+          },
+          "PR opened with closing keywords but no linked issues; retrying lookup"
+        );
+        await delay(PR_OPENED_LINK_RETRY_DELAY_MS);
+        linkedIssues = await getLinkedIssues(context.octokit, owner, repo, number);
+        didRetry = true;
+      }
 
       // Unlinked PRs get a warning; linked PRs are handled by processImplementationIntake
       if (linkedIssues.length === 0) {
-        await issues.comment({ owner, repo, issueNumber: number }, MESSAGES.PR_NO_LINKED_ISSUE);
+        if (hasBodyClosingKeyword) {
+          context.log.warn(
+            { owner, repo, pr: number, resolutionSource: "heuristic-suppressed" },
+            "PR opened with closing keywords but linked issues remained empty after retry; suppressing warning"
+          );
+        } else {
+          await issues.comment({ owner, repo, issueNumber: number }, MESSAGES.PR_NO_LINKED_ISSUE);
+          context.log.info(
+            { owner, repo, pr: number, resolutionSource: "none" },
+            "PR opened with no linked issues and no closing keywords; posted warning"
+          );
+        }
+      } else {
+        const resolutionSource = didRetry ? "retry" : "initial";
+        context.log.info(
+          { owner, repo, pr: number, linkedIssueCount: linkedIssues.length, resolutionSource },
+          "Resolved linked issues for opened PR"
+        );
       }
 
       await processImplementationIntake({
@@ -308,6 +383,14 @@ export function app(probotApp: Probot): void {
     const { number } = context.payload.pull_request;
     const { owner, repo, fullName } = getRepoContext(context.payload.repository);
     context.log.info(`Processing PR update #${number} in ${fullName}`);
+
+    if (!targetsDefaultBranch(context.payload.pull_request, context.payload.repository)) {
+      context.log.info(
+        { owner, repo, pr: number, base: context.payload.pull_request.base.ref },
+        "Skipping PR update intake — targets non-default branch"
+      );
+      return;
+    }
 
     try {
       const appId = getAppId();
@@ -351,6 +434,10 @@ export function app(probotApp: Probot): void {
       return;
     }
 
+    if (!targetsDefaultBranch(context.payload.pull_request, context.payload.repository)) {
+      return;
+    }
+
     const { number } = context.payload.pull_request;
     const { owner, repo, fullName } = getRepoContext(context.payload.repository);
     context.log.info(`Processing PR edit #${number} in ${fullName}`);
@@ -386,23 +473,54 @@ export function app(probotApp: Probot): void {
   });
 
   /**
-   * Handle PR comments to activate pre-ready PRs.
+   * Handle comments on issues and PRs.
+   *
+   * Routes to either:
+   * 1. Command handler — @mention + /command on issues or PRs
+   * 2. PR intake processing — non-command comments on PRs
    */
   probotApp.on("issue_comment.created", async (context) => {
     const { issue, comment } = context.payload;
-    if (!issue.pull_request) {
-      return;
-    }
-
     const { owner, repo, fullName } = getRepoContext(context.payload.repository);
-    const prNumber = issue.number;
 
     try {
       const appId = getAppId();
+
+      // Skip bot's own comments
       if (comment.performed_via_github_app?.id === appId) {
         return;
       }
 
+      // Parse for @mention + /command before the PR-only filter,
+      // so commands work on both issues and PRs
+      const parsed = parseCommand(comment.body ?? "");
+      if (parsed) {
+        await executeCommand({
+          octokit: context.octokit as Parameters<typeof executeCommand>[0]["octokit"],
+          owner,
+          repo,
+          issueNumber: issue.number,
+          installationId: context.payload.installation?.id,
+          commentId: comment.id,
+          senderLogin: comment.user.login,
+          verb: parsed.verb,
+          freeText: parsed.freeText,
+          issueLabels: issue.labels?.map((l) =>
+            typeof l === "string" ? { name: l } : { name: l.name ?? "" },
+          ) ?? [],
+          isPullRequest: !!issue.pull_request,
+          appId,
+          log: context.log,
+        });
+        return;
+      }
+
+      // Non-command comments: only process PR comments for intake
+      if (!issue.pull_request) {
+        return;
+      }
+
+      const prNumber = issue.number;
       const issues = createIssueOperations(context.octokit, { appId });
       const prs = createPROperations(context.octokit, { appId });
       const [linkedIssues, repoConfig] = await Promise.all([
@@ -425,7 +543,7 @@ export function app(probotApp: Probot): void {
         intake: repoConfig.governance.pr.intake,
       });
     } catch (error) {
-      context.log.error({ err: error, pr: prNumber, repo: fullName }, "Failed to process PR comment");
+      context.log.error({ err: error, issue: issue.number, repo: fullName }, "Failed to process comment");
       throw error;
     }
   });
@@ -482,8 +600,8 @@ export function app(probotApp: Probot): void {
         for (const competingPR of competingPRs) {
           if (competingPR.number !== number) {
             const prRef = { owner, repo, prNumber: competingPR.number };
-            await prs.comment(prRef, PR_MESSAGES.prSuperseded(number));
             await prs.close(prRef);
+            await prs.comment(prRef, PR_MESSAGES.prSuperseded(number));
             await prs.removeGovernanceLabels(prRef);
             context.log.info(`Closed competing PR #${competingPR.number}`);
           }
@@ -585,7 +703,7 @@ export function app(probotApp: Probot): void {
    * Adding `implementation` may qualify the PR; removing it should strip `merge-ready`.
    */
   probotApp.on(["pull_request.labeled", "pull_request.unlabeled"], async (context) => {
-    if (context.payload.label?.name !== LABELS.IMPLEMENTATION) return;
+    if (!isLabelMatch(context.payload.label?.name, LABELS.IMPLEMENTATION)) return;
 
     const { number } = context.payload.pull_request;
     const { owner, repo, fullName } = getRepoContext(context.payload.repository);
@@ -771,20 +889,21 @@ export function app(probotApp: Probot): void {
    */
   probotApp.on("issues.labeled", async (context) => {
     const { label, issue, sender } = context.payload;
-    if (label?.name !== LABELS.VOTING) return;
+    if (!isLabelMatch(label?.name, LABELS.VOTING)) return;
     if (sender.type === "Bot") return;
 
     const { owner, repo, fullName } = getRepoContext(context.payload.repository);
     context.log.info(
-      `Manual phase:voting label on issue #${issue.number} in ${fullName} (by ${sender.login})`,
+      `Manual voting label on issue #${issue.number} in ${fullName} (by ${sender.login})`,
     );
 
     try {
       const appId = getAppId();
       const issues = createIssueOperations(context.octokit, { appId });
       const governance = createGovernanceService(issues);
+      const installationId = context.payload.installation?.id;
       const result = await governance.postVotingComment({
-        owner, repo, issueNumber: issue.number,
+        owner, repo, issueNumber: issue.number, installationId,
       });
       context.log.info(`Voting comment for issue #${issue.number}: ${result}`);
     } catch (error) {
@@ -795,6 +914,10 @@ export function app(probotApp: Probot): void {
       throw error;
     }
   });
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 const probot = createProbot();
@@ -823,6 +946,10 @@ export default function handler(req: IncomingMessage, res: ServerResponse): void
       JSON.stringify({
         status: validation.valid ? "ok" : "misconfigured",
         bot: "Queen",
+        checks: {
+          githubApp: { ready: validation.valid },
+          llm: getLLMReadiness(),
+        },
       })
     );
     return;

@@ -34,6 +34,7 @@ import type {
   VotingOutcome,
   LockReason,
 } from "./types.js";
+import { getIssuePriority } from "./priority.js";
 
 /**
  * Configuration for GovernanceService
@@ -212,25 +213,38 @@ export class GovernanceService {
    * Falls back to generic message on any failure.
    */
   private async generateVotingMessage(ref: IssueRef): Promise<string> {
+    // Fetch labels first to extract priority
+    let priority: "high" | "medium" | "low" | undefined;
+    try {
+      const labels = await this.issues.getIssueLabels(ref);
+      priority = getIssuePriority({ labels });
+    } catch {
+      this.logger.debug(`Failed to fetch labels for issue #${ref.issueNumber}, continuing without priority`);
+    }
+
     // Validate LLM is fully configured (including API key) BEFORE any GitHub calls.
     // createModelFromEnv() returns null if provider/model not set, or throws if API key missing.
     let modelResult: ReturnType<typeof createModelFromEnv>;
     try {
-      modelResult = createModelFromEnv();
+      modelResult = createModelFromEnv(
+        ref.installationId !== undefined
+          ? { installationId: ref.installationId }
+          : undefined
+      );
     } catch (error) {
       // API key missing - log at debug level since this is a config issue, not a runtime error
       const message = error instanceof Error ? error.message : String(error);
       this.logger.debug(
         `LLM not fully configured for issue #${ref.issueNumber}: ${message}`,
       );
-      return MESSAGES.VOTING_START;
+      return MESSAGES.votingStart(priority);
     }
 
     if (!modelResult) {
       this.logger.debug(
         `LLM not configured, using generic voting message for issue #${ref.issueNumber}`,
       );
-      return MESSAGES.VOTING_START;
+      return MESSAGES.votingStart(priority);
     }
 
     try {
@@ -248,6 +262,7 @@ export class GovernanceService {
           context.title,
           SIGNATURE,
           SIGNATURES.VOTING,
+          priority,
         );
       }
 
@@ -255,14 +270,14 @@ export class GovernanceService {
       this.logger.debug(
         `Using generic voting message for issue #${ref.issueNumber}: ${result.reason}`,
       );
-      return MESSAGES.VOTING_START;
+      return MESSAGES.votingStart(priority);
     } catch (error) {
       // Any unexpected error, fail open with generic message
       const message = error instanceof Error ? error.message : String(error);
       this.logger.warn(
         `Failed to generate voting summary for issue #${ref.issueNumber}: ${message}. Using generic message.`,
       );
-      return MESSAGES.VOTING_START;
+      return MESSAGES.votingStart(priority);
     }
   }
 
@@ -324,7 +339,7 @@ export class GovernanceService {
       Exclude<VotingOutcome, "skipped">,
       OutcomeTransitionConfig
     > = {
-      "phase:ready-to-implement": {
+      "ready-to-implement": {
         label: LABELS.READY_TO_IMPLEMENT,
         message: earlyPrefix + MESSAGES.votingEndReadyToImplement(validated.votes),
         close: false,
@@ -423,11 +438,11 @@ export class GovernanceService {
       Exclude<VotingOutcome, "skipped">,
       OutcomeTransitionConfig
     > = {
-      "phase:ready-to-implement": {
+      "ready-to-implement": {
         label: LABELS.READY_TO_IMPLEMENT,
         message: MESSAGES.votingEndInconclusiveResolved(
           validated.votes,
-          "phase:ready-to-implement",
+          "ready-to-implement",
         ),
         close: false,
         // Keep unlocked so the bot can post/update leaderboard comments on the issue.
@@ -539,7 +554,7 @@ export class GovernanceService {
     );
     await this.issues.comment(ref, errorComment);
 
-    // Add the needs:human label to make the issue visible in issue lists
+    // Add the hivemoot:needs-human label to make the issue visible in issue lists
     // Note: Label addition is best-effort - if the label doesn't exist in the repo,
     // we log a warning but don't fail the operation (the comment is the critical part)
     try {
@@ -644,7 +659,7 @@ export class GovernanceService {
       return "needs-more-discussion";
     }
     if (votes.thumbsUp > votes.thumbsDown) {
-      return "phase:ready-to-implement";
+      return "ready-to-implement";
     }
     if (votes.thumbsDown > votes.thumbsUp) {
       return "rejected";

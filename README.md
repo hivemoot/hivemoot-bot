@@ -187,8 +187,7 @@ The bot supports optional AI-powered discussion summarization via the [Vercel AI
 | `OPENAI_API_KEY` | - | API key (required when provider is `openai`) |
 | `GOOGLE_API_KEY` / `GOOGLE_GENERATIVE_AI_API_KEY` | - | API key (required when provider is `google`; `GOOGLE_API_KEY` takes priority) |
 | `MISTRAL_API_KEY` | - | API key (required when provider is `mistral`) |
-| `BYOK_REDIS_REST_URL` / `UPSTASH_REDIS_REST_URL` | - | Redis REST URL for installation-scoped BYOK envelopes (`hive:byok:<installationId>`) |
-| `BYOK_REDIS_REST_TOKEN` / `UPSTASH_REDIS_REST_TOKEN` | - | Redis REST bearer token for BYOK envelope lookup |
+| `HIVEMOOT_REDIS_URL` | - | Redis TCP URL for installation-scoped BYOK envelopes (e.g. `rediss://user:pass@host:6380`). Supports any ioredis-compatible Redis endpoint. |
 | `BYOK_MASTER_KEYS_JSON` | - | JSON map of key-version to base64 AES keys used to decrypt BYOK envelopes |
 | `BYOK_REDIS_KEY_PREFIX` | `hive:byok` | Optional Redis key prefix for BYOK envelope records |
 

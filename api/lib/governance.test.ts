@@ -47,6 +47,7 @@ describe("GovernanceService", () => {
       hasHumanHelpComment: vi.fn().mockResolvedValue(false),
       getLabelAddedTime: vi.fn().mockResolvedValue(new Date()),
       transition: vi.fn().mockResolvedValue(undefined),
+      pinComment: vi.fn().mockResolvedValue(undefined),
       // getIssueContext should NOT be called when LLM is not configured
       getIssueContext: vi.fn(),
       getIssueLabels: vi.fn().mockResolvedValue([]),
@@ -249,6 +250,20 @@ describe("GovernanceService", () => {
         });
       });
     });
+
+    it("should pin voting comment after transition", async () => {
+      // findVotingCommentId returns 12345 by default in beforeEach mock
+      await governance.transitionToVoting(testRef);
+
+      expect(mockIssues.findVotingCommentId).toHaveBeenCalledWith(testRef);
+      expect(mockIssues.pinComment).toHaveBeenCalledWith(testRef, 12345);
+    });
+
+    it("should not fail when pinning throws", async () => {
+      vi.mocked(mockIssues.pinComment).mockRejectedValueOnce(new Error("403 Forbidden"));
+
+      await expect(governance.transitionToVoting(testRef)).resolves.toBeUndefined();
+    });
   });
 
   describe("postVotingComment", () => {
@@ -273,6 +288,26 @@ describe("GovernanceService", () => {
 
       expect(result).toBe("skipped");
       expect(mockIssues.comment).not.toHaveBeenCalled();
+    });
+
+    it("should pin voting comment after posting", async () => {
+      vi.mocked(mockIssues.findVotingCommentId)
+        .mockResolvedValueOnce(null)   // initial check: no existing comment
+        .mockResolvedValueOnce(99999); // pin step: find newly posted comment
+
+      const result = await governance.postVotingComment(testRef);
+
+      expect(result).toBe("posted");
+      expect(mockIssues.pinComment).toHaveBeenCalledWith(testRef, 99999);
+    });
+
+    it("should not fail when pinning throws after posting", async () => {
+      vi.mocked(mockIssues.findVotingCommentId)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(99999);
+      vi.mocked(mockIssues.pinComment).mockRejectedValueOnce(new Error("403 Forbidden"));
+
+      await expect(governance.postVotingComment(testRef)).resolves.toBe("posted");
     });
   });
 
@@ -1085,6 +1120,7 @@ describe("GovernanceService voting cycle tracking", () => {
       hasHumanHelpComment: vi.fn().mockResolvedValue(false),
       getLabelAddedTime: vi.fn().mockResolvedValue(new Date()),
       transition: vi.fn().mockResolvedValue(undefined),
+      pinComment: vi.fn().mockResolvedValue(undefined),
       getIssueContext: vi.fn(),
     } as unknown as IssueOperations;
 
@@ -1142,6 +1178,7 @@ describe("createGovernanceService", () => {
     hasHumanHelpComment: vi.fn(),
     getLabelAddedTime: vi.fn(),
     transition: vi.fn(),
+    pinComment: vi.fn(),
     getIssueContext: vi.fn(),
   } as unknown as IssueOperations;
 

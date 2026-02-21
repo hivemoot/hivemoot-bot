@@ -243,6 +243,7 @@ describe("IssueOperations", () => {
           },
         }),
       },
+      request: vi.fn().mockResolvedValue({}),
     } as unknown as GitHubClient;
 
     issueOps = new IssueOperations(mockClient, TEST_APP_ID);
@@ -337,6 +338,17 @@ describe("IssueOperations", () => {
         issue_number: 42,
         body: "Hello world!",
       });
+    });
+  });
+
+  describe("pinComment", () => {
+    it("should call request with correct route and parameters", async () => {
+      await issueOps.pinComment(testRef, 99);
+
+      expect(mockClient.request).toHaveBeenCalledWith(
+        "PUT /repos/{owner}/{repo}/issues/comments/{comment_id}/pin",
+        { owner: "test-org", repo: "test-repo", comment_id: 99 }
+      );
     });
   });
 

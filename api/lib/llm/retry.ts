@@ -59,6 +59,15 @@ function toPositiveInteger(value: number, fallback: number): number {
   return Math.max(1, Math.ceil(value));
 }
 
+function toPositiveIntegerOrUndefined(
+  value: number | undefined,
+  fallback: number
+): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isFinite(value)) return fallback;
+  return Math.max(1, Math.ceil(value));
+}
+
 // ───────────────────────────────────────────────────────────────────────────────
 // Error Detection
 // ───────────────────────────────────────────────────────────────────────────────
@@ -136,7 +145,10 @@ export async function withLLMRetry<T>(
     raw.defaultRetryDelayMs,
     LLM_RETRY_DEFAULTS.defaultRetryDelayMs
   );
-  const maxTotalElapsedMs = raw.maxTotalElapsedMs;
+  const maxTotalElapsedMs = toPositiveIntegerOrUndefined(
+    raw.maxTotalElapsedMs,
+    LLM_RETRY_DEFAULTS.maxTotalElapsedMs!
+  );
 
   const startTime = Date.now();
   let lastError: unknown;

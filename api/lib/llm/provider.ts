@@ -233,7 +233,12 @@ export function createModel(config: LLMConfig): LanguageModelV1 {
 
 /**
  * Create a model from environment configuration.
- * Returns null if LLM is not configured.
+ * Returns null if LLM is not configured or if model creation fails.
+ *
+ * Fails safely on all errors — including missing API keys and future BYOK
+ * resolution failures (Redis unreachable, decryption error, corrupt envelope).
+ * Callers receive null and degrade to no-LLM behavior rather than propagating
+ * exceptions into the webhook handler.
  *
  * The optional installation context is reserved for BYOK resolution wiring.
  * Current behavior still uses shared environment variables only.
@@ -246,8 +251,14 @@ export function createModelFromEnv(
     return null;
   }
 
-  return {
-    model: createModel(config),
-    config,
-  };
+  try {
+    return {
+      model: createModel(config),
+      config,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[llm] createModelFromEnv: model creation failed, degrading to no-LLM: ${message}`);
+    return null;
+  }
 }

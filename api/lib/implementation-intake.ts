@@ -9,6 +9,7 @@
 import {
   LABELS,
   PR_MESSAGES,
+  isLabelMatch,
 } from "../config.js";
 import { NOTIFICATION_TYPES } from "./bot-comments.js";
 import {
@@ -25,6 +26,7 @@ import type { LinkedIssue, PRWithApprovals, PullRequest } from "./types.js";
 import { filterByLabel, hasLabel } from "./types.js";
 import { getAppId } from "./env-validation.js";
 import { logger } from "./logger.js";
+import { getIssuePriority } from "./priority.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -92,7 +94,7 @@ async function getImplementationPRsByIssue(params: {
 
   if (ensurePRNumber !== undefined && !candidateNumbers.has(ensurePRNumber)) {
     const labels = await prs.getLabels({ owner, repo, prNumber: ensurePRNumber });
-    if (labels.includes(LABELS.IMPLEMENTATION)) {
+    if (labels.some(l => isLabelMatch(l, LABELS.IMPLEMENTATION))) {
       candidateNumbers.add(ensurePRNumber);
       logger.debug(`ensurePR #${ensurePRNumber}: added via direct label check (not yet indexed)`);
     }
@@ -281,7 +283,7 @@ export async function processImplementationIntake(params: {
   ]);
 
   // Avoid re-processing PRs already accepted as implementations
-  if (prLabels.includes(LABELS.IMPLEMENTATION)) {
+  if (prLabels.some(l => isLabelMatch(l, LABELS.IMPLEMENTATION))) {
     return;
   }
 
@@ -390,7 +392,10 @@ export async function processImplementationIntake(params: {
         linkedIssue.number
       );
       if (!alreadyWelcomed) {
-        await prs.comment(prRef, PR_MESSAGES.IMPLEMENTATION_WELCOME(linkedIssue.number));
+        // Extract labels from LinkedIssue structure to match IssueWithLabels interface
+        const labels = linkedIssue.labels.nodes.filter((l): l is { name: string } => l !== null);
+        const priority = getIssuePriority({ labels });
+        await prs.comment(prRef, PR_MESSAGES.IMPLEMENTATION_WELCOME(linkedIssue.number, priority));
         welcomed = true;
       }
     }

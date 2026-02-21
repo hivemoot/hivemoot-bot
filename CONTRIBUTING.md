@@ -4,7 +4,7 @@
 
 - GitHub CLI authenticated (`gh auth status`)
 - GitHub CLI configured for git operations (`gh auth setup-git`)
-- Node.js 20.x and npm
+- Node.js 22.x and npm
 - Local clone of `hivemoot/hivemoot-bot`
 
 To align your environment with the repo requirement:
@@ -13,46 +13,27 @@ To align your environment with the repo requirement:
 nvm use
 ```
 
-This repository enforces `engines.node` during dependency install via `.npmrc` (`engine-strict=true`), so `npm install` fails fast if Node is not `20.x`.
+This repository enforces `engines.node` during dependency install via `.npmrc` (`engine-strict=true`), so `npm install` fails fast if Node is not `22.x`.
 
 ## When to Open a PR
 
-**Do not start implementation work until the target issue has the `phase:ready-to-implement` label.** Issues go through a governance lifecycle (discussion → voting → outcome) before implementation begins. Opening a PR against an issue that hasn't reached `phase:ready-to-implement` will trigger a bot warning, and the PR will not be tracked on the implementation leaderboard.
+**Do not start implementation work until the target issue has the `hivemoot:ready-to-implement` label.** Issues go through a governance lifecycle (discussion → voting → outcome) before implementation begins. Opening a PR against an issue that hasn't reached `hivemoot:ready-to-implement` will trigger a bot warning, and the PR will not be tracked on the implementation leaderboard.
 
 If you want to contribute:
 
-1. Find an issue labeled `phase:ready-to-implement`.
+1. Find an issue labeled `hivemoot:ready-to-implement`.
 2. Check if there are already open PRs for that issue. Prefer reviewing and improving an existing PR over opening a new competing one, unless it is stale or no longer relevant.
 3. Confirm the implementation slot limit hasn't been reached (default: 3 competing PRs per issue).
 4. Include a closing keyword in the PR body: `Fixes #N`, `Closes #N`, or `Resolves #N`.
 
 ## Contribution Workflow
 
-All contributions go through branches and pull requests. Direct pushes to `main` are not allowed.
-
-### Branch and PR (upstream collaborators)
-
-```bash
-git checkout -b your-branch-name
-# make changes
-npm test
-npm run typecheck
-git add <specific-files>
-git commit -m "short subject (under 72 chars)
-
-Explain why this change was made. Focus on the motivation
-and any non-obvious decisions."
-git push -u origin your-branch-name
-gh pr create --base main --fill
-```
-
-### Fork and PR (external contributors)
-
-If you don't have push access to the upstream repo, fork it first:
+This repo uses a fork-based PR workflow. Fork the repo, make changes on a branch in your fork, and open a pull request against `main`.
 
 ```bash
 gh repo fork hivemoot/hivemoot-bot --clone
 cd hivemoot-bot
+nvm use
 git checkout -b your-branch-name
 # make changes
 npm test
@@ -68,6 +49,10 @@ gh pr create \
   --head YOUR_GITHUB_LOGIN:your-branch-name \
   --fill
 ```
+
+Maintainers make the final decision to merge. Your job is to keep changes clean, focused, and high quality — once a PR is approved and CI is green, it's ready to land.
+
+If you hit a blocker, note it once on the thread and move on to other work.
 
 ### Commit Message Format
 

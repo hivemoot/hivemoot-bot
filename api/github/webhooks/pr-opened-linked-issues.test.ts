@@ -70,17 +70,19 @@ function createWebhookHarness() {
   return { handlers };
 }
 
-function createContext(body: string | null) {
+function createContext(body: string | null, options?: { baseRef?: string; defaultBranch?: string }) {
   return {
     payload: {
       pull_request: {
         number: 49,
         body,
+        base: { ref: options?.baseRef ?? "main" },
       },
       repository: {
         owner: { login: "hivemoot" },
         name: "hivemoot-bot",
         full_name: "hivemoot/hivemoot-bot",
+        default_branch: options?.defaultBranch ?? "main",
       },
     },
     octokit: { graphql: vi.fn() },
@@ -305,5 +307,149 @@ describe("pull_request.opened linked issue resolution", () => {
     }
 
     vi.useRealTimers();
+  });
+
+  it("skips intake for PRs targeting non-default branch", async () => {
+    const { handlers } = createWebhookHarness();
+    const handler = handlers.get("pull_request.opened");
+    expect(handler).toBeDefined();
+
+    const context = createContext("Fixes #21", {
+      baseRef: "feat/commands",
+      defaultBranch: "main",
+    });
+
+    await handler!(context);
+
+    expect(mocks.getLinkedIssues).not.toHaveBeenCalled();
+    expect(mocks.issuesOps.comment).not.toHaveBeenCalled();
+    expect(mocks.processImplementationIntake).not.toHaveBeenCalled();
+    expect(context.log.info).toHaveBeenCalledWith(
+      expect.objectContaining({ pr: 49, base: "feat/commands" }),
+      expect.stringContaining("non-default branch")
+    );
+  });
+
+  it("processes intake normally when PR targets default branch", async () => {
+    const { handlers } = createWebhookHarness();
+    const handler = handlers.get("pull_request.opened");
+    expect(handler).toBeDefined();
+
+    mocks.getLinkedIssues.mockResolvedValue([]);
+
+    const context = createContext("Related to #21", {
+      baseRef: "main",
+      defaultBranch: "main",
+    });
+
+    await handler!(context);
+
+    expect(mocks.getLinkedIssues).toHaveBeenCalledTimes(1);
+    expect(mocks.processImplementationIntake).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("pull_request.synchronize non-default branch skip", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.createIssueOperations.mockReturnValue(mocks.issuesOps);
+    mocks.createPROperations.mockReturnValue(mocks.prOps);
+    mocks.loadRepositoryConfig.mockResolvedValue({
+      governance: {
+        pr: {
+          maxPRsPerIssue: 3,
+          trustedReviewers: [],
+          intake: {},
+        },
+      },
+    });
+  });
+
+  it("skips intake for synchronize on non-default branch", async () => {
+    const { handlers } = createWebhookHarness();
+    const handler = handlers.get("pull_request.synchronize");
+    expect(handler).toBeDefined();
+
+    const context = {
+      payload: {
+        pull_request: {
+          number: 50,
+          base: { ref: "feat/commands" },
+        },
+        repository: {
+          owner: { login: "hivemoot" },
+          name: "hivemoot-bot",
+          full_name: "hivemoot/hivemoot-bot",
+          default_branch: "main",
+        },
+      },
+      octokit: { graphql: vi.fn() },
+      log: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+    };
+
+    await handler!(context);
+
+    expect(mocks.getLinkedIssues).not.toHaveBeenCalled();
+    expect(mocks.processImplementationIntake).not.toHaveBeenCalled();
+    expect(context.log.info).toHaveBeenCalledWith(
+      expect.objectContaining({ pr: 50, base: "feat/commands" }),
+      expect.stringContaining("non-default branch")
+    );
+  });
+});
+
+describe("pull_request.edited non-default branch skip", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.createIssueOperations.mockReturnValue(mocks.issuesOps);
+    mocks.createPROperations.mockReturnValue(mocks.prOps);
+    mocks.loadRepositoryConfig.mockResolvedValue({
+      governance: {
+        pr: {
+          maxPRsPerIssue: 3,
+          trustedReviewers: [],
+          intake: {},
+        },
+      },
+    });
+  });
+
+  it("skips intake for edited PR on non-default branch", async () => {
+    const { handlers } = createWebhookHarness();
+    const handler = handlers.get("pull_request.edited");
+    expect(handler).toBeDefined();
+
+    const context = {
+      payload: {
+        changes: { body: { from: "old body" } },
+        pull_request: {
+          number: 51,
+          body: "Fixes #21",
+          base: { ref: "feat/commands" },
+          updated_at: "2026-02-14T12:00:00Z",
+        },
+        repository: {
+          owner: { login: "hivemoot" },
+          name: "hivemoot-bot",
+          full_name: "hivemoot/hivemoot-bot",
+          default_branch: "main",
+        },
+      },
+      octokit: { graphql: vi.fn() },
+      log: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+    };
+
+    await handler!(context);
+
+    expect(mocks.getLinkedIssues).not.toHaveBeenCalled();
+    expect(mocks.processImplementationIntake).not.toHaveBeenCalled();
   });
 });

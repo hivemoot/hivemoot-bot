@@ -18,14 +18,14 @@ describe("types utilities", () => {
 
   describe("hasLabel", () => {
     it("should return true when issue has the label", () => {
-      const issue = createLinkedIssue(1, ["bug", "phase:discussion"]);
+      const issue = createLinkedIssue(1, ["bug", "hivemoot:discussion"]);
       expect(hasLabel(issue, "bug")).toBe(true);
-      expect(hasLabel(issue, "phase:discussion")).toBe(true);
+      expect(hasLabel(issue, "hivemoot:discussion")).toBe(true);
     });
 
     it("should return false when issue does not have the label", () => {
       const issue = createLinkedIssue(1, ["bug", "enhancement"]);
-      expect(hasLabel(issue, "phase:discussion")).toBe(false);
+      expect(hasLabel(issue, "hivemoot:discussion")).toBe(false);
     });
 
     it("should return false for empty labels array", () => {
@@ -40,17 +40,25 @@ describe("types utilities", () => {
     });
 
     it("should handle labels with special characters", () => {
-      const issue = createLinkedIssue(1, ["phase:ready-to-implement"]);
-      expect(hasLabel(issue, "phase:ready-to-implement")).toBe(true);
+      const issue = createLinkedIssue(1, ["hivemoot:ready-to-implement"]);
+      expect(hasLabel(issue, "hivemoot:ready-to-implement")).toBe(true);
+    });
+
+    it("should ignore null label nodes", () => {
+      const issue = createLinkedIssue(1, ["bug"]);
+      issue.labels.nodes.unshift(null);
+
+      expect(hasLabel(issue, "bug")).toBe(true);
+      expect(hasLabel(issue, "phase:discussion")).toBe(false);
     });
   });
 
   describe("filterByLabel", () => {
     it("should return issues with the specified label", () => {
       const issues = [
-        createLinkedIssue(1, ["bug", "phase:discussion"]),
+        createLinkedIssue(1, ["bug", "hivemoot:discussion"]),
         createLinkedIssue(2, ["enhancement"]),
-        createLinkedIssue(3, ["bug", "phase:voting"]),
+        createLinkedIssue(3, ["bug", "hivemoot:voting"]),
       ];
 
       const bugIssues = filterByLabel(issues, "bug");
@@ -64,7 +72,7 @@ describe("types utilities", () => {
         createLinkedIssue(2, ["enhancement"]),
       ];
 
-      const result = filterByLabel(issues, "phase:discussion");
+      const result = filterByLabel(issues, "hivemoot:discussion");
       expect(result).toEqual([]);
     });
 
@@ -75,12 +83,12 @@ describe("types utilities", () => {
 
     it("should filter phase:ready-to-implement issues correctly", () => {
       const issues = [
-        createLinkedIssue(1, ["phase:ready-to-implement"]),
-        createLinkedIssue(2, ["phase:discussion"]),
-        createLinkedIssue(3, ["phase:ready-to-implement", "priority:high"]),
+        createLinkedIssue(1, ["hivemoot:ready-to-implement"]),
+        createLinkedIssue(2, ["hivemoot:discussion"]),
+        createLinkedIssue(3, ["hivemoot:ready-to-implement", "priority:high"]),
       ];
 
-      const readyIssues = filterByLabel(issues, "phase:ready-to-implement");
+      const readyIssues = filterByLabel(issues, "hivemoot:ready-to-implement");
       expect(readyIssues).toHaveLength(2);
       expect(readyIssues.map((i) => i.number)).toEqual([1, 3]);
     });

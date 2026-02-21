@@ -252,7 +252,7 @@ describe("daily-standup processRepository", () => {
     );
     expect(mockCollectStandupData).toHaveBeenCalled();
     expect(mockHasAnyContent).toHaveBeenCalledWith(standupData);
-    expect(mockGenerateStandupLLMContent).toHaveBeenCalledWith(standupData);
+    expect(mockGenerateStandupLLMContent).toHaveBeenCalledWith(standupData, { installationId: undefined });
     expect(mockFormatStandupComment).toHaveBeenCalledWith(standupData, null);
     expect(mockAddStandupComment).toHaveBeenCalledWith(
       fakeOctokit,
@@ -266,6 +266,42 @@ describe("daily-standup processRepository", () => {
     expect(logger.info).toHaveBeenCalledWith(
       expect.stringContaining("Day 251")
     );
+  });
+
+  it("should forward installationId to generateStandupLLMContent when installation context is provided", async () => {
+    mockLoadRepositoryConfig.mockResolvedValue(makeStandupEnabledConfig());
+    mockGetRepoDiscussionInfo.mockResolvedValue({
+      repoId: "R_123",
+      repoCreatedAt: "2024-06-01T00:00:00Z",
+      hasDiscussions: true,
+      categories: [{ id: "DC_2", name: "Colony Reports" }],
+    });
+    mockFindOrCreateColonyJournal.mockResolvedValue({
+      discussionId: "D_1",
+      number: 42,
+    });
+    mockGetLastStandupDate.mockResolvedValue(null);
+    mockComputeDayNumber.mockReturnValue(251);
+
+    const standupData = {
+      discussionPhase: [{ number: 1, title: "Test" }],
+      repoFullName: "hivemoot/colony",
+      reportDate: "2026-02-06",
+      dayNumber: 251,
+    };
+    mockCollectStandupData.mockResolvedValue(standupData as any);
+    mockHasAnyContent.mockReturnValue(true);
+    mockGenerateStandupLLMContent.mockResolvedValue(null);
+    mockFormatStandupComment.mockReturnValue("# Colony Report — Day 251\n...");
+    mockAddStandupComment.mockResolvedValue({
+      commentId: "C_1",
+      url: "https://github.com/hivemoot/colony/discussions/42#comment-1",
+    });
+
+    const installation = { installationId: 9876, installationLogin: "hivemoot-org" };
+    await processRepository(fakeOctokit, makeRepo(), appId, installation);
+
+    expect(mockGenerateStandupLLMContent).toHaveBeenCalledWith(standupData, { installationId: 9876 });
   });
 
   it("should skip LLM generation when hasAnyContent returns false", async () => {

@@ -3,16 +3,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { resolveInstallationBYOKConfig } from "./byok.js";
 
-const { mockGet } = vi.hoisted(() => ({
+const { mockGet, mockState } = vi.hoisted(() => ({
   mockGet: vi.fn(),
+  mockState: {
+    status: "ready" as string,
+    errorHandler: null as ((err: Error) => void) | null,
+    disconnected: false,
+  },
 }));
 
 vi.mock("ioredis", () => {
   const MockRedis = class {
     get = mockGet;
-    on() { return this; }
-    disconnect() {}
-    status = "ready";
+    on(event: string, handler: (...args: unknown[]) => void) {
+      if (event === "error") mockState.errorHandler = handler as (err: Error) => void;
+      return this;
+    }
+    disconnect() { mockState.disconnected = true; }
+    get status() { return mockState.status; }
   };
   return { default: MockRedis, Redis: MockRedis };
 });
@@ -100,6 +108,9 @@ describe("resolveInstallationBYOKConfig", () => {
   beforeEach(() => {
     process.env = { ...originalEnv };
     mockGet.mockReset();
+    mockState.status = "ready";
+    mockState.errorHandler = null;
+    mockState.disconnected = false;
   });
 
   afterEach(() => {
@@ -149,6 +160,31 @@ describe("resolveInstallationBYOKConfig", () => {
     await expect(resolveInstallationBYOKConfig(2)).rejects.toThrow(
       "BYOK Redis lookup failed for installation 2: ECONNRESET",
     );
+  });
+
+  it("recreates client when previous client enters 'end' state", async () => {
+    setRedisEnv();
+    stubRedisGet(null);
+    await resolveInstallationBYOKConfig(1);
+    mockState.status = "end";
+    stubRedisGet(null);
+
+    await expect(resolveInstallationBYOKConfig(2)).resolves.toBeNull();
+    expect(mockState.disconnected).toBe(true);
+  });
+
+  it("handles Redis client error events without crashing", async () => {
+    setRedisEnv();
+    // Force client creation so the error handler is registered
+    mockState.status = "end";
+    stubRedisGet(null);
+    await resolveInstallationBYOKConfig(1);
+
+    expect(mockState.errorHandler).toBeInstanceOf(Function);
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    mockState.errorHandler!(new Error("ECONNRESET"));
+    expect(spy).toHaveBeenCalledWith("[byok] Redis client error: ECONNRESET");
+    spy.mockRestore();
   });
 
   it("returns null for revoked BYOK records", async () => {

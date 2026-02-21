@@ -123,6 +123,31 @@ describe("generateStandupLLMContent", () => {
     expect(repaired).toBe("{\"narrative\":\"Test\"}");
   });
 
+  it("logs BYOK runtime errors at error level and degrades gracefully", async () => {
+    const { createModelFromEnv } = await import("./llm/provider.js");
+    const { generateStandupLLMContent } = await import("./standup.js");
+
+    vi.mocked(createModelFromEnv).mockRejectedValue(
+      new Error("BYOK Redis lookup failed for installation 42: ECONNRESET"),
+    );
+
+    const data: StandupData = {
+      discussionPhase: [],
+      votingPhase: [],
+      extendedVoting: [],
+      readyToImplement: [],
+      implementationPRs: [],
+      repoFullName: "hivemoot/colony",
+      reportDate: "2026-02-06",
+      dayNumber: 42,
+    };
+
+    const result = await generateStandupLLMContent(data, { installationId: 42 });
+
+    expect(result).toBeNull();
+    expect(createModelFromEnv).toHaveBeenCalledWith({ installationId: 42 });
+  });
+
   it("forwards installation context to model resolution", async () => {
     const { generateObject } = await import("ai");
     const { createModelFromEnv } = await import("./llm/provider.js");

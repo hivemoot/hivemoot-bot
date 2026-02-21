@@ -131,6 +131,21 @@ describe("GovernanceService", () => {
       });
     });
 
+    it("should fall back to generic message and log warn when BYOK resolution fails", async () => {
+      vi.mocked(createModelFromEnv).mockRejectedValue(
+        new Error("BYOK Redis lookup failed for installation 42: ECONNRESET"),
+      );
+
+      await governance.transitionToVoting(testRef);
+
+      expect(mockIssues.getIssueContext).not.toHaveBeenCalled();
+      expect(mockIssues.transition).toHaveBeenCalledWith(testRef, {
+        removeLabel: LABELS.DISCUSSION,
+        addLabel: LABELS.VOTING,
+        comment: expect.stringContaining(MESSAGES.votingStart()),
+      });
+    });
+
     describe("with LLM configured", () => {
       const mockSummary = {
         proposal: "Test proposal",

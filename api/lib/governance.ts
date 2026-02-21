@@ -246,9 +246,9 @@ export class GovernanceService {
 
     // Validate LLM is fully configured (including API key) BEFORE any GitHub calls.
     // createModelFromEnv() returns null if provider/model not set, or throws if API key missing.
-    let modelResult: ReturnType<typeof createModelFromEnv>;
+    let modelResult: Awaited<ReturnType<typeof createModelFromEnv>>;
     try {
-      modelResult = createModelFromEnv(
+      modelResult = await createModelFromEnv(
         ref.installationId !== undefined
           ? { installationId: ref.installationId }
           : undefined

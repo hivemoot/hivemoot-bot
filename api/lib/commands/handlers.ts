@@ -141,6 +141,8 @@ type CommandFailureClassification = "permission" | "validation" | "transient" | 
 interface AuthorizationResult {
   authorized: boolean;
   permission: string | null;
+  /** Set when the auth check itself failed due to a transient error. */
+  transientError?: unknown;
 }
 
 interface CommandLogContext {
@@ -157,6 +159,10 @@ interface CommandLogContext {
 /**
  * Check if the sender has sufficient repo permissions to run commands.
  * Returns authorization status and the sender's resolved permission (when known).
+ *
+ * Transient errors (ECONNRESET, 429, 5xx) are surfaced via `transientError`
+ * so executeCommand() can post user-visible feedback instead of silently
+ * denying the command.
  */
 async function isAuthorized(ctx: CommandContext): Promise<AuthorizationResult> {
   try {
@@ -170,14 +176,59 @@ async function isAuthorized(ctx: CommandContext): Promise<AuthorizationResult> {
       permission: data.permission,
     };
   } catch (error) {
-    // If we can't check permissions (e.g., user is not a collaborator), deny.
-    // Log so persistent failures (expired token, rate limit) are visible.
+    // Surface transient errors so executeCommand() can post feedback
+    // instead of silently dropping the command.
+    if (isTransientError(error)) {
+      ctx.log.error(
+        { err: error, user: ctx.senderLogin, issue: ctx.issueNumber },
+        `Permission check hit transient error for ${ctx.senderLogin} — surfacing to user`,
+      );
+      return { authorized: false, permission: null, transientError: error };
+    }
+
+    // Non-transient failures (e.g., 404 = user is not a collaborator) → deny.
     ctx.log.error(
       { err: error, user: ctx.senderLogin, issue: ctx.issueNumber },
       `Permission check failed for ${ctx.senderLogin} — denying command`,
     );
     return { authorized: false, permission: null };
   }
+}
+
+/** Network-level error codes that indicate a transient failure. */
+const TRANSIENT_NETWORK_CODES = new Set([
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "EPIPE",
+]);
+
+/**
+ * Determine whether an error is transient (network-level or server-side)
+ * and therefore worth surfacing rather than treating as an auth denial.
+ */
+function isTransientError(error: unknown): boolean {
+  // Network-level errors: ECONNRESET, ETIMEDOUT, ECONNREFUSED, etc.
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    typeof (error as { code: unknown }).code === "string"
+  ) {
+    if (TRANSIENT_NETWORK_CODES.has((error as { code: string }).code)) {
+      return true;
+    }
+  }
+
+  // HTTP-level: 429 (rate limit) or 5xx (server error)
+  const status = getErrorStatus(error);
+  if (status === 429 || (status !== null && status >= 500)) {
+    return true;
+  }
+
+  return false;
 }
 
 function getErrorStatus(error: unknown): number | null {
@@ -189,15 +240,17 @@ function getErrorStatus(error: unknown): number | null {
 }
 
 function classifyCommandFailure(error: unknown): CommandFailureClassification {
+  // Delegate to isTransientError() so network-level codes (ECONNRESET, etc.)
+  // are classified as "transient" — not just HTTP 429/5xx.
+  if (isTransientError(error)) {
+    return "transient";
+  }
   const status = getErrorStatus(error);
   if (status === 401 || status === 403) {
     return "permission";
   }
   if (status === 400 || status === 404 || status === 409 || status === 422) {
     return "validation";
-  }
-  if (status === 429 || (status !== null && status >= 500)) {
-    return "transient";
   }
   return "unexpected";
 }
@@ -609,7 +662,13 @@ async function handleGather(ctx: CommandContext): Promise<CommandResult> {
   try {
     const context = await issues.getIssueContext(ref);
     const generator = new BlueprintGenerator();
-    const result = await generator.generate(context);
+    const result = await generator.generate(
+      context,
+      undefined,
+      ctx.installationId !== undefined
+        ? { installationId: ctx.installationId }
+        : undefined
+    );
 
     if (result.success) {
       blueprintContent = buildBlueprintContent(result.plan, ctx.senderLogin);
@@ -619,10 +678,10 @@ async function handleGather(ctx: CommandContext): Promise<CommandResult> {
     }
   } catch (error) {
     if (existingAlignmentCommentId) {
-      const reason = error instanceof Error ? error.message : String(error);
+      ctx.log.error({ err: error, issue: ctx.issueNumber }, "Blueprint refresh failed in handleGather");
       await reply(
         ctx,
-        `I couldn't refresh the blueprint just now (${reason}). Keeping the previous blueprint comment unchanged.\n\nPlease retry \`/gather\` shortly.`,
+        `I couldn't refresh the blueprint just now. Please retry \`/gather\` shortly, or contact your administrator if the problem persists.`,
       );
       return { status: "executed", message: "Blueprint refresh failed; previous comment preserved." };
     }
@@ -710,7 +769,13 @@ async function handlePreflight(ctx: CommandContext): Promise<CommandResult> {
           groupEnd: noop,
         },
       });
-      const result = await generator.generate(prContext);
+      const result = await generator.generate(
+        prContext,
+        undefined,
+        ctx.installationId !== undefined
+          ? { installationId: ctx.installationId }
+          : undefined
+      );
 
       if (result.success) {
         const formatted = formatCommitMessage(result.message, ctx.issueNumber);
@@ -830,7 +895,13 @@ async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
         groupEnd: noop,
       },
     });
-    const result = await generator.generate(prContext);
+    const result = await generator.generate(
+      prContext,
+      undefined,
+      ctx.installationId !== undefined
+        ? { installationId: ctx.installationId }
+        : undefined
+    );
 
     if (!result.success) {
       body += "### Commit Message\n\n";
@@ -1448,6 +1519,17 @@ export async function executeCommand(ctx: CommandContext): Promise<CommandResult
   // Authorization: only maintainers can use commands
   const authorization = await isAuthorized(ctx);
   if (!authorization.authorized) {
+    // Transient auth failures get user-visible feedback so the command
+    // isn't silently swallowed by ECONNRESET or rate-limit errors.
+    if (authorization.transientError) {
+      const classification = classifyCommandFailure(authorization.transientError);
+      const failureCode = buildFailureCode(ctx.verb, classification);
+      const correlationId = buildCommandCorrelationId(ctx);
+      await react(ctx, "confused");
+      await reply(ctx, buildCommandFailureReply(ctx, failureCode, correlationId, classification));
+      return { status: "rejected", reason: `Auth check failed: ${failureCode}` };
+    }
+
     // Per issue #81: "for everyone else this should be ignored"
     ctx.log.info(
       `Command /${ctx.verb} from unauthorized user ${ctx.senderLogin} on #${ctx.issueNumber} — ignoring`,

@@ -200,4 +200,32 @@ describe("generateStandupLLMContent", () => {
       "LLM standup generation failed: missing API key"
     );
   });
+
+  it("logs BYOK runtime errors at error level and degrades gracefully", async () => {
+    const { createModelFromEnv } = await import("./llm/provider.js");
+    const { logger } = await import("./logger.js");
+    const { generateStandupLLMContent } = await import("./standup.js");
+
+    vi.mocked(createModelFromEnv).mockRejectedValue(
+      new Error("BYOK Redis lookup failed with HTTP 503"),
+    );
+
+    const data: StandupData = {
+      discussionPhase: [],
+      votingPhase: [],
+      extendedVoting: [],
+      readyToImplement: [],
+      implementationPRs: [],
+      repoFullName: "hivemoot/colony",
+      reportDate: "2026-02-06",
+      dayNumber: 42,
+    };
+
+    const result = await generateStandupLLMContent(data, { installationId: 42 });
+
+    expect(result).toBeNull();
+    expect(logger.error).toHaveBeenCalledWith(
+      "LLM standup generation failed: BYOK Redis lookup failed with HTTP 503"
+    );
+  });
 });

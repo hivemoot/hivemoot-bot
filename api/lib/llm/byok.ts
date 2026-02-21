@@ -217,8 +217,8 @@ function decryptEnvelope(
       decipher.update(ciphertext),
       decipher.final(),
     ]).toString("utf8");
-  } catch {
-    throw new Error("BYOK key material could not be decrypted");
+  } catch (error) {
+    throw new Error("BYOK key material could not be decrypted", { cause: error });
   }
 
   let payload: unknown;
@@ -257,7 +257,7 @@ async function fetchEnvelope(
       method: "GET",
       headers: {
         Authorization: `Bearer ${runtimeConfig.token}`,
-        "Content-Type": "application/json",
+        Accept: "application/json",
       },
       signal: AbortSignal.timeout(REDIS_FETCH_TIMEOUT_MS),
     });
@@ -272,7 +272,12 @@ async function fetchEnvelope(
     throw new Error(`BYOK Redis lookup failed with HTTP ${response.status}`);
   }
 
-  const body = (await response.json()) as { result?: unknown; error?: unknown };
+  let body: { result?: unknown; error?: unknown };
+  try {
+    body = (await response.json()) as typeof body;
+  } catch {
+    throw new Error(`BYOK Redis REST response is not valid JSON (HTTP ${response.status})`);
+  }
   if (typeof body.error === "string" && body.error.length > 0) {
     throw new Error(`BYOK Redis returned an error for installation ${installationId}`);
   }

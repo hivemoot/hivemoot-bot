@@ -254,10 +254,12 @@ export class GovernanceService {
           : undefined
       );
     } catch (error) {
-      // API key missing - log at debug level since this is a config issue, not a runtime error
+      // BYOK runtime failures (Redis outage, decryption errors) are operator-actionable —
+      // log at warn. Config-missing errors are expected noise — log at debug.
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.debug(
-        `LLM not fully configured for issue #${ref.issueNumber}: ${message}`,
+      const isByokRuntime = message.startsWith("BYOK ");
+      this.logger[isByokRuntime ? "warn" : "debug"](
+        `LLM model resolution failed for issue #${ref.issueNumber}: ${message}`,
       );
       return MESSAGES.votingStart(priority);
     }

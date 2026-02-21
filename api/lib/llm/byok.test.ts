@@ -108,8 +108,16 @@ describe("resolveInstallationBYOKConfig", () => {
     await expect(resolveInstallationBYOKConfig(1)).resolves.toBeNull();
   });
 
-  it("throws when only one Redis runtime variable is set", async () => {
+  it("throws when only URL is set without token", async () => {
     setRedisEnv({ BYOK_REDIS_REST_TOKEN: undefined });
+
+    await expect(resolveInstallationBYOKConfig(1)).rejects.toThrow(
+      "BYOK Redis runtime is misconfigured",
+    );
+  });
+
+  it("throws when only token is set without URL", async () => {
+    setRedisEnv({ BYOK_REDIS_REST_URL: undefined });
 
     await expect(resolveInstallationBYOKConfig(1)).rejects.toThrow(
       "BYOK Redis runtime is misconfigured",
@@ -169,6 +177,63 @@ describe("resolveInstallationBYOKConfig", () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(networkError) as unknown as typeof fetch);
 
     await expect(resolveInstallationBYOKConfig(2)).rejects.toThrow("Failed to fetch");
+  });
+
+  it("falls back to UPSTASH_* env vars when BYOK_* vars are absent", async () => {
+    const masterKey = randomBytes(32);
+    delete process.env.BYOK_REDIS_REST_URL;
+    delete process.env.BYOK_REDIS_REST_TOKEN;
+    delete process.env.UPSTASH_REDIS_REST_URL;
+    delete process.env.UPSTASH_REDIS_REST_TOKEN;
+
+    process.env.UPSTASH_REDIS_REST_URL = "https://upstash.example.com";
+    process.env.UPSTASH_REDIS_REST_TOKEN = "upstash-token";
+    setMasterKeys({ v1: masterKey.toString("base64") });
+
+    const envelope = buildEnvelope(
+      { apiKey: "sk-upstash", provider: "openai" },
+      masterKey,
+    );
+    const fetchMock = stubRedisResponse({ result: envelope });
+
+    const resolved = await resolveInstallationBYOKConfig(1);
+
+    expect(resolved).toEqual({
+      apiKey: "sk-upstash",
+      provider: "openai",
+      model: undefined,
+    });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://upstash.example.com/get/hive%3Abyok%3A1",
+    );
+  });
+
+  it("sends Authorization header with Bearer token", async () => {
+    setRedisEnv();
+    const fetchMock = stubRedisResponse({ result: null });
+
+    await resolveInstallationBYOKConfig(1);
+
+    const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(requestInit.headers).toEqual(
+      expect.objectContaining({
+        Authorization: "Bearer redis-token",
+      }),
+    );
+  });
+
+  it("throws when Redis REST response is not valid JSON", async () => {
+    setRedisEnv();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => { throw new SyntaxError("Unexpected token"); },
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    await expect(resolveInstallationBYOKConfig(2)).rejects.toThrow(
+      "BYOK Redis REST response is not valid JSON (HTTP 200)",
+    );
   });
 
   it("throws when Redis returns an explicit error field", async () => {

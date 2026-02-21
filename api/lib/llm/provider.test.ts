@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createCipheriv, randomBytes } from "node:crypto";
 import { isLLMConfigured, getLLMConfig, createModel, createModelFromEnv, getLLMReadiness } from "./provider.js";
 import type { LLMConfig, LLMProvider } from "./types.js";
+import { logger } from "../logger.js";
 
 const { mockGet } = vi.hoisted(() => ({
   mockGet: vi.fn(),
@@ -492,7 +493,7 @@ describe("LLM Provider", () => {
       process.env.LLM_MODEL = "claude-3-haiku";
       delete process.env.ANTHROPIC_API_KEY;
 
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
 
       const result = await createModelFromEnv();
 

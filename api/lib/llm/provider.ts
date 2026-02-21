@@ -23,6 +23,7 @@ import type { LLMConfig, LLMProvider, LLMReadiness } from "./types.js";
 import { resolveInstallationBYOKConfig } from "./byok.js";
 import { LLM_DEFAULTS } from "./types.js";
 import { CONFIG_BOUNDS } from "../../config.js";
+import { logger } from "../logger.js";
 
 export interface ModelResolutionOptions {
   installationId?: number;
@@ -58,7 +59,7 @@ function normalizeEnvString(value: string | undefined, name?: string): string | 
   }
 
   if (normalized !== value && name) {
-    console.warn(`[llm] env var ${name} was normalized (whitespace/quotes removed)`);
+    logger.warn(`[llm] env var ${name} was normalized (whitespace/quotes removed)`);
   }
 
   return normalized.length > 0 ? normalized : undefined;
@@ -310,7 +311,7 @@ export async function createModelFromEnv(
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.warn(`[llm] createModelFromEnv: model creation failed, degrading to no-LLM: ${message}`);
+    logger.warn(`[llm] createModelFromEnv: model creation failed, degrading to no-LLM: ${message}`);
     return null;
   }
 }

@@ -566,6 +566,7 @@ describe("LLM Provider", () => {
           iv,
           tag,
           keyVersion: "v1",
+          status: "active",
         }),
       );
 
@@ -587,6 +588,7 @@ describe("LLM Provider", () => {
           iv: randomBytes(12).toString("base64"),
           tag: randomBytes(16).toString("base64"),
           keyVersion: "v1",
+          status: "active",
         }),
       );
 

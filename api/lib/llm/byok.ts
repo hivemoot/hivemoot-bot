@@ -9,9 +9,6 @@ const MASTER_KEYS_ENV = "BYOK_MASTER_KEYS_JSON";
 const REDIS_KEY_PREFIX_ENV = "BYOK_REDIS_KEY_PREFIX";
 const REDIS_FETCH_TIMEOUT_MS = 5000;
 
-// Cached at module load time — env vars are frozen per Vercel serverless container.
-let _masterKeysCache: ReadonlyMap<string, Buffer> | undefined;
-
 interface RedisRuntimeConfig {
   url: string;
   token: string;
@@ -113,10 +110,6 @@ function parseProvider(raw: unknown): LLMProvider {
 }
 
 function parseMasterKeys(): ReadonlyMap<string, Buffer> {
-  if (_masterKeysCache !== undefined) {
-    return _masterKeysCache;
-  }
-
   const raw = normalizeEnvString(process.env[MASTER_KEYS_ENV]);
   if (!raw) {
     throw new Error(`BYOK master keys are not configured: set ${MASTER_KEYS_ENV}`);
@@ -150,7 +143,6 @@ function parseMasterKeys(): ReadonlyMap<string, Buffer> {
     throw new Error(`${MASTER_KEYS_ENV} must include at least one key version`);
   }
 
-  _masterKeysCache = result;
   return result;
 }
 

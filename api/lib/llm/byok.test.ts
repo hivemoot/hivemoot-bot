@@ -163,6 +163,14 @@ describe("resolveInstallationBYOKConfig", () => {
     );
   });
 
+  it("re-throws non-abort fetch errors as-is", async () => {
+    setRedisEnv();
+    const networkError = new TypeError("Failed to fetch");
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(networkError) as unknown as typeof fetch);
+
+    await expect(resolveInstallationBYOKConfig(2)).rejects.toThrow("Failed to fetch");
+  });
+
   it("throws when Redis returns an explicit error field", async () => {
     setRedisEnv();
     stubRedisResponse({ error: "forbidden", result: null });

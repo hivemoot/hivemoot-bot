@@ -24,7 +24,6 @@ import {
   hasPaginateIterator,
   ISSUE_CLIENT_CHECKS,
 } from "./client-validation.js";
-import { LEGACY_LABEL_MAP, isLabelMatch } from "../config.js";
 import { logger } from "./logger.js";
 
 // Re-export IssueComment for backwards compatibility
@@ -236,22 +235,6 @@ export class IssueOperations {
     } catch (error) {
       if ((error as { status?: number }).status !== 404) {
         throw error;
-      }
-      // Canonical not found — try legacy aliases
-      for (const [legacy, canonical] of Object.entries(LEGACY_LABEL_MAP)) {
-        if (canonical === label) {
-          try {
-            await this.client.rest.issues.removeLabel({
-              owner: ref.owner,
-              repo: ref.repo,
-              issue_number: ref.issueNumber,
-              name: legacy,
-            });
-            return;
-          } catch (e) {
-            if ((e as { status?: number }).status !== 404) throw e;
-          }
-        }
       }
     }
   }
@@ -772,7 +755,7 @@ export class IssueOperations {
 
     for await (const { data: events } of iterator) {
       for (const event of events as TimelineEvent[]) {
-        if (event.label?.name && isLabelMatch(event.label.name, labelName)) {
+        if (event.label?.name && event.label.name === labelName) {
           if (event.event === "labeled") {
             labelEvents.push({ type: "labeled", time: new Date(event.created_at) });
           } else if (event.event === "unlabeled") {

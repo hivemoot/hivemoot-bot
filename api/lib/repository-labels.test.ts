@@ -76,10 +76,8 @@ describe("RepositoryLabelService", () => {
 
     expect(result).toEqual({
       created: REQUIRED_REPOSITORY_LABELS.length,
-      renamed: 0,
       updated: 0,
       skipped: 0,
-      renamedLabels: [],
     });
 
     expect(client.paginate.iterator).toHaveBeenCalledWith(
@@ -120,10 +118,8 @@ describe("RepositoryLabelService", () => {
     const result = await service.ensureRequiredLabels("hivemoot", "colony");
     expect(result).toEqual({
       created: REQUIRED_REPOSITORY_LABELS.length - 2,
-      renamed: 0,
       updated: 0,
       skipped: 2,
-      renamedLabels: [],
     });
 
     const createdNames = vi
@@ -148,10 +144,8 @@ describe("RepositoryLabelService", () => {
     const result = await service.ensureRequiredLabels("hivemoot", "colony");
     expect(result).toEqual({
       created: REQUIRED_REPOSITORY_LABELS.length - 1,
-      renamed: 0,
       updated: 0,
       skipped: 1,
-      renamedLabels: [],
     });
 
     const createdNames = vi
@@ -177,10 +171,8 @@ describe("RepositoryLabelService", () => {
     const result = await service.ensureRequiredLabels("hivemoot", "colony");
     expect(result).toEqual({
       created: REQUIRED_REPOSITORY_LABELS.length - 1,
-      renamed: 0,
       updated: 0,
       skipped: 1,
-      renamedLabels: [],
     });
   });
 
@@ -195,55 +187,6 @@ describe("RepositoryLabelService", () => {
     await expect(service.ensureRequiredLabels("hivemoot", "colony")).rejects.toThrow("Server Error");
   });
 
-  it("should rename legacy label instead of creating duplicate", async () => {
-    // Repo has "phase:voting" (legacy) but not "hivemoot:voting" (canonical)
-    vi.mocked(client.paginate.iterator).mockReturnValue(
-      buildIterator([
-        [label("phase:voting", "5319e7", "Voting phase.")],
-      ])
-    );
-
-    const votingLabel = requiredDef(LABELS.VOTING);
-    const result = await service.ensureRequiredLabels("hivemoot", "colony", [votingLabel]);
-
-    expect(result).toEqual({
-      created: 0,
-      renamed: 1,
-      updated: 0,
-      skipped: 0,
-      renamedLabels: [{ from: "phase:voting", to: LABELS.VOTING }],
-    });
-
-    expect(client.rest.issues.updateLabel).toHaveBeenCalledWith({
-      owner: "hivemoot",
-      repo: "colony",
-      name: "phase:voting",
-      new_name: LABELS.VOTING,
-      color: votingLabel.color,
-      description: votingLabel.description,
-    });
-    expect(client.rest.issues.createLabel).not.toHaveBeenCalled();
-  });
-
-  it("should skip when canonical label already exists even if legacy also exists", async () => {
-    const votingLabel = requiredDef(LABELS.VOTING);
-    // Both old and new names exist — skip (canonical takes precedence, and has correct color)
-    vi.mocked(client.paginate.iterator).mockReturnValue(
-      buildIterator([
-        [
-          label(LABELS.VOTING, votingLabel.color, votingLabel.description),
-          label("phase:voting", "5319e7", "Voting phase."),
-        ],
-      ])
-    );
-
-    const result = await service.ensureRequiredLabels("hivemoot", "colony", [votingLabel]);
-
-    expect(result).toEqual({ created: 0, renamed: 0, updated: 0, skipped: 1, renamedLabels: [] });
-    expect(client.rest.issues.updateLabel).not.toHaveBeenCalled();
-    expect(client.rest.issues.createLabel).not.toHaveBeenCalled();
-  });
-
   it("should update label when color has drifted from required definition", async () => {
     // Label exists with wrong color (e.g., GitHub's default gray from addLabels)
     const votingLabel = requiredDef(LABELS.VOTING);
@@ -255,7 +198,7 @@ describe("RepositoryLabelService", () => {
 
     const result = await service.ensureRequiredLabels("hivemoot", "colony", [votingLabel]);
 
-    expect(result).toEqual({ created: 0, renamed: 0, updated: 1, skipped: 0, renamedLabels: [] });
+    expect(result).toEqual({ created: 0, updated: 1, skipped: 0 });
     expect(client.rest.issues.updateLabel).toHaveBeenCalledWith({
       owner: "hivemoot",
       repo: "colony",
@@ -276,7 +219,7 @@ describe("RepositoryLabelService", () => {
 
     const result = await service.ensureRequiredLabels("hivemoot", "colony", [votingLabel]);
 
-    expect(result).toEqual({ created: 0, renamed: 0, updated: 1, skipped: 0, renamedLabels: [] });
+    expect(result).toEqual({ created: 0, updated: 1, skipped: 0 });
     expect(client.rest.issues.updateLabel).toHaveBeenCalledWith({
       owner: "hivemoot",
       repo: "colony",
@@ -296,7 +239,7 @@ describe("RepositoryLabelService", () => {
 
     const result = await service.ensureRequiredLabels("hivemoot", "colony", [votingLabel]);
 
-    expect(result).toEqual({ created: 0, renamed: 0, updated: 0, skipped: 1, renamedLabels: [] });
+    expect(result).toEqual({ created: 0, updated: 0, skipped: 1 });
     expect(client.rest.issues.updateLabel).not.toHaveBeenCalled();
   });
 
@@ -311,7 +254,7 @@ describe("RepositoryLabelService", () => {
 
     const result = await service.ensureRequiredLabels("hivemoot", "colony", [votingLabel]);
 
-    expect(result).toEqual({ created: 0, renamed: 0, updated: 0, skipped: 1, renamedLabels: [] });
+    expect(result).toEqual({ created: 0, updated: 0, skipped: 1 });
     expect(client.rest.issues.updateLabel).not.toHaveBeenCalled();
   });
 });

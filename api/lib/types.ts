@@ -4,8 +4,6 @@
  * Common types used across webhooks and scheduled scripts.
  */
 
-import { isLabelMatch } from "../config.js";
-
 /**
  * Minimal GitHub issue representation for governance operations
  */
@@ -137,10 +135,9 @@ export interface LinkedIssue {
 
 /**
  * Check if a linked issue has a specific label.
- * Supports both new hivemoot: labels and legacy names via isLabelMatch.
  */
 export function hasLabel(issue: LinkedIssue, labelName: string): boolean {
-  return issue.labels.nodes.some((l) => l !== null && isLabelMatch(l.name, labelName));
+  return issue.labels.nodes.some((l) => l !== null && l.name === labelName);
 }
 
 /**

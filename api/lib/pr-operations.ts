@@ -8,7 +8,7 @@
 import type { PRRef } from "./types.js";
 import { validateClient, PR_CLIENT_CHECKS } from "./client-validation.js";
 import { isNotificationComment } from "./bot-comments.js";
-import { LABELS, isLabelMatch, getLabelQueryAliases } from "../config.js";
+import { LABELS } from "../config.js";
 
 /**
  * Minimal GitHub client interface for PR operations.
@@ -334,16 +334,15 @@ export class PROperations {
   }
 
   /**
-   * Check if PR has a specific label (supports legacy label names)
+   * Check if PR has a specific label.
    */
   hasLabel(pr: { labels: Array<{ name: string }> }, labelName: string): boolean {
-    return pr.labels.some((label) => isLabelMatch(label.name, labelName));
+    return pr.labels.some((label) => label.name === labelName);
   }
 
   /**
    * Find all open PRs with a specific label in a repository.
-   * Queries both canonical and legacy label names to catch entities
-   * carrying either old or new labels. Returns only actual PRs (not issues).
+   * Returns only actual PRs (not issues).
    */
   async findPRsWithLabel(
     owner: string,
@@ -357,7 +356,6 @@ export class PROperations {
       labels: Array<{ name: string }>;
     }>
   > {
-    const seen = new Set<number>();
     const allPRs: Array<{
       number: number;
       createdAt: Date;
@@ -365,37 +363,34 @@ export class PROperations {
       labels: Array<{ name: string }>;
     }> = [];
 
-    for (const alias of getLabelQueryAliases(labelName)) {
-      let page = 1;
-      const perPage = 100;
+    let page = 1;
+    const perPage = 100;
 
-      while (true) {
-        const { data } = await this.client.rest.issues.listForRepo({
-          owner,
-          repo,
-          state: "open",
-          labels: alias,
-          per_page: perPage,
-          page,
-        });
+    while (true) {
+      const { data } = await this.client.rest.issues.listForRepo({
+        owner,
+        repo,
+        state: "open",
+        labels: labelName,
+        per_page: perPage,
+        page,
+      });
 
-        if (data.length === 0) break;
+      if (data.length === 0) break;
 
-        for (const item of data) {
-          if (item.pull_request !== undefined && !seen.has(item.number)) {
-            seen.add(item.number);
-            allPRs.push({
-              number: item.number,
-              createdAt: new Date(item.created_at),
-              updatedAt: new Date(item.updated_at),
-              labels: item.labels,
-            });
-          }
+      for (const item of data) {
+        if (item.pull_request !== undefined) {
+          allPRs.push({
+            number: item.number,
+            createdAt: new Date(item.created_at),
+            updatedAt: new Date(item.updated_at),
+            labels: item.labels,
+          });
         }
-
-        if (data.length < perPage) break;
-        page++;
       }
+
+      if (data.length < perPage) break;
+      page++;
     }
 
     return allPRs;

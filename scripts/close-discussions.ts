@@ -12,7 +12,7 @@
 
 import { Octokit } from "octokit";
 import * as core from "@actions/core";
-import { LABELS, PR_MESSAGES, getLabelQueryAliases } from "../api/config.js";
+import { LABELS, PR_MESSAGES } from "../api/config.js";
 import {
   createIssueOperations,
   createPROperations,
@@ -573,31 +573,26 @@ export async function reconcileMissingVotingComments(
   installationId?: number,
 ): Promise<number> {
   let reconciledCount = 0;
-  const seen = new Set<number>();
 
-  for (const alias of getLabelQueryAliases(LABELS.VOTING)) {
-    const iterator = octokit.paginate.iterator(
-      octokit.rest.issues.listForRepo,
-      { owner, repo: repoName, state: "open", labels: alias, per_page: 100 },
-    );
+  const iterator = octokit.paginate.iterator(
+    octokit.rest.issues.listForRepo,
+    { owner, repo: repoName, state: "open", labels: LABELS.VOTING, per_page: 100 },
+  );
 
-    for await (const { data: page } of iterator) {
-      for (const issue of page as Issue[]) {
-        if ('pull_request' in issue) continue;
-        if (seen.has(issue.number)) continue;
-        seen.add(issue.number);
-        const ref = createIssueRef(owner, repoName, issue.number, installationId);
-        try {
-          const result = await governance.postVotingComment(ref);
-          if (result === "posted") {
-            reconciledCount++;
-            logger.info(`[${owner}/${repoName}] Reconciled voting comment for #${issue.number}`);
-          }
-        } catch (error) {
-          logger.warn(
-            `[${owner}/${repoName}] Failed to reconcile #${issue.number}: ${(error as Error).message}`,
-          );
+  for await (const { data: page } of iterator) {
+    for (const issue of page as Issue[]) {
+      if ('pull_request' in issue) continue;
+      const ref = createIssueRef(owner, repoName, issue.number, installationId);
+      try {
+        const result = await governance.postVotingComment(ref);
+        if (result === "posted") {
+          reconciledCount++;
+          logger.info(`[${owner}/${repoName}] Reconciled voting comment for #${issue.number}`);
         }
+      } catch (error) {
+        logger.warn(
+          `[${owner}/${repoName}] Failed to reconcile #${issue.number}: ${(error as Error).message}`,
+        );
       }
     }
   }
@@ -623,8 +618,7 @@ interface PhaseConfig {
 
 /**
  * Paginate through issues with a given label and process each through
- * the phase transition pipeline. Queries both canonical and legacy label
- * names to catch entities carrying either old or new labels.
+ * the phase transition pipeline.
  * Skips pull requests (the issues API returns both issues and PRs).
  */
 async function processPhaseIssues(
@@ -637,40 +631,34 @@ async function processPhaseIssues(
   phase: PhaseConfig,
   onAccessIssue: (ref: IssueRef, status: number | undefined, reason: AccessIssueReason) => void
 ): Promise<void> {
-  const seen = new Set<number>();
+  const iterator = octokit.paginate.iterator(
+    octokit.rest.issues.listForRepo,
+    {
+      owner,
+      repo: repoName,
+      state: "open",
+      labels: phase.label,
+      per_page: 100,
+    }
+  );
 
-  for (const alias of getLabelQueryAliases(phase.label)) {
-    const iterator = octokit.paginate.iterator(
-      octokit.rest.issues.listForRepo,
-      {
-        owner,
-        repo: repoName,
-        state: "open",
-        labels: alias,
-        per_page: 100,
+  for await (const { data: page } of iterator) {
+    for (const issue of page as Issue[]) {
+      if ('pull_request' in issue) {
+        continue;
       }
-    );
-
-    for await (const { data: page } of iterator) {
-      for (const issue of page as Issue[]) {
-        if ('pull_request' in issue) {
-          continue;
-        }
-        if (seen.has(issue.number)) continue;
-        seen.add(issue.number);
-        const ref = createIssueRef(owner, repoName, issue.number, installationId);
-        await processIssuePhase(
-          issues,
-          governance,
-          ref,
-          phase.label,
-          phase.durationMs,
-          phase.phaseName,
-          () => phase.transition(governance, ref),
-          onAccessIssue,
-          phase.earlyCheck
-        );
-      }
+      const ref = createIssueRef(owner, repoName, issue.number, installationId);
+      await processIssuePhase(
+        issues,
+        governance,
+        ref,
+        phase.label,
+        phase.durationMs,
+        phase.phaseName,
+        () => phase.transition(governance, ref),
+        onAccessIssue,
+        phase.earlyCheck
+      );
     }
   }
 }

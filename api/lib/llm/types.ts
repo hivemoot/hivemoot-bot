@@ -123,8 +123,24 @@ export interface LLMConfig {
  * Default LLM configuration values.
  */
 export const LLM_DEFAULTS = {
-  maxTokens: 2000,
+  // Conservative cross-provider baseline: high enough to avoid truncated
+  // structured JSON in practice without depending on provider-specific limits.
+  maxTokens: 4_096,
   temperature: 0.3,
+  // Per-call timeout for individual LLM API requests (ms).
+  // Bounds each generateObject() invocation independently of the retry
+  // wrapper's total budget. Large PRs can send ~50KB of context, so the
+  // LLM may need well over 15s to respond (hivemoot-agent#118 timed out
+  // at 15s). 90s is generous but safe within the 120s function budget.
+  //
+  // ⚠️  Budget alignment (update together):
+  //   vercel.json  maxDuration .............. 120s (hard ceiling)
+  //   retry.ts     maxTotalElapsedMs ........ 105s (retry sequence budget)
+  //   types.ts     perCallTimeoutMs ......... 90s  (single LLM call)
+  //
+  // Vercel function limits as of Feb 2026:
+  //   https://vercel.com/docs/functions/configuring-functions/duration
+  perCallTimeoutMs: 90_000,
 } as const;
 
 /**
@@ -134,6 +150,49 @@ export const LLM_DEFAULTS = {
 export type LLMReadiness =
   | { ready: true }
   | { ready: false; reason: "not_configured" | "api_key_missing" };
+
+// ───────────────────────────────────────────────────────────────────────────────
+// Implementation Plan Schema
+// ───────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Schema for LLM-generated implementation blueprint.
+ * Produced by /gather — designed for an implementing agent, not a voter.
+ */
+export const ImplementationPlanSchema = z.object({
+  /** 1-2 sentence actionable goal */
+  goal: z.string().describe(
+    "1-2 sentence actionable goal describing what will be built or changed. Be specific."
+  ),
+
+  /** Free-form markdown implementation plan (numbered steps, tables, code blocks) */
+  plan: z.string().describe(
+    "Free-form markdown implementation plan. Use numbered steps, tables, code blocks, and inline code as appropriate. Write for an engineer who has NOT read the discussion thread."
+  ),
+
+  /** Concrete design choices made during discussion */
+  decisions: z.array(z.string()).describe(
+    "Concrete design decisions made during discussion. Each should be a clear statement of what was decided."
+  ),
+
+  /** Items explicitly excluded from scope */
+  outOfScope: z.array(z.string()).describe(
+    "Items explicitly excluded from scope. These were discussed and ruled out — do NOT implement them."
+  ),
+
+  /** Unresolved questions and active disagreements */
+  openQuestions: z.array(z.string()).describe(
+    "Unresolved questions AND active disagreements from the discussion. These need resolution before or during implementation."
+  ),
+
+  /** Metadata for display and validation */
+  metadata: z.object({
+    commentCount: z.number().describe("Total number of comments analyzed"),
+    participantCount: z.number().describe("Number of unique participants"),
+  }),
+});
+
+export type ImplementationPlan = z.infer<typeof ImplementationPlanSchema>;
 
 // ───────────────────────────────────────────────────────────────────────────────
 // Issue Context for Summarization
@@ -146,6 +205,7 @@ export interface DiscussionComment {
   author: string;
   body: string;
   createdAt: string;
+  reactions?: { thumbsUp: number; thumbsDown: number };
 }
 
 /**
@@ -156,4 +216,12 @@ export interface IssueContext {
   body: string;
   author: string;
   comments: DiscussionComment[];
+}
+
+/**
+ * Count unique comment authors.
+ * Used for metadata display and hallucination validation.
+ */
+export function countUniqueParticipants(comments: ReadonlyArray<{ author: string }>): number {
+  return new Set(comments.map((c) => c.author)).size;
 }

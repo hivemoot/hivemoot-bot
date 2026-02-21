@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
  * Tests for reconcile-pr-notifications script
  *
  * Tests the reconciliation functions:
- * - hasVotingPassedNotification: duplicate detection (metadata + fallback)
+ * - hasReadyToImplementNotification: duplicate detection (metadata + fallback)
  * - reconcileIssue: notification logic, skipping, error handling, intake reconciliation
  * - processRepository: filtering, issue iteration, config loading
  */
@@ -73,7 +73,7 @@ vi.mock("../api/lib/implementation-intake.js", () => ({
 
 // Import after all mocks are in place
 import {
-  hasVotingPassedNotification,
+  hasReadyToImplementNotification,
   reconcileIssue,
   processRepository,
 } from "./reconcile-pr-notifications.js";
@@ -105,7 +105,7 @@ describe("reconcile-pr-notifications", () => {
   const defaultMaxPRs = 3;
 
   beforeEach(() => {
-    // Freeze time so metadata timestamps in issueVotingPassed are deterministic
+    // Freeze time so metadata timestamps in issueReadyToImplement are deterministic
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2024-01-20T12:00:00.000Z"));
     vi.clearAllMocks();
@@ -121,7 +121,7 @@ describe("reconcile-pr-notifications", () => {
     vi.useRealTimers();
   });
 
-  describe("hasVotingPassedNotification", () => {
+  describe("hasReadyToImplementNotification", () => {
     const ref: PRRef = { owner, repo, prNumber: 10 };
     const mockPRs = {
       hasNotificationCommentInComments: mockHasNotificationCommentInComments,
@@ -135,7 +135,7 @@ describe("reconcile-pr-notifications", () => {
       mockListCommentsWithBody.mockResolvedValue(comments);
       mockHasNotificationCommentInComments.mockReturnValue(true);
 
-      const result = await hasVotingPassedNotification(mockPRs, ref, 42);
+      const result = await hasReadyToImplementNotification(mockPRs, ref, 42);
 
       expect(result).toBe(true);
       expect(mockListCommentsWithBody).toHaveBeenCalledWith(ref);
@@ -155,7 +155,21 @@ describe("reconcile-pr-notifications", () => {
         },
       ]);
 
-      const result = await hasVotingPassedNotification(mockPRs, ref, 42);
+      const result = await hasReadyToImplementNotification(mockPRs, ref, 42);
+
+      expect(result).toBe(true);
+    });
+
+    it("should return true when ready-to-implement wording matches (fallback)", async () => {
+      mockHasNotificationCommentInComments.mockReturnValue(false);
+      mockListCommentsWithBody.mockResolvedValue([
+        {
+          id: 1,
+          body: "# 🐝 Issue #42 Ready to Implement ✅\n\nGood news @agent — Issue #42 is ready for implementation!\n\nPush a new commit or add a comment to activate it for implementation tracking.",
+        },
+      ]);
+
+      const result = await hasReadyToImplementNotification(mockPRs, ref, 42);
 
       expect(result).toBe(true);
     });
@@ -164,7 +178,7 @@ describe("reconcile-pr-notifications", () => {
       mockHasNotificationCommentInComments.mockReturnValue(false);
       mockListCommentsWithBody.mockResolvedValue([]);
 
-      const result = await hasVotingPassedNotification(mockPRs, ref, 42);
+      const result = await hasReadyToImplementNotification(mockPRs, ref, 42);
 
       expect(result).toBe(false);
     });
@@ -178,7 +192,7 @@ describe("reconcile-pr-notifications", () => {
         },
       ]);
 
-      const result = await hasVotingPassedNotification(mockPRs, ref, 42);
+      const result = await hasReadyToImplementNotification(mockPRs, ref, 42);
 
       expect(result).toBe(false);
     });
@@ -192,7 +206,7 @@ describe("reconcile-pr-notifications", () => {
         },
       ]);
 
-      const result = await hasVotingPassedNotification(mockPRs, ref, 1);
+      const result = await hasReadyToImplementNotification(mockPRs, ref, 1);
 
       expect(result).toBe(false);
     });
@@ -206,7 +220,7 @@ describe("reconcile-pr-notifications", () => {
         },
       ]);
 
-      const result = await hasVotingPassedNotification(mockPRs, ref, 1);
+      const result = await hasReadyToImplementNotification(mockPRs, ref, 1);
 
       expect(result).toBe(true);
     });
@@ -220,7 +234,7 @@ describe("reconcile-pr-notifications", () => {
         },
       ]);
 
-      const result = await hasVotingPassedNotification(mockPRs, ref, 1);
+      const result = await hasReadyToImplementNotification(mockPRs, ref, 1);
 
       expect(result).toBe(false);
     });
@@ -232,7 +246,7 @@ describe("reconcile-pr-notifications", () => {
         { id: 2, body: "LGTM" },
       ]);
 
-      const result = await hasVotingPassedNotification(mockPRs, ref, 42);
+      const result = await hasReadyToImplementNotification(mockPRs, ref, 42);
 
       expect(result).toBe(false);
     });
@@ -254,11 +268,11 @@ describe("reconcile-pr-notifications", () => {
       expect(mockComment).toHaveBeenCalledTimes(2);
       expect(mockComment).toHaveBeenCalledWith(
         { owner, repo, prNumber: 10 },
-        PR_MESSAGES.issueVotingPassed(42, "agent-alice")
+        PR_MESSAGES.issueReadyToImplement(42, "agent-alice")
       );
       expect(mockComment).toHaveBeenCalledWith(
         { owner, repo, prNumber: 20 },
-        PR_MESSAGES.issueVotingPassed(42, "agent-bob")
+        PR_MESSAGES.issueReadyToImplement(42, "agent-bob")
       );
     });
 
@@ -278,7 +292,7 @@ describe("reconcile-pr-notifications", () => {
       expect(mockComment).toHaveBeenCalledTimes(1);
       expect(mockComment).toHaveBeenCalledWith(
         { owner, repo, prNumber: 20 },
-        PR_MESSAGES.issueVotingPassed(42, "agent-bob")
+        PR_MESSAGES.issueReadyToImplement(42, "agent-bob")
       );
     });
 

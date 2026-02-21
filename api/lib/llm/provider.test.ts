@@ -104,7 +104,7 @@ describe("LLM Provider", () => {
       expect(config).toEqual({
         provider: "anthropic",
         model: "claude-3-haiku",
-        maxTokens: 2000,
+        maxTokens: 4_096,
       });
     });
 
@@ -117,7 +117,7 @@ describe("LLM Provider", () => {
       expect(config).toEqual({
         provider: "openai",
         model: "gpt-4o-mini",
-        maxTokens: 2000,
+        maxTokens: 4_096,
       });
     });
 
@@ -149,8 +149,58 @@ describe("LLM Provider", () => {
 
       const config = getLLMConfig();
 
-      expect(config?.maxTokens).toBe(2000);
+      expect(config?.maxTokens).toBe(4_096);
     });
+
+    it("should use defaults for non-positive maxTokens", () => {
+      process.env.LLM_PROVIDER = "anthropic";
+      process.env.LLM_MODEL = "claude-3-haiku";
+      process.env.LLM_MAX_TOKENS = "0";
+
+      const zeroConfig = getLLMConfig();
+      expect(zeroConfig?.maxTokens).toBe(4_096);
+
+      process.env.LLM_MAX_TOKENS = "-100";
+      const negativeConfig = getLLMConfig();
+      expect(negativeConfig?.maxTokens).toBe(4_096);
+    });
+
+    it("should clamp LLM_MAX_TOKENS below minimum to minimum", () => {
+      process.env.LLM_PROVIDER = "anthropic";
+      process.env.LLM_MODEL = "claude-3-haiku";
+      process.env.LLM_MAX_TOKENS = "499";
+
+      const config = getLLMConfig();
+      expect(config?.maxTokens).toBe(500);
+    });
+
+    it("should clamp LLM_MAX_TOKENS above maximum to maximum", () => {
+      process.env.LLM_PROVIDER = "anthropic";
+      process.env.LLM_MODEL = "claude-3-haiku";
+      process.env.LLM_MAX_TOKENS = "50001";
+
+      const config = getLLMConfig();
+      expect(config?.maxTokens).toBe(32_768);
+    });
+
+    it("should allow LLM_MAX_TOKENS at exact minimum boundary", () => {
+      process.env.LLM_PROVIDER = "anthropic";
+      process.env.LLM_MODEL = "claude-3-haiku";
+      process.env.LLM_MAX_TOKENS = "500";
+
+      const config = getLLMConfig();
+      expect(config?.maxTokens).toBe(500);
+    });
+
+    it("should allow LLM_MAX_TOKENS at exact maximum boundary", () => {
+      process.env.LLM_PROVIDER = "anthropic";
+      process.env.LLM_MODEL = "claude-3-haiku";
+      process.env.LLM_MAX_TOKENS = "32768";
+
+      const config = getLLMConfig();
+      expect(config?.maxTokens).toBe(32_768);
+    });
+
   });
 
   describe("createModel", () => {
@@ -382,6 +432,26 @@ describe("LLM Provider", () => {
       expect(result).not.toBeNull();
       expect(result?.config.provider).toBe("google");
       expect(result?.config.model).toBe("gemini-2.0-flash");
+    });
+
+    it("should return null and warn when model creation fails (e.g. missing API key)", () => {
+      // Provider and model are set but API key is absent — createModel() would throw.
+      // createModelFromEnv() must catch this and degrade to null so callers don't
+      // need their own try-catch for BYOK or other config errors.
+      process.env.LLM_PROVIDER = "anthropic";
+      process.env.LLM_MODEL = "claude-3-haiku";
+      delete process.env.ANTHROPIC_API_KEY;
+
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const result = createModelFromEnv();
+
+      expect(result).toBeNull();
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("createModelFromEnv: model creation failed, degrading to no-LLM")
+      );
+
+      warnSpy.mockRestore();
     });
   });
 });

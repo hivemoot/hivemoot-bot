@@ -10,7 +10,7 @@
  * - LLM_MODEL: Model name (e.g., claude-3-haiku-20240307, gpt-4o-mini)
  * - ANTHROPIC_API_KEY / OPENAI_API_KEY / etc: Provider-specific API keys
  *     (Google accepts GOOGLE_API_KEY or GOOGLE_GENERATIVE_AI_API_KEY)
- * - LLM_MAX_TOKENS: Optional, defaults to 2000
+ * - LLM_MAX_TOKENS: Optional requested output budget, defaults to 4096
  */
 
 import { createAnthropic } from "@ai-sdk/anthropic";
@@ -21,6 +21,11 @@ import type { LanguageModelV1 } from "ai";
 
 import type { LLMConfig, LLMProvider, LLMReadiness } from "./types.js";
 import { LLM_DEFAULTS } from "./types.js";
+import { CONFIG_BOUNDS } from "../../config.js";
+
+export interface ModelResolutionOptions {
+  installationId?: number;
+}
 
 // ───────────────────────────────────────────────────────────────────────────────
 // Environment Parsing
@@ -82,6 +87,19 @@ const API_KEY_VARS: Readonly<Record<LLMProvider, readonly string[]>> = {
   mistral: ["MISTRAL_API_KEY"],
 };
 
+function parseRequestedMaxTokensFromEnv(): number {
+  const rawMaxTokens = normalizeEnvString(process.env.LLM_MAX_TOKENS, "LLM_MAX_TOKENS");
+  const parsedMaxTokens = parseInt(rawMaxTokens ?? "", 10);
+  const hasExplicitPositiveValue = Number.isFinite(parsedMaxTokens) && parsedMaxTokens > 0;
+
+  if (hasExplicitPositiveValue) {
+    const { min, max } = CONFIG_BOUNDS.llmMaxTokens;
+    return Math.max(min, Math.min(max, parsedMaxTokens));
+  }
+
+  return LLM_DEFAULTS.maxTokens;
+}
+
 /**
  * Lightweight check for whether the provider's API key env var is present.
  * Does not instantiate any SDK client.
@@ -121,12 +139,12 @@ export function getLLMConfig(): LLMConfig | null {
     return null;
   }
 
-  const maxTokens = parseInt(normalizeEnvString(process.env.LLM_MAX_TOKENS, "LLM_MAX_TOKENS") ?? "", 10);
+  const maxTokens = parseRequestedMaxTokensFromEnv();
 
   return {
     provider,
     model,
-    maxTokens: Number.isFinite(maxTokens) ? maxTokens : LLM_DEFAULTS.maxTokens,
+    maxTokens,
   };
 }
 
@@ -215,16 +233,32 @@ export function createModel(config: LLMConfig): LanguageModelV1 {
 
 /**
  * Create a model from environment configuration.
- * Returns null if LLM is not configured.
+ * Returns null if LLM is not configured or if model creation fails.
+ *
+ * Fails safely on all errors — including missing API keys and future BYOK
+ * resolution failures (Redis unreachable, decryption error, corrupt envelope).
+ * Callers receive null and degrade to no-LLM behavior rather than propagating
+ * exceptions into the webhook handler.
+ *
+ * The optional installation context is reserved for BYOK resolution wiring.
+ * Current behavior still uses shared environment variables only.
  */
-export function createModelFromEnv(): { model: LanguageModelV1; config: LLMConfig } | null {
+export function createModelFromEnv(
+  _options?: ModelResolutionOptions
+): { model: LanguageModelV1; config: LLMConfig } | null {
   const config = getLLMConfig();
   if (!config) {
     return null;
   }
 
-  return {
-    model: createModel(config),
-    config,
-  };
+  try {
+    return {
+      model: createModel(config),
+      config,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[llm] createModelFromEnv: model creation failed, degrading to no-LLM: ${message}`);
+    return null;
+  }
 }

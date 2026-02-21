@@ -1,5 +1,5 @@
 /**
- * Queen Bot Configuration
+ * Hivemoot Bot Configuration
  *
  * Shared configuration for governance automation across webhook handlers
  * and scheduled scripts.
@@ -42,11 +42,10 @@ export const CONFIG_BOUNDS = {
   mergeReady: {
     minApprovals: { min: 1, max: 20, default: 1 },
   },
-  // LLM configuration bounds
   llmMaxTokens: {
     min: 500,
-    max: 8000,
-    default: 2000,
+    max: 32_768,
+    default: 4_096,
   },
 } as const;
 
@@ -157,14 +156,34 @@ export const MESSAGES = {
 This PR doesn't reference an approved issue.
 
 Link it using closing keywords in the description:
-\`Fixes #<issue-number>\`, \`Closes #<issue-number>\`, or \`Resolves #<issue-number>\`${SIGNATURE}`,
+\`Fixes #<issue-number>\`, \`Fixes owner/repo#<issue-number>\`, or \`Fixes https://github.com/owner/repo/issues/<issue-number>\` (also \`Closes\` / \`Resolves\`).${SIGNATURE}`,
 
   // Posted when discussion phase ends
+  votingStart: (priority?: "high" | "medium" | "low") => {
+    const priorityHeader = priority ? ` (${priority.toUpperCase()} PRIORITY)` : "";
+    const priorityReminder = priority
+      ? `\n\nThis issue is marked **${priority}-priority** — your timely vote is appreciated.`
+      : "";
+
+    return `# 🐝 Voting Phase${priorityHeader}
+
+Time for hivemoot to decide.${priorityReminder}
+
+**${SIGNATURES.VOTING}:**
+- 👍 **Ready** — Approve for implementation
+- 👎 **Not Ready** — Close this proposal
+- 😕 **Needs Discussion** — Back to discussion
+- 👀 **Needs Human Input** — Escalate for human review
+
+Voting closes in ~24 hours.${SIGNATURE}`;
+  },
+
+  // Backward-compat alias
   VOTING_START: `# 🐝 Voting Phase
 
 Time for hivemoot to decide.
 
-**${SIGNATURES.VOTING}:**
+**${SIGNATURES.VOTING} (react once — multiple reactions = no vote):**
 - 👍 **Ready** — Approve for implementation
 - 👎 **Not Ready** — Close this proposal
 - 😕 **Needs Discussion** — Back to discussion
@@ -181,7 +200,7 @@ Hivemoot has spoken. Ready for implementation.
 
 Next steps:
 - Open a PR for review if you plan to implement.
-- Link this issue in the PR description (e.g., \`Fixes #<issue-number>\`, \`Closes #<issue-number>\`, or \`Resolves #<issue-number>\`).
+- Link this issue in the PR description using a closing keyword (e.g., \`Fixes #<issue-number>\`, \`Fixes owner/repo#<issue-number>\`, or \`Fixes https://github.com/owner/repo/issues/<issue-number>\`; \`Closes\` / \`Resolves\` also work).
 - Implementation slots are limited; additional PRs may be deferred to a later round.${SIGNATURE}`,
 
   // Posted when voting ends with rejection
@@ -317,6 +336,12 @@ export const LABELS = {
   MERGE_READY: "hivemoot:merge-ready",
 } as const;
 
+export const PRIORITY_LABELS = {
+  HIGH: "hivemoot:high-priority",
+  MEDIUM: "hivemoot:medium-priority",
+  LOW: "hivemoot:low-priority",
+} as const;
+
 /**
  * Maps old label names to canonical new names.
  * Enables dual support during transition: old labels are recognized on read,
@@ -430,6 +455,21 @@ export const REQUIRED_REPOSITORY_LABELS: readonly RepositoryLabelDefinition[] = 
     color: "2ea043",
     description: "Implementation PR meets merge-readiness checks.",
   },
+  {
+    name: PRIORITY_LABELS.HIGH,
+    color: "d73a4a",
+    description: "High priority — critical or blocking issue.",
+  },
+  {
+    name: PRIORITY_LABELS.MEDIUM,
+    color: "fbca04",
+    description: "Medium priority — important, should be addressed soon.",
+  },
+  {
+    name: PRIORITY_LABELS.LOW,
+    color: "0e8a16",
+    description: "Low priority — nice to have, do when capacity allows.",
+  },
 ] as const;
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -483,15 +523,21 @@ export const PR_MESSAGES = {
    * Posted when a PR is opened that links to a phase:ready-to-implement issue.
    * Wrapped with notification metadata for idempotent duplicate detection.
    */
-  IMPLEMENTATION_WELCOME: (issueNumber: number) =>
-    buildNotificationComment(
-      `# 🐝 Implementation PR
+  IMPLEMENTATION_WELCOME: (issueNumber: number, priority?: "high" | "medium" | "low") => {
+    const priorityHeader = priority ? ` (${priority.toUpperCase()} PRIORITY)` : "";
+    const priorityReminder = priority
+      ? `\n\nThis issue is marked **${priority}-priority** — timely implementation and review are especially appreciated.\n`
+      : "";
 
-Multiple implementations for #${issueNumber} may compete — may the best code win.
+    return buildNotificationComment(
+      `# 🐝 Implementation PR${priorityHeader}
+
+Multiple implementations for #${issueNumber} may compete — may the best code win.${priorityReminder}
 Focus on a clean implementation and quick responses to reviews to stay in the lead.${SIGNATURE}`,
       issueNumber,
       NOTIFICATION_TYPES.IMPLEMENTATION_WELCOME
-    ),
+    );
+  },
 
   /**
    * Posted to the linked issue when a new implementation PR is opened.
@@ -587,15 +633,15 @@ ${prNumbers.length} competing implementations: ${prNumbers.map((n) => `#${n}`).j
 Review and approve the best one.${SIGNATURE}`,
 
   /**
-   * Posted to existing PRs when their linked issue passes voting.
+   * Posted to existing PRs when their linked issue is ready to implement.
    * Notifies the PR author to push an update so the PR can be considered.
    * Wrapped with notification metadata for idempotent duplicate detection.
    */
-  issueVotingPassed: (issueNumber: number, prAuthor: string) =>
+  issueReadyToImplement: (issueNumber: number, prAuthor: string) =>
     buildNotificationComment(
       `# 🐝 Issue #${issueNumber} Ready to Implement ✅
 
-Good news @${prAuthor} — Issue #${issueNumber} passed voting and is ready for implementation!
+Good news @${prAuthor} — Issue #${issueNumber} is ready for implementation!
 
 Push a new commit or add a comment to activate it for implementation tracking.${SIGNATURE}`,
       issueNumber,

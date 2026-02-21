@@ -27,9 +27,11 @@ import {
 } from "../../lib/implementation-intake.js";
 import { parseCommand, executeCommand } from "../../lib/commands/index.js";
 import { getLLMReadiness } from "../../lib/llm/provider.js";
+import { registerHandlerDispatcher } from "../../handlers/dispatcher.js";
+import { handlerEventMap } from "../../handlers/registry.js";
 
 /**
- * Queen Bot - Hivemoot Governance Automation
+ * Hivemoot Bot - Governance Automation
  *
  * Handles GitHub webhooks for AI agent community governance:
  * - New issues: Add `hivemoot:discussion` label + welcome message
@@ -73,6 +75,7 @@ interface LabelBootstrapSummary {
   reposFailed: number;
   labelsCreated: number;
   labelsRenamed: number;
+  labelsUpdated: number;
   labelsSkipped: number;
 }
 
@@ -103,6 +106,14 @@ const PR_OPENED_LINK_RETRY_DELAY_MS = 2000;
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper Functions
 // ─────────────────────────────────────────────────────────────────────────────
+
+/** Check if a PR targets the repository's default branch */
+function targetsDefaultBranch(
+  pullRequest: { base: { ref: string } },
+  repository: { default_branch?: string },
+): boolean {
+  return !repository.default_branch || pullRequest.base.ref === repository.default_branch;
+}
 
 /** Extract repository context from webhook payload */
 function getRepoContext(repository: InstallationRepoPayload): RepoContext {
@@ -183,7 +194,7 @@ async function ensureLabelsForRepositories(
   if (targetRepositories.length === 0) {
     context.log.info(`[${eventName}] No installation repositories available; skipping label bootstrap`);
     context.log.info(
-      `[${eventName}] Label bootstrap summary: reposProcessed=0, reposFailed=0, labelsCreated=0, labelsSkipped=0`
+      `[${eventName}] Label bootstrap summary: reposProcessed=0, reposFailed=0, labelsCreated=0, labelsRenamed=0, labelsUpdated=0, labelsSkipped=0`
     );
     return;
   }
@@ -195,6 +206,7 @@ async function ensureLabelsForRepositories(
     reposFailed: 0,
     labelsCreated: 0,
     labelsRenamed: 0,
+    labelsUpdated: 0,
     labelsSkipped: 0,
   };
 
@@ -204,9 +216,10 @@ async function ensureLabelsForRepositories(
       const result = await labelService.ensureRequiredLabels(owner, repo);
       summary.labelsCreated += result.created;
       summary.labelsRenamed += result.renamed;
+      summary.labelsUpdated += result.updated;
       summary.labelsSkipped += result.skipped;
       context.log.info(
-        `[${eventName}] Ensured labels in ${fullName}: created=${result.created}, renamed=${result.renamed}, skipped=${result.skipped}`
+        `[${eventName}] Ensured labels in ${fullName}: created=${result.created}, renamed=${result.renamed}, updated=${result.updated}, skipped=${result.skipped}`
       );
     } catch (error) {
       summary.reposFailed += 1;
@@ -216,7 +229,7 @@ async function ensureLabelsForRepositories(
   }
 
   context.log.info(
-    `[${eventName}] Label bootstrap summary: reposProcessed=${summary.reposProcessed}, reposFailed=${summary.reposFailed}, labelsCreated=${summary.labelsCreated}, labelsRenamed=${summary.labelsRenamed}, labelsSkipped=${summary.labelsSkipped}`
+    `[${eventName}] Label bootstrap summary: reposProcessed=${summary.reposProcessed}, reposFailed=${summary.reposFailed}, labelsCreated=${summary.labelsCreated}, labelsRenamed=${summary.labelsRenamed}, labelsUpdated=${summary.labelsUpdated}, labelsSkipped=${summary.labelsSkipped}`
   );
 
   if (errors.length > 0) {
@@ -226,6 +239,7 @@ async function ensureLabelsForRepositories(
 
 export function app(probotApp: Probot): void {
   probotApp.log.info("Queen bot initialized");
+  registerHandlerDispatcher(probotApp, { eventMap: handlerEventMap });
 
   /**
    * Bootstrap required labels when the app is first installed.
@@ -264,8 +278,12 @@ export function app(probotApp: Probot): void {
       );
       const issueWelcomeMessage =
         hasAutomaticDiscussion ? MESSAGES.ISSUE_WELCOME_VOTING : MESSAGES.ISSUE_WELCOME_MANUAL;
+      const installationId = context.payload.installation?.id;
 
-      await governance.startDiscussion({ owner, repo, issueNumber: number }, issueWelcomeMessage);
+      await governance.startDiscussion(
+        { owner, repo, issueNumber: number, installationId },
+        issueWelcomeMessage
+      );
     } catch (error) {
       context.log.error({ err: error, issue: number, repo: fullName }, "Failed to process issue");
       throw error;
@@ -276,6 +294,15 @@ export function app(probotApp: Probot): void {
     const { number } = context.payload.pull_request;
     const { owner, repo, fullName } = getRepoContext(context.payload.repository);
     context.log.info(`Processing PR #${number} in ${fullName}`);
+
+    // Skip governance processing for PRs targeting non-default branches (stacked PRs)
+    if (!targetsDefaultBranch(context.payload.pull_request, context.payload.repository)) {
+      context.log.info(
+        { owner, repo, pr: number, base: context.payload.pull_request.base.ref },
+        "Skipping PR intake — targets non-default branch"
+      );
+      return;
+    }
 
     try {
       const appId = getAppId();
@@ -357,6 +384,14 @@ export function app(probotApp: Probot): void {
     const { owner, repo, fullName } = getRepoContext(context.payload.repository);
     context.log.info(`Processing PR update #${number} in ${fullName}`);
 
+    if (!targetsDefaultBranch(context.payload.pull_request, context.payload.repository)) {
+      context.log.info(
+        { owner, repo, pr: number, base: context.payload.pull_request.base.ref },
+        "Skipping PR update intake — targets non-default branch"
+      );
+      return;
+    }
+
     try {
       const appId = getAppId();
       const issues = createIssueOperations(context.octokit, { appId });
@@ -396,6 +431,10 @@ export function app(probotApp: Probot): void {
   probotApp.on("pull_request.edited", async (context) => {
     // Only body edits can change closing keywords — skip title/base changes
     if (!context.payload.changes?.body) {
+      return;
+    }
+
+    if (!targetsDefaultBranch(context.payload.pull_request, context.payload.repository)) {
       return;
     }
 
@@ -461,6 +500,7 @@ export function app(probotApp: Probot): void {
           owner,
           repo,
           issueNumber: issue.number,
+          installationId: context.payload.installation?.id,
           commentId: comment.id,
           senderLogin: comment.user.login,
           verb: parsed.verb,
@@ -560,8 +600,8 @@ export function app(probotApp: Probot): void {
         for (const competingPR of competingPRs) {
           if (competingPR.number !== number) {
             const prRef = { owner, repo, prNumber: competingPR.number };
-            await prs.comment(prRef, PR_MESSAGES.prSuperseded(number));
             await prs.close(prRef);
+            await prs.comment(prRef, PR_MESSAGES.prSuperseded(number));
             await prs.removeGovernanceLabels(prRef);
             context.log.info(`Closed competing PR #${competingPR.number}`);
           }
@@ -861,8 +901,9 @@ export function app(probotApp: Probot): void {
       const appId = getAppId();
       const issues = createIssueOperations(context.octokit, { appId });
       const governance = createGovernanceService(issues);
+      const installationId = context.payload.installation?.id;
       const result = await governance.postVotingComment({
-        owner, repo, issueNumber: issue.number,
+        owner, repo, issueNumber: issue.number, installationId,
       });
       context.log.info(`Voting comment for issue #${issue.number}: ${result}`);
     } catch (error) {

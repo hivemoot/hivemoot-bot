@@ -10,6 +10,9 @@ const { mockGet } = vi.hoisted(() => ({
 vi.mock("ioredis", () => {
   const MockRedis = class {
     get = mockGet;
+    on() { return this; }
+    disconnect() {}
+    status = "ready";
   };
   return { default: MockRedis, Redis: MockRedis };
 });
@@ -103,8 +106,14 @@ describe("resolveInstallationBYOKConfig", () => {
     process.env = originalEnv;
   });
 
-  it("returns null when HIVEMOOT_REDIS_URL is blank or missing", async () => {
+  it("returns null when HIVEMOOT_REDIS_URL is blank", async () => {
     process.env.HIVEMOOT_REDIS_URL = "   ";
+
+    await expect(resolveInstallationBYOKConfig(1)).resolves.toBeNull();
+  });
+
+  it("returns null when HIVEMOOT_REDIS_URL is undefined", async () => {
+    delete process.env.HIVEMOOT_REDIS_URL;
 
     await expect(resolveInstallationBYOKConfig(1)).resolves.toBeNull();
   });
@@ -281,6 +290,15 @@ describe("resolveInstallationBYOKConfig", () => {
 
     await expect(resolveInstallationBYOKConfig(4)).rejects.toThrow(
       "BYOK_MASTER_KEYS_JSON must include at least one key version",
+    );
+  });
+
+  it("throws when Redis returns an empty string", async () => {
+    setRedisEnv();
+    stubRedisGet("");
+
+    await expect(resolveInstallationBYOKConfig(5)).rejects.toThrow(
+      "BYOK envelope is not valid JSON",
     );
   });
 

@@ -10,6 +10,9 @@ const { mockGet } = vi.hoisted(() => ({
 vi.mock("ioredis", () => {
   const MockRedis = class {
     get = mockGet;
+    on() { return this; }
+    disconnect() {}
+    status = "ready";
   };
   return { default: MockRedis, Redis: MockRedis };
 });

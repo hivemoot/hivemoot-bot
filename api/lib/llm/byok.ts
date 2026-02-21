@@ -71,15 +71,33 @@ function getRedisRuntimeConfig(): RedisRuntimeConfig | null {
 let redisClient: Redis | null = null;
 
 function getOrCreateRedisClient(redisUrl: string): Redis {
-  if (!redisClient) {
-    redisClient = new Redis(redisUrl, {
-      lazyConnect: true,
-      commandTimeout: REDIS_COMMAND_TIMEOUT_MS,
-      maxRetriesPerRequest: 3,
-      connectTimeout: 5000,
-    });
+  if (redisClient && redisClient.status !== "end" && redisClient.status !== "close") {
+    return redisClient;
   }
-  return redisClient;
+
+  // Dispose of dead client if one exists
+  if (redisClient) {
+    redisClient.disconnect();
+    redisClient = null;
+  }
+
+  const client = new Redis(redisUrl, {
+    lazyConnect: true,
+    commandTimeout: REDIS_COMMAND_TIMEOUT_MS,
+    // One retry catches transient blips; more risks webhook timeout
+    // (worst-case ≈ connectTimeout × retries + commandTimeout)
+    maxRetriesPerRequest: 1,
+    connectTimeout: 5000,
+  });
+
+  // Prevent unhandled 'error' events from crashing long-lived processes.
+  // Command-level errors are already caught in fetchEnvelope's try-catch.
+  client.on("error", (err: Error) => {
+    console.error(`[byok] Redis client error: ${err.message}`);
+  });
+
+  redisClient = client;
+  return client;
 }
 
 function parseProvider(raw: unknown): LLMProvider {
@@ -209,8 +227,8 @@ function decryptEnvelope(
       decipher.update(ciphertext),
       decipher.final(),
     ]).toString("utf8");
-  } catch {
-    throw new Error("BYOK key material could not be decrypted");
+  } catch (error) {
+    throw new Error("BYOK key material could not be decrypted", { cause: error });
   }
 
   let payload: unknown;
@@ -248,7 +266,8 @@ async function fetchEnvelope(
     raw = await client.get(key);
   } catch (error) {
     throw new Error(
-      `BYOK Redis lookup failed for installation ${installationId}: ${error instanceof Error ? error.message : String(error)}`
+      `BYOK Redis lookup failed for installation ${installationId}: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
     );
   }
 

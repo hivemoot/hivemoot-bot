@@ -1112,7 +1112,7 @@ describe("executeCommand", () => {
       );
     });
 
-    it("should log when permission check fails", async () => {
+    it("should log when permission check fails with non-transient error", async () => {
       const octokit = createMockOctokit();
       octokit.rest.repos.getCollaboratorPermissionLevel.mockRejectedValue(
         new Error("Token expired"),
@@ -1126,6 +1126,115 @@ describe("executeCommand", () => {
         expect.objectContaining({ user: "maintainer" }),
         expect.stringContaining("Permission check failed"),
       );
+    });
+
+    it("should surface ECONNRESET during auth check as a visible failure instead of silently denying", async () => {
+      const octokit = createMockOctokit();
+      const econnreset = Object.assign(new Error("read ECONNRESET"), {
+        code: "ECONNRESET",
+        errno: -104,
+        syscall: "read",
+      });
+      octokit.rest.repos.getCollaboratorPermissionLevel.mockRejectedValue(econnreset);
+
+      const ctx = createCtx({ octokit });
+      const result = await executeCommand(ctx);
+
+      // Transient errors should surface as command failures with user feedback,
+      // not be silently swallowed as auth denials.
+      expect(result).toEqual({
+        status: "rejected",
+        reason: expect.stringContaining("CMD_VOTE_TRANSIENT"),
+      });
+      expect(octokit.rest.reactions.createForIssueComment).toHaveBeenCalledWith(
+        expect.objectContaining({ content: "confused" }),
+      );
+      expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.stringContaining("transient"),
+        }),
+      );
+    });
+
+    it.each([
+      { code: "ETIMEDOUT", message: "connect ETIMEDOUT 140.82.114.3:443" },
+      { code: "ECONNREFUSED", message: "connect ECONNREFUSED 127.0.0.1:443" },
+      { code: "ENOTFOUND", message: "getaddrinfo ENOTFOUND api.github.com" },
+      { code: "EAI_AGAIN", message: "getaddrinfo EAI_AGAIN api.github.com" },
+      { code: "EPIPE", message: "write EPIPE" },
+    ])("should surface $code during auth check as a visible failure", async ({ code, message }) => {
+      const octokit = createMockOctokit();
+      const err = Object.assign(new Error(message), { code });
+      octokit.rest.repos.getCollaboratorPermissionLevel.mockRejectedValue(err);
+
+      const ctx = createCtx({ octokit });
+      const result = await executeCommand(ctx);
+
+      expect(result).toEqual({
+        status: "rejected",
+        reason: expect.stringContaining("CMD_VOTE_TRANSIENT"),
+      });
+    });
+
+    it("should surface 429 rate-limit during auth check as a visible failure instead of silently denying", async () => {
+      const octokit = createMockOctokit();
+      const rateLimited = Object.assign(new Error("rate limit exceeded"), { status: 429 });
+      octokit.rest.repos.getCollaboratorPermissionLevel.mockRejectedValue(rateLimited);
+
+      const ctx = createCtx({ octokit });
+      const result = await executeCommand(ctx);
+
+      expect(result).toEqual({
+        status: "rejected",
+        reason: expect.stringContaining("CMD_VOTE_TRANSIENT"),
+      });
+      expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.stringContaining("transient"),
+        }),
+      );
+    });
+
+    it("should surface 503 server error during auth check as a visible failure instead of silently denying", async () => {
+      const octokit = createMockOctokit();
+      const serverError = Object.assign(new Error("Service Unavailable"), { status: 503 });
+      octokit.rest.repos.getCollaboratorPermissionLevel.mockRejectedValue(serverError);
+
+      const ctx = createCtx({ octokit });
+      const result = await executeCommand(ctx);
+
+      expect(result).toEqual({
+        status: "rejected",
+        reason: expect.stringContaining("CMD_VOTE_TRANSIENT"),
+      });
+      expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.stringContaining("transient"),
+        }),
+      );
+    });
+
+    it("should not crash when feedback delivery fails during transient auth error", async () => {
+      const octokit = createMockOctokit();
+      const econnreset = Object.assign(new Error("read ECONNRESET"), {
+        code: "ECONNRESET",
+      });
+      octokit.rest.repos.getCollaboratorPermissionLevel.mockRejectedValue(econnreset);
+      // Both feedback calls fail — the API is down
+      octokit.rest.reactions.createForIssueComment.mockRejectedValue(
+        new Error("ECONNRESET"),
+      );
+      octokit.rest.issues.createComment.mockRejectedValue(
+        new Error("ECONNRESET"),
+      );
+
+      const ctx = createCtx({ octokit });
+      const result = await executeCommand(ctx);
+
+      // Should still return rejected, not crash
+      expect(result.status).toBe("rejected");
+      // Should log that feedback delivery failed
+      expect(ctx.log.error).toHaveBeenCalled();
     });
   });
 

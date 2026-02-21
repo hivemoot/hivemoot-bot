@@ -195,6 +195,16 @@ async function isAuthorized(ctx: CommandContext): Promise<AuthorizationResult> {
   }
 }
 
+/** Network-level error codes that indicate a transient failure. */
+const TRANSIENT_NETWORK_CODES = new Set([
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "EPIPE",
+]);
+
 /**
  * Determine whether an error is transient (network-level or server-side)
  * and therefore worth surfacing rather than treating as an auth denial.
@@ -207,8 +217,7 @@ function isTransientError(error: unknown): boolean {
     "code" in error &&
     typeof (error as { code: unknown }).code === "string"
   ) {
-    const code = (error as { code: string }).code;
-    if (code === "ECONNRESET" || code === "ETIMEDOUT" || code === "ECONNREFUSED") {
+    if (TRANSIENT_NETWORK_CODES.has((error as { code: string }).code)) {
       return true;
     }
   }
@@ -231,15 +240,17 @@ function getErrorStatus(error: unknown): number | null {
 }
 
 function classifyCommandFailure(error: unknown): CommandFailureClassification {
+  // Delegate to isTransientError() so network-level codes (ECONNRESET, etc.)
+  // are classified as "transient" — not just HTTP 429/5xx.
+  if (isTransientError(error)) {
+    return "transient";
+  }
   const status = getErrorStatus(error);
   if (status === 401 || status === 403) {
     return "permission";
   }
   if (status === 400 || status === 404 || status === 409 || status === 422) {
     return "validation";
-  }
-  if (status === 429 || (status !== null && status >= 500)) {
-    return "transient";
   }
   return "unexpected";
 }

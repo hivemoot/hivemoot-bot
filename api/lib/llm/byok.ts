@@ -1,17 +1,17 @@
 import { createDecipheriv } from "node:crypto";
 
-import { Redis } from "ioredis";
-
 import type { LLMProvider } from "./types.js";
 
 const DEFAULT_REDIS_KEY_PREFIX = "hive:byok";
-const REDIS_URL_ENV = "HIVEMOOT_REDIS_URL";
+const REDIS_URL_ENV_CANDIDATES = ["BYOK_REDIS_REST_URL", "UPSTASH_REDIS_REST_URL"] as const;
+const REDIS_TOKEN_ENV_CANDIDATES = ["BYOK_REDIS_REST_TOKEN", "UPSTASH_REDIS_REST_TOKEN"] as const;
 const MASTER_KEYS_ENV = "BYOK_MASTER_KEYS_JSON";
 const REDIS_KEY_PREFIX_ENV = "BYOK_REDIS_KEY_PREFIX";
-const REDIS_COMMAND_TIMEOUT_MS = 5000;
+const REDIS_FETCH_TIMEOUT_MS = 5000;
 
 interface RedisRuntimeConfig {
-  redisUrl: string;
+  url: string;
+  token: string;
   keyPrefix: string;
 }
 
@@ -57,47 +57,37 @@ function normalizeEnvString(value: string | undefined): string | undefined {
   return normalized.length > 0 ? normalized : undefined;
 }
 
+function readFirstEnv(names: readonly string[]): string | undefined {
+  for (const name of names) {
+    const value = normalizeEnvString(process.env[name]);
+    if (value !== undefined) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
 function getRedisRuntimeConfig(): RedisRuntimeConfig | null {
-  const redisUrl = normalizeEnvString(process.env[REDIS_URL_ENV]);
-  if (!redisUrl) {
+  const url = readFirstEnv(REDIS_URL_ENV_CANDIDATES);
+  const token = readFirstEnv(REDIS_TOKEN_ENV_CANDIDATES);
+
+  if (!url && !token) {
     return null;
+  }
+
+  if (!url || !token) {
+    throw new Error(
+      "BYOK Redis runtime is misconfigured: set both BYOK_REDIS_REST_URL (or UPSTASH_REDIS_REST_URL) and BYOK_REDIS_REST_TOKEN (or UPSTASH_REDIS_REST_TOKEN)"
+    );
   }
 
   const keyPrefix = normalizeEnvString(process.env[REDIS_KEY_PREFIX_ENV]) ?? DEFAULT_REDIS_KEY_PREFIX;
 
-  return { redisUrl, keyPrefix };
-}
-
-let redisClient: Redis | null = null;
-
-function getOrCreateRedisClient(redisUrl: string): Redis {
-  if (redisClient && redisClient.status !== "end" && redisClient.status !== "close") {
-    return redisClient;
-  }
-
-  // Dispose of dead client if one exists
-  if (redisClient) {
-    redisClient.disconnect();
-    redisClient = null;
-  }
-
-  const client = new Redis(redisUrl, {
-    lazyConnect: true,
-    commandTimeout: REDIS_COMMAND_TIMEOUT_MS,
-    // One retry catches transient blips; more risks webhook timeout
-    // (worst-case ≈ connectTimeout × retries + commandTimeout)
-    maxRetriesPerRequest: 1,
-    connectTimeout: 5000,
-  });
-
-  // Prevent unhandled 'error' events from crashing long-lived processes.
-  // Command-level errors are already caught in fetchEnvelope's try-catch.
-  client.on("error", (err: Error) => {
-    console.error(`[byok] Redis client error: ${err.message}`);
-  });
-
-  redisClient = client;
-  return client;
+  return {
+    url: url.replace(/\/+$/, ""),
+    token,
+    keyPrefix,
+  };
 }
 
 function parseProvider(raw: unknown): LLMProvider {
@@ -259,23 +249,52 @@ async function fetchEnvelope(
   installationId: number,
 ): Promise<BYOKEnvelope | null> {
   const key = `${runtimeConfig.keyPrefix}:${installationId}`;
-  const client = getOrCreateRedisClient(runtimeConfig.redisUrl);
+  const endpoint = `${runtimeConfig.url}/get/${encodeURIComponent(key)}`;
 
-  let raw: string | null;
+  let response: Response;
   try {
-    raw = await client.get(key);
+    response = await fetch(endpoint, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${runtimeConfig.token}`,
+        Accept: "application/json",
+      },
+      signal: AbortSignal.timeout(REDIS_FETCH_TIMEOUT_MS),
+    });
   } catch (error) {
-    throw new Error(
-      `BYOK Redis lookup failed for installation ${installationId}: ${error instanceof Error ? error.message : String(error)}`,
-      { cause: error },
-    );
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(`BYOK Redis lookup timed out after ${REDIS_FETCH_TIMEOUT_MS}ms`);
+    }
+    throw error;
   }
 
-  if (raw === null) {
+  if (!response.ok) {
+    throw new Error(`BYOK Redis lookup failed with HTTP ${response.status}`);
+  }
+
+  let body: { result?: unknown; error?: unknown };
+  try {
+    body = (await response.json()) as typeof body;
+  } catch {
+    throw new Error(`BYOK Redis REST response is not valid JSON (HTTP ${response.status})`);
+  }
+  if (typeof body.error === "string" && body.error.length > 0) {
+    throw new Error(`BYOK Redis returned an error for installation ${installationId}`);
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(body, "result")) {
+    throw new Error("BYOK Redis response is missing the 'result' field");
+  }
+
+  if (body.result === null) {
     return null;
   }
 
-  return parseEnvelope(raw);
+  if (typeof body.result !== "string") {
+    throw new Error("BYOK Redis returned an unexpected result payload");
+  }
+
+  return parseEnvelope(body.result);
 }
 
 /**

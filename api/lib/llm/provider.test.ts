@@ -3,20 +3,6 @@ import { createCipheriv, randomBytes } from "node:crypto";
 import { isLLMConfigured, getLLMConfig, createModel, createModelFromEnv, getLLMReadiness } from "./provider.js";
 import type { LLMConfig, LLMProvider } from "./types.js";
 
-const { mockGet } = vi.hoisted(() => ({
-  mockGet: vi.fn(),
-}));
-
-vi.mock("ioredis", () => {
-  const MockRedis = class {
-    get = mockGet;
-    on() { return this; }
-    disconnect() {}
-    status = "ready";
-  };
-  return { default: MockRedis, Redis: MockRedis };
-});
-
 /**
  * Tests for LLM Provider Factory
  */
@@ -27,7 +13,6 @@ describe("LLM Provider", () => {
   beforeEach(() => {
     vi.resetModules();
     process.env = { ...originalEnv };
-    mockGet.mockReset();
   });
 
   afterEach(() => {
@@ -448,7 +433,12 @@ describe("LLM Provider", () => {
     }
 
     function mockRedisLookup(result: string | null): void {
-      mockGet.mockResolvedValue(result);
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ result }),
+      });
+      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
     }
 
     it("should return null when LLM not configured", async () => {
@@ -511,7 +501,8 @@ describe("LLM Provider", () => {
         masterKey,
       );
 
-      process.env.HIVEMOOT_REDIS_URL = "rediss://example-redis.upstash.io:6380";
+      process.env.BYOK_REDIS_REST_URL = "https://example-redis.upstash.io";
+      process.env.BYOK_REDIS_REST_TOKEN = "byok-token";
       process.env.BYOK_MASTER_KEYS_JSON = JSON.stringify({
         v1: masterKey.toString("base64"),
       });
@@ -534,11 +525,16 @@ describe("LLM Provider", () => {
       expect(result?.config.maxTokens).toBe(2500);
       expect(result?.model.modelId).toBe("gpt-4o-mini");
 
-      expect(mockGet).toHaveBeenCalledWith("hive:byok:42");
+      const fetchMock = vi.mocked(fetch);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0]?.[0]).toBe(
+        "https://example-redis.upstash.io/get/hive%3Abyok%3A42",
+      );
     });
 
     it("should return null when BYOK record is missing for installation", async () => {
-      process.env.HIVEMOOT_REDIS_URL = "rediss://example-redis.upstash.io:6380";
+      process.env.BYOK_REDIS_REST_URL = "https://example-redis.upstash.io";
+      process.env.BYOK_REDIS_REST_TOKEN = "byok-token";
       process.env.BYOK_MASTER_KEYS_JSON = JSON.stringify({
         v1: randomBytes(32).toString("base64"),
       });
@@ -558,7 +554,8 @@ describe("LLM Provider", () => {
         masterKey,
       );
 
-      process.env.HIVEMOOT_REDIS_URL = "rediss://example-redis.upstash.io:6380";
+      process.env.BYOK_REDIS_REST_URL = "https://example-redis.upstash.io";
+      process.env.BYOK_REDIS_REST_TOKEN = "byok-token";
       process.env.BYOK_MASTER_KEYS_JSON = JSON.stringify({
         v2: randomBytes(32).toString("base64"),
       });
@@ -579,7 +576,8 @@ describe("LLM Provider", () => {
     });
 
     it("should throw when BYOK payload cannot be decrypted", async () => {
-      process.env.HIVEMOOT_REDIS_URL = "rediss://example-redis.upstash.io:6380";
+      process.env.BYOK_REDIS_REST_URL = "https://example-redis.upstash.io";
+      process.env.BYOK_REDIS_REST_TOKEN = "byok-token";
       process.env.BYOK_MASTER_KEYS_JSON = JSON.stringify({
         v1: randomBytes(32).toString("base64"),
       });
@@ -606,7 +604,8 @@ describe("LLM Provider", () => {
         masterKey,
       );
 
-      process.env.HIVEMOOT_REDIS_URL = "rediss://example-redis.upstash.io:6380";
+      process.env.BYOK_REDIS_REST_URL = "https://example-redis.upstash.io";
+      process.env.BYOK_REDIS_REST_TOKEN = "byok-token";
       process.env.BYOK_MASTER_KEYS_JSON = JSON.stringify({
         v1: masterKey.toString("base64"),
       });

@@ -3,28 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { resolveInstallationBYOKConfig } from "./byok.js";
 
-const { mockGet, mockState } = vi.hoisted(() => ({
-  mockGet: vi.fn(),
-  mockState: {
-    status: "ready" as string,
-    errorHandler: null as ((err: Error) => void) | null,
-    disconnected: false,
-  },
-}));
-
-vi.mock("ioredis", () => {
-  const MockRedis = class {
-    get = mockGet;
-    on(event: string, handler: (...args: unknown[]) => void) {
-      if (event === "error") mockState.errorHandler = handler as (err: Error) => void;
-      return this;
-    }
-    disconnect() { mockState.disconnected = true; }
-    get status() { return mockState.status; }
-  };
-  return { default: MockRedis, Redis: MockRedis };
-});
-
 type EnvelopeOverrides = Partial<{
   ciphertext: string;
   iv: string;
@@ -75,10 +53,14 @@ function buildEnvelope(
 function setRedisEnv(
   overrides: Record<string, string | undefined> = {},
 ): void {
-  delete process.env.HIVEMOOT_REDIS_URL;
+  delete process.env.BYOK_REDIS_REST_URL;
+  delete process.env.BYOK_REDIS_REST_TOKEN;
+  delete process.env.UPSTASH_REDIS_REST_URL;
+  delete process.env.UPSTASH_REDIS_REST_TOKEN;
   delete process.env.BYOK_REDIS_KEY_PREFIX;
 
-  process.env.HIVEMOOT_REDIS_URL = "rediss://redis.example.com:6380";
+  process.env.BYOK_REDIS_REST_URL = "https://redis.example.com";
+  process.env.BYOK_REDIS_REST_TOKEN = "redis-token";
 
   for (const [key, value] of Object.entries(overrides)) {
     if (value === undefined) {
@@ -94,12 +76,17 @@ function setMasterKeys(value: string | Record<string, string>): void {
     typeof value === "string" ? value : JSON.stringify(value);
 }
 
-function stubRedisGet(value: string | null): void {
-  mockGet.mockResolvedValue(value);
-}
-
-function stubRedisError(error: Error): void {
-  mockGet.mockRejectedValue(error);
+function stubRedisResponse(
+  body: Record<string, unknown>,
+  options: { ok?: boolean; status?: number } = {},
+): ReturnType<typeof vi.fn> {
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: options.ok ?? true,
+    status: options.status ?? 200,
+    json: async () => body,
+  });
+  vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+  return fetchMock;
 }
 
 describe("resolveInstallationBYOKConfig", () => {
@@ -107,32 +94,41 @@ describe("resolveInstallationBYOKConfig", () => {
 
   beforeEach(() => {
     process.env = { ...originalEnv };
-    mockGet.mockReset();
-    mockState.status = "ready";
-    mockState.errorHandler = null;
-    mockState.disconnected = false;
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     process.env = originalEnv;
   });
 
-  it("returns null when HIVEMOOT_REDIS_URL is blank", async () => {
-    process.env.HIVEMOOT_REDIS_URL = "   ";
+  it("returns null when Redis runtime config is blank or missing", async () => {
+    process.env.BYOK_REDIS_REST_URL = "   ";
+    process.env.BYOK_REDIS_REST_TOKEN = "   ";
 
     await expect(resolveInstallationBYOKConfig(1)).resolves.toBeNull();
   });
 
-  it("returns null when HIVEMOOT_REDIS_URL is undefined", async () => {
-    delete process.env.HIVEMOOT_REDIS_URL;
+  it("throws when only URL is set without token", async () => {
+    setRedisEnv({ BYOK_REDIS_REST_TOKEN: undefined });
 
-    await expect(resolveInstallationBYOKConfig(1)).resolves.toBeNull();
+    await expect(resolveInstallationBYOKConfig(1)).rejects.toThrow(
+      "BYOK Redis runtime is misconfigured",
+    );
+  });
+
+  it("throws when only token is set without URL", async () => {
+    setRedisEnv({ BYOK_REDIS_REST_URL: undefined });
+
+    await expect(resolveInstallationBYOKConfig(1)).rejects.toThrow(
+      "BYOK Redis runtime is misconfigured",
+    );
   });
 
   it("normalizes quoted runtime config and resolves a gemini provider", async () => {
     const masterKey = randomBytes(32);
     setRedisEnv({
-      HIVEMOOT_REDIS_URL: " 'rediss://redis.example.com:6380' ",
+      BYOK_REDIS_REST_URL: " 'https://redis.example.com///' ",
+      BYOK_REDIS_REST_TOKEN: ' "redis-token" ',
       BYOK_REDIS_KEY_PREFIX: " 'custom:byok' ",
     });
     setMasterKeys({ v1: masterKey.toString("base64") });
@@ -141,7 +137,7 @@ describe("resolveInstallationBYOKConfig", () => {
       { apiKey: "sk-byok", provider: "gemini", model: "  gemini-2.0-flash  " },
       masterKey,
     );
-    stubRedisGet(envelope);
+    const fetchMock = stubRedisResponse({ result: envelope });
 
     const resolved = await resolveInstallationBYOKConfig(99);
 
@@ -150,69 +146,149 @@ describe("resolveInstallationBYOKConfig", () => {
       provider: "google",
       model: "gemini-2.0-flash",
     });
-    expect(mockGet).toHaveBeenCalledWith("custom:byok:99");
-  });
-
-  it("throws when Redis command fails", async () => {
-    setRedisEnv();
-    stubRedisError(new Error("ECONNRESET"));
-
-    await expect(resolveInstallationBYOKConfig(2)).rejects.toThrow(
-      "BYOK Redis lookup failed for installation 2: ECONNRESET",
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://redis.example.com/get/custom%3Abyok%3A99",
     );
   });
 
-  it("recreates client when previous client enters 'end' state", async () => {
+  it("throws when Redis request fails", async () => {
     setRedisEnv();
-    stubRedisGet(null);
-    await resolveInstallationBYOKConfig(1);
-    mockState.status = "end";
-    stubRedisGet(null);
+    stubRedisResponse({}, { ok: false, status: 503 });
 
-    await expect(resolveInstallationBYOKConfig(2)).resolves.toBeNull();
-    expect(mockState.disconnected).toBe(true);
+    await expect(resolveInstallationBYOKConfig(2)).rejects.toThrow(
+      "BYOK Redis lookup failed with HTTP 503",
+    );
   });
 
-  it("handles Redis client error events without crashing", async () => {
+  it("throws when Redis lookup times out", async () => {
     setRedisEnv();
-    // Force client creation so the error handler is registered
-    mockState.status = "end";
-    stubRedisGet(null);
+    const abortError = new Error("Request aborted");
+    abortError.name = "AbortError";
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(abortError) as unknown as typeof fetch);
+
+    await expect(resolveInstallationBYOKConfig(2)).rejects.toThrow(
+      "BYOK Redis lookup timed out after 5000ms",
+    );
+  });
+
+  it("re-throws non-abort fetch errors as-is", async () => {
+    setRedisEnv();
+    const networkError = new TypeError("Failed to fetch");
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(networkError) as unknown as typeof fetch);
+
+    await expect(resolveInstallationBYOKConfig(2)).rejects.toThrow("Failed to fetch");
+  });
+
+  it("falls back to UPSTASH_* env vars when BYOK_* vars are absent", async () => {
+    const masterKey = randomBytes(32);
+    delete process.env.BYOK_REDIS_REST_URL;
+    delete process.env.BYOK_REDIS_REST_TOKEN;
+    delete process.env.UPSTASH_REDIS_REST_URL;
+    delete process.env.UPSTASH_REDIS_REST_TOKEN;
+
+    process.env.UPSTASH_REDIS_REST_URL = "https://upstash.example.com";
+    process.env.UPSTASH_REDIS_REST_TOKEN = "upstash-token";
+    setMasterKeys({ v1: masterKey.toString("base64") });
+
+    const envelope = buildEnvelope(
+      { apiKey: "sk-upstash", provider: "openai" },
+      masterKey,
+    );
+    const fetchMock = stubRedisResponse({ result: envelope });
+
+    const resolved = await resolveInstallationBYOKConfig(1);
+
+    expect(resolved).toEqual({
+      apiKey: "sk-upstash",
+      provider: "openai",
+      model: undefined,
+    });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://upstash.example.com/get/hive%3Abyok%3A1",
+    );
+  });
+
+  it("sends Authorization header with Bearer token", async () => {
+    setRedisEnv();
+    const fetchMock = stubRedisResponse({ result: null });
+
     await resolveInstallationBYOKConfig(1);
 
-    expect(mockState.errorHandler).toBeInstanceOf(Function);
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    mockState.errorHandler!(new Error("ECONNRESET"));
-    expect(spy).toHaveBeenCalledWith("[byok] Redis client error: ECONNRESET");
-    spy.mockRestore();
+    const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(requestInit.headers).toEqual(
+      expect.objectContaining({
+        Authorization: "Bearer redis-token",
+      }),
+    );
+  });
+
+  it("throws when Redis REST response is not valid JSON", async () => {
+    setRedisEnv();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => { throw new SyntaxError("Unexpected token"); },
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    await expect(resolveInstallationBYOKConfig(2)).rejects.toThrow(
+      "BYOK Redis REST response is not valid JSON (HTTP 200)",
+    );
+  });
+
+  it("throws when Redis returns an explicit error field", async () => {
+    setRedisEnv();
+    stubRedisResponse({ error: "forbidden", result: null });
+
+    await expect(resolveInstallationBYOKConfig(2)).rejects.toThrow(
+      "BYOK Redis returned an error for installation 2",
+    );
+  });
+
+  it("throws when Redis response omits the result field", async () => {
+    setRedisEnv();
+    stubRedisResponse({});
+
+    await expect(resolveInstallationBYOKConfig(2)).rejects.toThrow(
+      "BYOK Redis response is missing the 'result' field",
+    );
+  });
+
+  it("throws when Redis returns a non-string result", async () => {
+    setRedisEnv();
+    stubRedisResponse({ result: 123 });
+
+    await expect(resolveInstallationBYOKConfig(2)).rejects.toThrow(
+      "BYOK Redis returned an unexpected result payload",
+    );
   });
 
   it("returns null for revoked BYOK records", async () => {
     setRedisEnv();
-    stubRedisGet(
-      JSON.stringify({
+    stubRedisResponse({
+      result: JSON.stringify({
         ciphertext: "AA==",
         iv: "AA==",
         tag: "AA==",
         keyVersion: "v1",
         status: "revoked",
       }),
-    );
+    });
 
     await expect(resolveInstallationBYOKConfig(3)).resolves.toBeNull();
   });
 
   it("throws for non-active, non-revoked BYOK record status", async () => {
     setRedisEnv();
-    stubRedisGet(
-      JSON.stringify({
+    stubRedisResponse({
+      result: JSON.stringify({
         ciphertext: "AA==",
         iv: "AA==",
         tag: "AA==",
         keyVersion: "v1",
         status: "pending",
       }),
-    );
+    });
 
     await expect(resolveInstallationBYOKConfig(3)).rejects.toThrow(
       "BYOK record for installation 3 is not active (status=pending)",
@@ -227,7 +303,7 @@ describe("resolveInstallationBYOKConfig", () => {
       buildEnvelope({ apiKey: "sk", provider: "openai" }, masterKey),
     ) as Record<string, unknown>;
     delete envelope.status;
-    stubRedisGet(JSON.stringify(envelope));
+    stubRedisResponse({ result: JSON.stringify(envelope) });
 
     await expect(resolveInstallationBYOKConfig(3)).rejects.toThrow(
       "BYOK record for installation 3 is not active (status=missing)",
@@ -238,13 +314,13 @@ describe("resolveInstallationBYOKConfig", () => {
     const masterKey = randomBytes(32);
     setRedisEnv();
     setMasterKeys({ v1: masterKey.toString("base64") });
-    stubRedisGet(
-      buildEnvelope(
+    stubRedisResponse({
+      result: buildEnvelope(
         { apiKey: "sk", provider: "openai" },
         masterKey,
         { status: " " },
       ),
-    );
+    });
 
     await expect(resolveInstallationBYOKConfig(3)).rejects.toThrow(
       "BYOK record for installation 3 is not active (status= )",
@@ -255,9 +331,9 @@ describe("resolveInstallationBYOKConfig", () => {
     const masterKey = randomBytes(32);
     setRedisEnv();
     delete process.env.BYOK_MASTER_KEYS_JSON;
-    stubRedisGet(
-      buildEnvelope({ apiKey: "sk", provider: "openai" }, masterKey),
-    );
+    stubRedisResponse({
+      result: buildEnvelope({ apiKey: "sk", provider: "openai" }, masterKey),
+    });
 
     await expect(resolveInstallationBYOKConfig(4)).rejects.toThrow(
       "BYOK master keys are not configured: set BYOK_MASTER_KEYS_JSON",
@@ -268,9 +344,9 @@ describe("resolveInstallationBYOKConfig", () => {
     const masterKey = randomBytes(32);
     setRedisEnv();
     setMasterKeys("not-json");
-    stubRedisGet(
-      buildEnvelope({ apiKey: "sk", provider: "openai" }, masterKey),
-    );
+    stubRedisResponse({
+      result: buildEnvelope({ apiKey: "sk", provider: "openai" }, masterKey),
+    });
 
     await expect(resolveInstallationBYOKConfig(4)).rejects.toThrow(
       "BYOK_MASTER_KEYS_JSON must be valid JSON",
@@ -281,9 +357,9 @@ describe("resolveInstallationBYOKConfig", () => {
     const masterKey = randomBytes(32);
     setRedisEnv();
     setMasterKeys("[]");
-    stubRedisGet(
-      buildEnvelope({ apiKey: "sk", provider: "openai" }, masterKey),
-    );
+    stubRedisResponse({
+      result: buildEnvelope({ apiKey: "sk", provider: "openai" }, masterKey),
+    });
 
     await expect(resolveInstallationBYOKConfig(4)).rejects.toThrow(
       "BYOK_MASTER_KEYS_JSON must be a JSON object keyed by keyVersion",
@@ -294,9 +370,9 @@ describe("resolveInstallationBYOKConfig", () => {
     const masterKey = randomBytes(32);
     setRedisEnv();
     setMasterKeys({ v1: "" });
-    stubRedisGet(
-      buildEnvelope({ apiKey: "sk", provider: "openai" }, masterKey),
-    );
+    stubRedisResponse({
+      result: buildEnvelope({ apiKey: "sk", provider: "openai" }, masterKey),
+    });
 
     await expect(resolveInstallationBYOKConfig(4)).rejects.toThrow(
       "BYOK_MASTER_KEYS_JSON.v1 must be a non-empty base64 string",
@@ -307,9 +383,9 @@ describe("resolveInstallationBYOKConfig", () => {
     const masterKey = randomBytes(32);
     setRedisEnv();
     setMasterKeys({ v1: randomBytes(16).toString("base64") });
-    stubRedisGet(
-      buildEnvelope({ apiKey: "sk", provider: "openai" }, masterKey),
-    );
+    stubRedisResponse({
+      result: buildEnvelope({ apiKey: "sk", provider: "openai" }, masterKey),
+    });
 
     await expect(resolveInstallationBYOKConfig(4)).rejects.toThrow(
       "BYOK_MASTER_KEYS_JSON.v1 must decode to 32 bytes for AES-256-GCM",
@@ -320,27 +396,18 @@ describe("resolveInstallationBYOKConfig", () => {
     const masterKey = randomBytes(32);
     setRedisEnv();
     setMasterKeys({});
-    stubRedisGet(
-      buildEnvelope({ apiKey: "sk", provider: "openai" }, masterKey),
-    );
+    stubRedisResponse({
+      result: buildEnvelope({ apiKey: "sk", provider: "openai" }, masterKey),
+    });
 
     await expect(resolveInstallationBYOKConfig(4)).rejects.toThrow(
       "BYOK_MASTER_KEYS_JSON must include at least one key version",
     );
   });
 
-  it("throws when Redis returns an empty string", async () => {
-    setRedisEnv();
-    stubRedisGet("");
-
-    await expect(resolveInstallationBYOKConfig(5)).rejects.toThrow(
-      "BYOK envelope is not valid JSON",
-    );
-  });
-
   it("throws when BYOK envelope is not valid JSON", async () => {
     setRedisEnv();
-    stubRedisGet("not-json");
+    stubRedisResponse({ result: "not-json" });
 
     await expect(resolveInstallationBYOKConfig(5)).rejects.toThrow(
       "BYOK envelope is not valid JSON",
@@ -349,7 +416,7 @@ describe("resolveInstallationBYOKConfig", () => {
 
   it("throws when BYOK envelope is not an object", async () => {
     setRedisEnv();
-    stubRedisGet("[]");
+    stubRedisResponse({ result: "[]" });
 
     await expect(resolveInstallationBYOKConfig(5)).rejects.toThrow(
       "BYOK envelope must be a JSON object",
@@ -358,9 +425,9 @@ describe("resolveInstallationBYOKConfig", () => {
 
   it("throws when BYOK envelope is missing required fields", async () => {
     setRedisEnv();
-    stubRedisGet(
-      JSON.stringify({ keyVersion: "v1" }),
-    );
+    stubRedisResponse({
+      result: JSON.stringify({ keyVersion: "v1" }),
+    });
 
     await expect(resolveInstallationBYOKConfig(5)).rejects.toThrow(
       "BYOK envelope is missing required fields",
@@ -371,13 +438,13 @@ describe("resolveInstallationBYOKConfig", () => {
     const masterKey = randomBytes(32);
     setRedisEnv();
     setMasterKeys({ v1: masterKey.toString("base64") });
-    stubRedisGet(
-      buildEnvelope(
+    stubRedisResponse({
+      result: buildEnvelope(
         { apiKey: "sk", provider: "openai" },
         masterKey,
         { iv: "" },
       ),
-    );
+    });
 
     await expect(resolveInstallationBYOKConfig(6)).rejects.toThrow(
       "BYOK envelope field 'iv' is not valid base64",
@@ -388,6 +455,9 @@ describe("resolveInstallationBYOKConfig", () => {
     const masterKey = randomBytes(32);
     setRedisEnv();
     setMasterKeys({ v1: masterKey.toString("base64") });
+    // Produce an envelope with a 16-byte IV instead of the required 12 bytes.
+    // We encrypt the plaintext with the 16-byte IV so the envelope is valid
+    // structurally, but decryptEnvelope must reject it before touching crypto.
     const iv16 = randomBytes(16);
     const cipher = createCipheriv("aes-256-gcm" as any, masterKey, iv16);
     const payload = { apiKey: "sk", provider: "openai" };
@@ -402,7 +472,7 @@ describe("resolveInstallationBYOKConfig", () => {
       keyVersion: "v1",
       status: "active",
     });
-    stubRedisGet(envelope);
+    stubRedisResponse({ result: envelope });
 
     await expect(resolveInstallationBYOKConfig(6)).rejects.toThrow(
       "BYOK envelope IV must be 12 bytes (96 bits) for AES-256-GCM; got 16",
@@ -413,9 +483,9 @@ describe("resolveInstallationBYOKConfig", () => {
     const masterKey = randomBytes(32);
     setRedisEnv();
     setMasterKeys({ v1: masterKey.toString("base64") });
-    stubRedisGet(
-      buildEnvelope("not-json", masterKey),
-    );
+    stubRedisResponse({
+      result: buildEnvelope("not-json", masterKey),
+    });
 
     await expect(resolveInstallationBYOKConfig(7)).rejects.toThrow(
       "BYOK decrypted payload is not valid JSON",
@@ -426,9 +496,9 @@ describe("resolveInstallationBYOKConfig", () => {
     const masterKey = randomBytes(32);
     setRedisEnv();
     setMasterKeys({ v1: masterKey.toString("base64") });
-    stubRedisGet(
-      buildEnvelope(JSON.stringify("string-payload"), masterKey),
-    );
+    stubRedisResponse({
+      result: buildEnvelope(JSON.stringify("string-payload"), masterKey),
+    });
 
     await expect(resolveInstallationBYOKConfig(7)).rejects.toThrow(
       "BYOK decrypted payload must be a JSON object",
@@ -439,9 +509,9 @@ describe("resolveInstallationBYOKConfig", () => {
     const masterKey = randomBytes(32);
     setRedisEnv();
     setMasterKeys({ v1: masterKey.toString("base64") });
-    stubRedisGet(
-      buildEnvelope({ provider: "openai" }, masterKey),
-    );
+    stubRedisResponse({
+      result: buildEnvelope({ provider: "openai" }, masterKey),
+    });
 
     await expect(resolveInstallationBYOKConfig(7)).rejects.toThrow(
       "BYOK decrypted payload is missing apiKey",
@@ -452,13 +522,13 @@ describe("resolveInstallationBYOKConfig", () => {
     const masterKey = randomBytes(32);
     setRedisEnv();
     setMasterKeys({ v1: masterKey.toString("base64") });
-    stubRedisGet(
-      buildEnvelope(
+    stubRedisResponse({
+      result: buildEnvelope(
         { apiKey: "sk-only" },
         masterKey,
         { provider: "openai", model: "gpt-4o-mini" },
       ),
-    );
+    });
 
     await expect(resolveInstallationBYOKConfig(7)).rejects.toThrow(
       "BYOK provider is missing",
@@ -469,13 +539,13 @@ describe("resolveInstallationBYOKConfig", () => {
     const masterKey = randomBytes(32);
     setRedisEnv();
     setMasterKeys({ v1: masterKey.toString("base64") });
-    stubRedisGet(
-      buildEnvelope(
+    stubRedisResponse({
+      result: buildEnvelope(
         { apiKey: "sk", provider: "openai" },
         masterKey,
         { model: "gpt-4o-mini" },
       ),
-    );
+    });
 
     await expect(resolveInstallationBYOKConfig(7)).resolves.toEqual({
       apiKey: "sk",
@@ -488,9 +558,9 @@ describe("resolveInstallationBYOKConfig", () => {
     const masterKey = randomBytes(32);
     setRedisEnv();
     setMasterKeys({ v1: masterKey.toString("base64") });
-    stubRedisGet(
-      buildEnvelope({ apiKey: "sk", provider: "vertex" }, masterKey),
-    );
+    stubRedisResponse({
+      result: buildEnvelope({ apiKey: "sk", provider: "vertex" }, masterKey),
+    });
 
     await expect(resolveInstallationBYOKConfig(7)).rejects.toThrow(
       "Unsupported BYOK provider: vertex",

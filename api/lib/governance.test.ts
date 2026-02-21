@@ -132,11 +132,14 @@ describe("GovernanceService", () => {
     });
 
     it("should fall back to generic message and log warn when BYOK resolution fails", async () => {
+      const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+      const govWithLogger = new GovernanceService(mockIssues, mockLogger);
+
       vi.mocked(createModelFromEnv).mockRejectedValue(
-        new Error("BYOK Redis lookup failed for installation 42: ECONNRESET"),
+        new Error("BYOK Redis lookup failed with HTTP 503"),
       );
 
-      await governance.transitionToVoting(testRef);
+      await govWithLogger.transitionToVoting(testRef);
 
       expect(mockIssues.getIssueContext).not.toHaveBeenCalled();
       expect(mockIssues.transition).toHaveBeenCalledWith(testRef, {
@@ -144,6 +147,9 @@ describe("GovernanceService", () => {
         addLabel: LABELS.VOTING,
         comment: expect.stringContaining(MESSAGES.votingStart()),
       });
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.stringContaining("BYOK Redis lookup failed with HTTP 503"),
+      );
     });
 
     describe("with LLM configured", () => {

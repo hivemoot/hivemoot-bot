@@ -254,9 +254,9 @@ export class GovernanceService {
           : undefined
       );
     } catch (error) {
+      // BYOK runtime failures (Redis outage, decryption errors) are operator-actionable —
+      // log at warn. Config-missing errors are expected noise — log at debug.
       const message = error instanceof Error ? error.message : String(error);
-      // BYOK Redis/decryption failures are runtime errors, not config issues —
-      // log at warn so operators can investigate broken BYOK installations.
       const isByokRuntime = message.startsWith("BYOK ");
       this.logger[isByokRuntime ? "warn" : "debug"](
         `LLM model resolution failed for issue #${ref.issueNumber}: ${message}`,

@@ -148,6 +148,10 @@ export interface GitHubClient {
       params: unknown
     ) => AsyncIterable<{ data: T[] }>;
   };
+  request: (
+    route: string,
+    params?: Record<string, unknown>
+  ) => Promise<unknown>;
 }
 
 /**
@@ -307,6 +311,23 @@ export class IssueOperations {
         throw error;
       }
     }
+  }
+
+  /**
+   * Pin a comment on an issue.
+   *
+   * Uses octokit.request() directly because the pin endpoint is not yet included
+   * in @octokit/plugin-rest-endpoint-methods' named methods.
+   *
+   * Pinning is a UX enhancement only — callers wrap this in try/catch so that
+   * API failures (permission denied, endpoint unavailable) never interrupt the
+   * governance flow.
+   */
+  async pinComment(ref: IssueRef, commentId: number): Promise<void> {
+    await this.client.request(
+      "PUT /repos/{owner}/{repo}/issues/comments/{comment_id}/pin",
+      { owner: ref.owner, repo: ref.repo, comment_id: commentId }
+    );
   }
 
   /**

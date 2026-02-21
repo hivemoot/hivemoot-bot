@@ -28,6 +28,7 @@ import { processImplementationIntake } from "../api/lib/implementation-intake.js
 import { getLinkedIssues } from "../api/lib/graphql-queries.js";
 import { runForAllRepositories, runIfMain } from "./shared/run-installations.js";
 import { isExitEligible, isDiscussionExitEligible } from "../api/lib/governance.js";
+import { isTransientError, isRateLimitError } from "../api/lib/transient-error.js";
 import type {
   Repository,
   Issue,
@@ -88,65 +89,6 @@ export function hasAutomaticGovernancePhases(config: EffectiveConfig): boolean {
   return hasAutoExits(discussion.exits) || hasAutoExits(voting.exits) || hasAutoExits(extendedVoting.exits);
 }
 
-// ───────────────────────────────────────────────────────────────────────────────
-// Retry Utility
-// ───────────────────────────────────────────────────────────────────────────────
-
-interface RetryableError {
-  status?: number;
-  code?: string;
-  message?: string;
-  response?: {
-    headers?: Record<string, string | number | undefined>;
-  };
-}
-
-/**
- * Check if an error is retryable (transient network/API issues)
- */
-export function isRetryableError(error: unknown): boolean {
-  const err = error as RetryableError;
-  // Retry on server errors, rate limits, and network timeouts
-  return (
-    err.status === 502 ||
-    err.status === 503 ||
-    err.status === 504 ||
-    isRateLimitError(error) ||
-    err.code === "ETIMEDOUT" ||
-    err.code === "ECONNRESET"
-  );
-}
-
-function getHeaderValue(
-  headers: Record<string, string | number | undefined> | undefined,
-  name: string
-): string | undefined {
-  if (!headers) {
-    return undefined;
-  }
-  const target = name.toLowerCase();
-  for (const [key, value] of Object.entries(headers)) {
-    if (key.toLowerCase() === target && value !== undefined) {
-      return String(value);
-    }
-  }
-  return undefined;
-}
-
-function isRateLimitError(error: unknown): boolean {
-  const err = error as RetryableError;
-  if (err.status !== 403 && err.status !== 429) {
-    return false;
-  }
-  const remaining = getHeaderValue(err.response?.headers, "x-ratelimit-remaining");
-  const retryAfter = getHeaderValue(err.response?.headers, "retry-after");
-  if (remaining === "0" || retryAfter) {
-    return true;
-  }
-  const message = err.message?.toLowerCase() ?? "";
-  return message.includes("rate limit");
-}
-
 /**
  * Execute a function with exponential backoff retry for transient errors
  */
@@ -163,7 +105,7 @@ export async function withRetry<T>(
     } catch (error) {
       lastError = error as Error;
 
-      if (!isRetryableError(error) || attempt === maxAttempts) {
+      if (!isTransientError(error) || attempt === maxAttempts) {
         throw error;
       }
 
@@ -370,7 +312,10 @@ export function makeDiscussionEarlyCheck(
  * Check if an error indicates the issue was deleted
  */
 function isNotFound(error: unknown): boolean {
-  const status = (error as RetryableError).status;
+  const status =
+    typeof (error as { status?: unknown }).status === "number"
+      ? (error as { status: number }).status
+      : undefined;
   return status === 404 || status === 410;
 }
 
@@ -433,7 +378,10 @@ export async function processIssuePhase(
       );
       return;
     }
-    const status = (error as RetryableError).status;
+    const status =
+      typeof (error as { status?: unknown }).status === "number"
+        ? (error as { status: number }).status
+        : undefined;
     if (isRateLimitError(error) || status === 429) {
       logger.warn(`Issue #${ref.issueNumber} rate limited. Skipping for now.`);
       onAccessIssue?.(ref, status, "rate_limit");

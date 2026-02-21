@@ -507,7 +507,7 @@ async function handleVote(ctx: CommandContext): Promise<CommandResult> {
  *
  * This is a fast-track command that moves an issue directly to
  * ready-to-implement, bypassing or concluding voting early.
- * Valid from: discussion, voting, extended-voting, or needs-human phases.
+ * Valid from discussion, voting, extended-voting, needs-human, or unlabeled issues.
  */
 async function handleImplement(ctx: CommandContext): Promise<CommandResult> {
   if (ctx.isPullRequest) {
@@ -539,10 +539,6 @@ async function handleImplement(ctx: CommandContext): Promise<CommandResult> {
     removeLabel = LABELS.EXTENDED_VOTING;
   } else if (hasLabel(ctx, LABELS.NEEDS_HUMAN)) {
     removeLabel = LABELS.NEEDS_HUMAN;
-  }
-
-  if (!removeLabel) {
-    return { status: "rejected", reason: "This issue is not in a phase that can transition to ready-to-implement." };
   }
 
   const message = `# 🐝 Fast-tracked to Implementation ⚡\n\nMoved to ready-to-implement by @${ctx.senderLogin} via \`/implement\` command.\n\nNext steps:\n- Open a PR for review if you plan to implement.\n- Link this issue in the PR description (e.g., \`Fixes #${ctx.issueNumber}\`).${SIGNATURE}`;

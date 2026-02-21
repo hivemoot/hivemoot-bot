@@ -1112,7 +1112,7 @@ describe("executeCommand", () => {
       );
     });
 
-    it("should log when permission check fails", async () => {
+    it("should log when permission check fails with non-transient error", async () => {
       const octokit = createMockOctokit();
       octokit.rest.repos.getCollaboratorPermissionLevel.mockRejectedValue(
         new Error("Token expired"),
@@ -1125,6 +1125,63 @@ describe("executeCommand", () => {
       expect(ctx.log.error).toHaveBeenCalledWith(
         expect.objectContaining({ user: "maintainer" }),
         expect.stringContaining("Permission check failed"),
+      );
+    });
+
+    it("should rethrow ECONNRESET during auth check instead of silently denying", async () => {
+      const octokit = createMockOctokit();
+      const econnreset = Object.assign(new Error("read ECONNRESET"), {
+        code: "ECONNRESET",
+        errno: -104,
+        syscall: "read",
+      });
+      octokit.rest.repos.getCollaboratorPermissionLevel.mockRejectedValue(econnreset);
+
+      const ctx = createCtx({ octokit });
+      const result = await executeCommand(ctx);
+
+      // Transient errors should surface as command failures with user feedback,
+      // not be silently swallowed as auth denials.
+      expect(result.status).not.toBe("ignored");
+      expect(octokit.rest.reactions.createForIssueComment).toHaveBeenCalledWith(
+        expect.objectContaining({ content: "confused" }),
+      );
+      expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.stringContaining("Command failed"),
+        }),
+      );
+    });
+
+    it("should rethrow 429 rate-limit during auth check instead of silently denying", async () => {
+      const octokit = createMockOctokit();
+      const rateLimited = Object.assign(new Error("rate limit exceeded"), { status: 429 });
+      octokit.rest.repos.getCollaboratorPermissionLevel.mockRejectedValue(rateLimited);
+
+      const ctx = createCtx({ octokit });
+      const result = await executeCommand(ctx);
+
+      expect(result.status).not.toBe("ignored");
+      expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.stringContaining("transient"),
+        }),
+      );
+    });
+
+    it("should rethrow 503 server error during auth check instead of silently denying", async () => {
+      const octokit = createMockOctokit();
+      const serverError = Object.assign(new Error("Service Unavailable"), { status: 503 });
+      octokit.rest.repos.getCollaboratorPermissionLevel.mockRejectedValue(serverError);
+
+      const ctx = createCtx({ octokit });
+      const result = await executeCommand(ctx);
+
+      expect(result.status).not.toBe("ignored");
+      expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.stringContaining("Command failed"),
+        }),
       );
     });
   });

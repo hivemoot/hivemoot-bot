@@ -625,10 +625,10 @@ async function handleGather(ctx: CommandContext): Promise<CommandResult> {
     }
   } catch (error) {
     if (existingAlignmentCommentId) {
-      const reason = error instanceof Error ? error.message : String(error);
+      ctx.log.error({ err: error, issue: ctx.issueNumber }, "Blueprint refresh failed in handleGather");
       await reply(
         ctx,
-        `I couldn't refresh the blueprint just now (${reason}). Keeping the previous blueprint comment unchanged.\n\nPlease retry \`/gather\` shortly.`,
+        `I couldn't refresh the blueprint just now. Please retry \`/gather\` shortly, or contact your administrator if the problem persists.`,
       );
       return { status: "executed", message: "Blueprint refresh failed; previous comment preserved." };
     }

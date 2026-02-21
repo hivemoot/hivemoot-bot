@@ -378,6 +378,34 @@ describe("resolveInstallationBYOKConfig", () => {
     );
   });
 
+  it("throws when BYOK envelope IV is not 12 bytes (rejects 16-byte IV)", async () => {
+    const masterKey = randomBytes(32);
+    setRedisEnv();
+    setMasterKeys({ v1: masterKey.toString("base64") });
+    // Produce an envelope with a 16-byte IV instead of the required 12 bytes.
+    // We encrypt the plaintext with the 16-byte IV so the envelope is valid
+    // structurally, but decryptEnvelope must reject it before touching crypto.
+    const iv16 = randomBytes(16);
+    const cipher = createCipheriv("aes-256-gcm" as any, masterKey, iv16);
+    const payload = { apiKey: "sk", provider: "openai" };
+    const ciphertext = Buffer.concat([
+      cipher.update(Buffer.from(JSON.stringify(payload), "utf8")),
+      cipher.final(),
+    ]);
+    const envelope = JSON.stringify({
+      ciphertext: ciphertext.toString("base64"),
+      iv: iv16.toString("base64"),
+      tag: cipher.getAuthTag().toString("base64"),
+      keyVersion: "v1",
+      status: "active",
+    });
+    stubRedisResponse({ result: envelope });
+
+    await expect(resolveInstallationBYOKConfig(6)).rejects.toThrow(
+      "BYOK envelope IV must be 12 bytes (96 bits) for AES-256-GCM; got 16",
+    );
+  });
+
   it("throws when decrypted payload is not valid JSON", async () => {
     const masterKey = randomBytes(32);
     setRedisEnv();

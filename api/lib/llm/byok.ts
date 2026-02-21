@@ -210,6 +210,10 @@ function decryptEnvelope(
   }
 
   const iv = decodeBase64Field("iv", envelope.iv);
+  if (iv.length !== 12) {
+    throw new Error(`BYOK envelope IV must be 12 bytes (96 bits) for AES-256-GCM; got ${iv.length}`);
+  }
+
   const authTag = decodeBase64Field("tag", envelope.tag);
   const ciphertext = decodeBase64Field("ciphertext", envelope.ciphertext);
 

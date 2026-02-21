@@ -814,9 +814,24 @@ describe("executeCommand", () => {
       expect(ctx.octokit.rest.issues.updateComment).not.toHaveBeenCalled();
       expect(ctx.octokit.rest.issues.createComment).toHaveBeenCalledWith(
         expect.objectContaining({
-          body: expect.stringContaining("Keeping the previous blueprint comment unchanged."),
+          body: expect.stringContaining("I couldn't refresh the blueprint just now."),
         }),
       );
+    });
+
+    it("should not expose raw error message to users when blueprint refresh fails", async () => {
+      mockIssueOps.findAlignmentCommentId.mockResolvedValue(555);
+      const sensitiveError = new Error("AES-256-GCM decryption failed: Invalid auth tag");
+      mockIssueOps.getIssueContext.mockRejectedValue(sensitiveError);
+
+      const ctx = createCtx({ verb: "gather" });
+      await executeCommand(ctx);
+
+      const createCall = (ctx.octokit.rest.issues.createComment as ReturnType<typeof vi.fn>).mock.calls[0];
+      const postedBody: string = createCall[0].body;
+      expect(postedBody).not.toContain("AES-256-GCM");
+      expect(postedBody).not.toContain("Invalid auth tag");
+      expect(postedBody).toContain("contact your administrator");
     });
   });
 

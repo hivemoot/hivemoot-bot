@@ -11,6 +11,7 @@
 import {
   parseMetadata,
   isVotingComment,
+  isAlignmentComment,
   isHumanHelpComment,
   isNotificationComment,
   selectCurrentVotingComment,
@@ -23,6 +24,7 @@ import {
   hasPaginateIterator,
   ISSUE_CLIENT_CHECKS,
 } from "./client-validation.js";
+import { LEGACY_LABEL_MAP, isLabelMatch } from "../config.js";
 import { logger } from "./logger.js";
 
 // Re-export IssueComment for backwards compatibility
@@ -46,6 +48,7 @@ export interface Reaction {
 export interface IssueCommentWithAuthor extends IssueComment {
   user?: { login: string; type?: string } | null;
   created_at?: string;
+  reactions?: { "+1"?: number; "-1"?: number };
 }
 
 /**
@@ -56,6 +59,7 @@ export interface IssueData {
   body?: string | null;
   user?: { login: string } | null;
   reactions?: { "+1": number; "-1": number; confused: number; eyes?: number };
+  labels?: Array<string | { name?: string }>;
 }
 
 export interface GitHubClient {
@@ -144,6 +148,10 @@ export interface GitHubClient {
       params: unknown
     ) => AsyncIterable<{ data: T[] }>;
   };
+  request: (
+    route: string,
+    params?: Record<string, unknown>
+  ) => Promise<unknown>;
 }
 
 /**
@@ -211,7 +219,11 @@ export class IssueOperations {
   }
 
   /**
-   * Remove a label from an issue
+   * Remove a label from an issue.
+   *
+   * On 404 (canonical name not found), falls back to removing legacy aliases
+   * that map to the same canonical label. This prevents dual label accumulation
+   * during the transition period where issues may carry old label names.
    */
   async removeLabel(ref: IssueRef, label: string): Promise<void> {
     try {
@@ -222,9 +234,24 @@ export class IssueOperations {
         name: label,
       });
     } catch (error) {
-      // Label might not exist - ignore 404 errors
       if ((error as { status?: number }).status !== 404) {
         throw error;
+      }
+      // Canonical not found — try legacy aliases
+      for (const [legacy, canonical] of Object.entries(LEGACY_LABEL_MAP)) {
+        if (canonical === label) {
+          try {
+            await this.client.rest.issues.removeLabel({
+              owner: ref.owner,
+              repo: ref.repo,
+              issue_number: ref.issueNumber,
+              name: legacy,
+            });
+            return;
+          } catch (e) {
+            if ((e as { status?: number }).status !== 404) throw e;
+          }
+        }
       }
     }
   }
@@ -284,6 +311,23 @@ export class IssueOperations {
         throw error;
       }
     }
+  }
+
+  /**
+   * Pin a comment on an issue.
+   *
+   * Uses octokit.request() directly because the pin endpoint is not yet included
+   * in @octokit/plugin-rest-endpoint-methods' named methods.
+   *
+   * Pinning is a UX enhancement only — callers wrap this in try/catch so that
+   * API failures (permission denied, endpoint unavailable) never interrupt the
+   * governance flow.
+   */
+  async pinComment(ref: IssueRef, commentId: number): Promise<void> {
+    await this.client.request(
+      "PUT /repos/{owner}/{repo}/issues/comments/{comment_id}/pin",
+      { owner: ref.owner, repo: ref.repo, comment_id: commentId }
+    );
   }
 
   /**
@@ -376,6 +420,33 @@ export class IssueOperations {
     }
 
     return count;
+  }
+
+  /**
+   * Find the canonical alignment comment on an issue.
+   *
+   * Returns the first alignment comment authored by this app, or null when absent.
+   */
+  async findAlignmentCommentId(ref: IssueRef): Promise<number | null> {
+    const iterator = this.client.paginate.iterator<IssueComment>(
+      this.client.rest.issues.listComments,
+      {
+        owner: ref.owner,
+        repo: ref.repo,
+        issue_number: ref.issueNumber,
+        per_page: 100,
+      }
+    );
+
+    for await (const { data: comments } of iterator) {
+      for (const comment of comments) {
+        if (isAlignmentComment(comment.body, this.appId, comment.performed_via_github_app?.id)) {
+          return comment.id;
+        }
+      }
+    }
+
+    return null;
   }
 
   /**
@@ -586,6 +657,19 @@ export class IssueOperations {
   }
 
   /**
+   * Get issue labels.
+   */
+  async getIssueLabels(ref: IssueRef): Promise<string[]> {
+    const { data } = await this.client.rest.issues.get({
+      owner: ref.owner,
+      repo: ref.repo,
+      issue_number: ref.issueNumber,
+    });
+
+    return (data.labels ?? []).map((label) => (typeof label === "string" ? label : label.name ?? ""));
+  }
+
+  /**
    * Get discussion comments for summarization.
    *
    * Filters out:
@@ -616,15 +700,20 @@ export class IssueOperations {
           continue;
         }
 
-        // Skip comments without author or body
         if (!comment.user?.login || !comment.body) {
           continue;
         }
+
+        const thumbsUp = comment.reactions?.["+1"] ?? 0;
+        const thumbsDown = comment.reactions?.["-1"] ?? 0;
 
         comments.push({
           author: comment.user.login,
           body: comment.body,
           createdAt: comment.created_at ?? new Date().toISOString(),
+          ...(thumbsUp > 0 || thumbsDown > 0
+            ? { reactions: { thumbsUp, thumbsDown } }
+            : {}),
         });
       }
     }
@@ -683,7 +772,7 @@ export class IssueOperations {
 
     for await (const { data: events } of iterator) {
       for (const event of events as TimelineEvent[]) {
-        if (event.label?.name === labelName) {
+        if (event.label?.name && isLabelMatch(event.label.name, labelName)) {
           if (event.event === "labeled") {
             labelEvents.push({ type: "labeled", time: new Date(event.created_at) });
           } else if (event.event === "unlabeled") {

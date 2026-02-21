@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { isLLMConfigured, getLLMConfig, createModel, createModelFromEnv } from "./provider.js";
-import type { LLMConfig } from "./types.js";
+import { createCipheriv, randomBytes } from "node:crypto";
+import { isLLMConfigured, getLLMConfig, createModel, createModelFromEnv, getLLMReadiness } from "./provider.js";
+import type { LLMConfig, LLMProvider } from "./types.js";
 
 /**
  * Tests for LLM Provider Factory
@@ -15,6 +16,7 @@ describe("LLM Provider", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     process.env = originalEnv;
   });
 
@@ -50,6 +52,20 @@ describe("LLM Provider", () => {
     it("should return true when valid provider and model are set", () => {
       process.env.LLM_PROVIDER = "anthropic";
       process.env.LLM_MODEL = "claude-3-haiku";
+
+      expect(isLLMConfigured()).toBe(true);
+    });
+
+    it("should normalize provider casing and whitespace", () => {
+      process.env.LLM_PROVIDER = "  Google ";
+      process.env.LLM_MODEL = " gemini-2.0-flash ";
+
+      expect(isLLMConfigured()).toBe(true);
+    });
+
+    it("should accept gemini alias as google provider", () => {
+      process.env.LLM_PROVIDER = "gemini";
+      process.env.LLM_MODEL = "gemini-2.0-flash";
 
       expect(isLLMConfigured()).toBe(true);
     });
@@ -90,8 +106,28 @@ describe("LLM Provider", () => {
       expect(config).toEqual({
         provider: "anthropic",
         model: "claude-3-haiku",
-        maxTokens: 2000,
+        maxTokens: 4_096,
       });
+    });
+
+    it("should normalize quoted provider/model values", () => {
+      process.env.LLM_PROVIDER = ' "OpenAI" ';
+      process.env.LLM_MODEL = " 'gpt-4o-mini' ";
+
+      const config = getLLMConfig();
+
+      expect(config).toEqual({
+        provider: "openai",
+        model: "gpt-4o-mini",
+        maxTokens: 4_096,
+      });
+    });
+
+    it("should return null when model is blank after trimming", () => {
+      process.env.LLM_PROVIDER = "google";
+      process.env.LLM_MODEL = "   ";
+
+      expect(getLLMConfig()).toBeNull();
     });
 
     it("should parse custom maxTokens", () => {
@@ -115,8 +151,58 @@ describe("LLM Provider", () => {
 
       const config = getLLMConfig();
 
-      expect(config?.maxTokens).toBe(2000);
+      expect(config?.maxTokens).toBe(4_096);
     });
+
+    it("should use defaults for non-positive maxTokens", () => {
+      process.env.LLM_PROVIDER = "anthropic";
+      process.env.LLM_MODEL = "claude-3-haiku";
+      process.env.LLM_MAX_TOKENS = "0";
+
+      const zeroConfig = getLLMConfig();
+      expect(zeroConfig?.maxTokens).toBe(4_096);
+
+      process.env.LLM_MAX_TOKENS = "-100";
+      const negativeConfig = getLLMConfig();
+      expect(negativeConfig?.maxTokens).toBe(4_096);
+    });
+
+    it("should clamp LLM_MAX_TOKENS below minimum to minimum", () => {
+      process.env.LLM_PROVIDER = "anthropic";
+      process.env.LLM_MODEL = "claude-3-haiku";
+      process.env.LLM_MAX_TOKENS = "499";
+
+      const config = getLLMConfig();
+      expect(config?.maxTokens).toBe(500);
+    });
+
+    it("should clamp LLM_MAX_TOKENS above maximum to maximum", () => {
+      process.env.LLM_PROVIDER = "anthropic";
+      process.env.LLM_MODEL = "claude-3-haiku";
+      process.env.LLM_MAX_TOKENS = "50001";
+
+      const config = getLLMConfig();
+      expect(config?.maxTokens).toBe(32_768);
+    });
+
+    it("should allow LLM_MAX_TOKENS at exact minimum boundary", () => {
+      process.env.LLM_PROVIDER = "anthropic";
+      process.env.LLM_MODEL = "claude-3-haiku";
+      process.env.LLM_MAX_TOKENS = "500";
+
+      const config = getLLMConfig();
+      expect(config?.maxTokens).toBe(500);
+    });
+
+    it("should allow LLM_MAX_TOKENS at exact maximum boundary", () => {
+      process.env.LLM_PROVIDER = "anthropic";
+      process.env.LLM_MODEL = "claude-3-haiku";
+      process.env.LLM_MAX_TOKENS = "32768";
+
+      const config = getLLMConfig();
+      expect(config?.maxTokens).toBe(32_768);
+    });
+
   });
 
   describe("createModel", () => {
@@ -148,6 +234,7 @@ describe("LLM Provider", () => {
 
     it("should throw when Google API key is missing", () => {
       delete process.env.GOOGLE_API_KEY;
+      delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
       const config: LLMConfig = {
         provider: "google",
         model: "gemini-pro",
@@ -155,7 +242,7 @@ describe("LLM Provider", () => {
       };
 
       expect(() => createModel(config)).toThrow(
-        "GOOGLE_API_KEY environment variable is not set"
+        "GOOGLE_API_KEY or GOOGLE_GENERATIVE_AI_API_KEY environment variable is not set"
       );
     });
 
@@ -169,6 +256,18 @@ describe("LLM Provider", () => {
 
       expect(() => createModel(config)).toThrow(
         "MISTRAL_API_KEY environment variable is not set"
+      );
+    });
+
+    it("should throw when provider is unsupported at runtime", () => {
+      const config: LLMConfig = {
+        provider: "unsupported-provider" as LLMProvider,
+        model: "model-id",
+        maxTokens: 1000,
+      };
+
+      expect(() => createModel(config)).toThrow(
+        "Unsupported LLM provider: unsupported-provider",
       );
     });
 
@@ -214,6 +313,34 @@ describe("LLM Provider", () => {
       expect(model.modelId).toBe("gemini-pro");
     });
 
+    it("should disable native structured outputs for Google models", () => {
+      process.env.GOOGLE_API_KEY = "google-test-key";
+      const config: LLMConfig = {
+        provider: "google",
+        model: "gemini-3-flash-preview",
+        maxTokens: 2000,
+      };
+
+      const model = createModel(config);
+
+      expect(model.supportsStructuredOutputs).toBe(false);
+    });
+
+    it("should create Google model from GOOGLE_GENERATIVE_AI_API_KEY", () => {
+      delete process.env.GOOGLE_API_KEY;
+      process.env.GOOGLE_GENERATIVE_AI_API_KEY = "google-alt-test-key";
+      const config: LLMConfig = {
+        provider: "google",
+        model: "gemini-pro",
+        maxTokens: 2000,
+      };
+
+      const model = createModel(config);
+
+      expect(model).toBeDefined();
+      expect(model.modelId).toBe("gemini-pro");
+    });
+
     it("should create Mistral model when API key is set", () => {
       process.env.MISTRAL_API_KEY = "mistral-test-key";
       const config: LLMConfig = {
@@ -229,26 +356,293 @@ describe("LLM Provider", () => {
     });
   });
 
-  describe("createModelFromEnv", () => {
-    it("should return null when LLM not configured", () => {
+  describe("getLLMReadiness", () => {
+    it("should return not_configured when provider is missing", () => {
       delete process.env.LLM_PROVIDER;
       delete process.env.LLM_MODEL;
 
-      expect(createModelFromEnv()).toBeNull();
+      expect(getLLMReadiness()).toEqual({ ready: false, reason: "not_configured" });
     });
 
-    it("should return model and config when configured", () => {
+    it("should return not_configured for invalid provider", () => {
+      process.env.LLM_PROVIDER = "invalid";
+      process.env.LLM_MODEL = "some-model";
+
+      expect(getLLMReadiness()).toEqual({ ready: false, reason: "not_configured" });
+    });
+
+    it("should return api_key_missing when provider+model set but key absent", () => {
+      process.env.LLM_PROVIDER = "anthropic";
+      process.env.LLM_MODEL = "claude-3-haiku";
+      delete process.env.ANTHROPIC_API_KEY;
+
+      expect(getLLMReadiness()).toEqual({ ready: false, reason: "api_key_missing" });
+    });
+
+    it("should return api_key_missing for google when both key vars are absent", () => {
+      process.env.LLM_PROVIDER = "google";
+      process.env.LLM_MODEL = "gemini-pro";
+      delete process.env.GOOGLE_API_KEY;
+      delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+
+      expect(getLLMReadiness()).toEqual({ ready: false, reason: "api_key_missing" });
+    });
+
+    it("should return ready when provider, model, and key are present", () => {
       process.env.LLM_PROVIDER = "anthropic";
       process.env.LLM_MODEL = "claude-3-haiku";
       process.env.ANTHROPIC_API_KEY = "sk-ant-test";
 
-      const result = createModelFromEnv();
+      expect(getLLMReadiness()).toEqual({ ready: true });
+    });
+
+    it("should return ready for google with GOOGLE_GENERATIVE_AI_API_KEY fallback", () => {
+      process.env.LLM_PROVIDER = "google";
+      process.env.LLM_MODEL = "gemini-pro";
+      delete process.env.GOOGLE_API_KEY;
+      process.env.GOOGLE_GENERATIVE_AI_API_KEY = "google-alt-key";
+
+      expect(getLLMReadiness()).toEqual({ ready: true });
+    });
+
+    it("should treat whitespace-only API key as missing", () => {
+      process.env.LLM_PROVIDER = "openai";
+      process.env.LLM_MODEL = "gpt-4o-mini";
+      process.env.OPENAI_API_KEY = "   ";
+
+      expect(getLLMReadiness()).toEqual({ ready: false, reason: "api_key_missing" });
+    });
+  });
+
+  describe("createModelFromEnv", () => {
+    function encryptPayload(
+      payload: Record<string, string>,
+      masterKey: Buffer,
+    ): { ciphertext: string; iv: string; tag: string } {
+      const iv = randomBytes(12);
+      const cipher = createCipheriv("aes-256-gcm", masterKey, iv);
+      const plaintext = Buffer.from(JSON.stringify(payload), "utf8");
+      const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+      const tag = cipher.getAuthTag();
+
+      return {
+        ciphertext: ciphertext.toString("base64"),
+        iv: iv.toString("base64"),
+        tag: tag.toString("base64"),
+      };
+    }
+
+    function mockRedisLookup(result: string | null): void {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ result }),
+      });
+      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    }
+
+    it("should return null when LLM not configured", async () => {
+      delete process.env.LLM_PROVIDER;
+      delete process.env.LLM_MODEL;
+
+      await expect(createModelFromEnv()).resolves.toBeNull();
+    });
+
+    it("should return model and config when configured", async () => {
+      process.env.LLM_PROVIDER = "anthropic";
+      process.env.LLM_MODEL = "claude-3-haiku";
+      process.env.ANTHROPIC_API_KEY = "sk-ant-test";
+
+      const result = await createModelFromEnv();
 
       expect(result).not.toBeNull();
       expect(result?.model).toBeDefined();
       expect(result?.model.modelId).toBe("claude-3-haiku");
       expect(result?.config.provider).toBe("anthropic");
       expect(result?.config.model).toBe("claude-3-haiku");
+    });
+
+    it("should return model and normalized config for gemini alias", async () => {
+      process.env.LLM_PROVIDER = "Gemini";
+      process.env.LLM_MODEL = "gemini-2.0-flash";
+      process.env.GOOGLE_GENERATIVE_AI_API_KEY = "google-test";
+
+      const result = await createModelFromEnv();
+
+      expect(result).not.toBeNull();
+      expect(result?.config.provider).toBe("google");
+      expect(result?.config.model).toBe("gemini-2.0-flash");
+    });
+
+    it("should return null and warn when model creation fails (e.g. missing API key)", async () => {
+      // Provider and model are set but API key is absent — createModel() would throw.
+      // createModelFromEnv() must catch this and degrade to null so callers don't
+      // need their own try-catch for BYOK or other config errors.
+      process.env.LLM_PROVIDER = "anthropic";
+      process.env.LLM_MODEL = "claude-3-haiku";
+      delete process.env.ANTHROPIC_API_KEY;
+
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const result = await createModelFromEnv();
+
+      expect(result).toBeNull();
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("createModelFromEnv: model creation failed, degrading to no-LLM")
+      );
+
+      warnSpy.mockRestore();
+    });
+
+    it("should resolve installation-scoped BYOK config from Redis", async () => {
+      const masterKey = randomBytes(32);
+      const { ciphertext, iv, tag } = encryptPayload(
+        { apiKey: "sk-byok", provider: "openai", model: "gpt-4o-mini" },
+        masterKey,
+      );
+
+      process.env.BYOK_REDIS_REST_URL = "https://example-redis.upstash.io";
+      process.env.BYOK_REDIS_REST_TOKEN = "byok-token";
+      process.env.BYOK_MASTER_KEYS_JSON = JSON.stringify({
+        v1: masterKey.toString("base64"),
+      });
+      process.env.LLM_MAX_TOKENS = "2500";
+
+      mockRedisLookup(
+        JSON.stringify({
+          ciphertext,
+          iv,
+          tag,
+          keyVersion: "v1",
+          status: "active",
+        }),
+      );
+
+      const result = await createModelFromEnv({ installationId: 42 });
+      expect(result).not.toBeNull();
+      expect(result?.config.provider).toBe("openai");
+      expect(result?.config.model).toBe("gpt-4o-mini");
+      expect(result?.config.maxTokens).toBe(2500);
+      expect(result?.model.modelId).toBe("gpt-4o-mini");
+
+      const fetchMock = vi.mocked(fetch);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0]?.[0]).toBe(
+        "https://example-redis.upstash.io/get/hive%3Abyok%3A42",
+      );
+    });
+
+    it("should return null when BYOK record is missing for installation", async () => {
+      process.env.BYOK_REDIS_REST_URL = "https://example-redis.upstash.io";
+      process.env.BYOK_REDIS_REST_TOKEN = "byok-token";
+      process.env.BYOK_MASTER_KEYS_JSON = JSON.stringify({
+        v1: randomBytes(32).toString("base64"),
+      });
+      process.env.OPENAI_API_KEY = "shared-key-should-not-be-used";
+      process.env.LLM_PROVIDER = "openai";
+      process.env.LLM_MODEL = "gpt-4o-mini";
+
+      mockRedisLookup(null);
+
+      await expect(createModelFromEnv({ installationId: 42 })).resolves.toBeNull();
+    });
+
+    it("should throw when BYOK key version is unavailable", async () => {
+      const masterKey = randomBytes(32);
+      const { ciphertext, iv, tag } = encryptPayload(
+        { apiKey: "sk-byok", provider: "openai", model: "gpt-4o-mini" },
+        masterKey,
+      );
+
+      process.env.BYOK_REDIS_REST_URL = "https://example-redis.upstash.io";
+      process.env.BYOK_REDIS_REST_TOKEN = "byok-token";
+      process.env.BYOK_MASTER_KEYS_JSON = JSON.stringify({
+        v2: randomBytes(32).toString("base64"),
+      });
+
+      mockRedisLookup(
+        JSON.stringify({
+          ciphertext,
+          iv,
+          tag,
+          keyVersion: "v1",
+          status: "active",
+        }),
+      );
+
+      await expect(createModelFromEnv({ installationId: 42 })).rejects.toThrow(
+        "BYOK key version 'v1' is unavailable",
+      );
+    });
+
+    it("should throw when BYOK payload cannot be decrypted", async () => {
+      process.env.BYOK_REDIS_REST_URL = "https://example-redis.upstash.io";
+      process.env.BYOK_REDIS_REST_TOKEN = "byok-token";
+      process.env.BYOK_MASTER_KEYS_JSON = JSON.stringify({
+        v1: randomBytes(32).toString("base64"),
+      });
+
+      mockRedisLookup(
+        JSON.stringify({
+          ciphertext: "aW52YWxpZA==",
+          iv: randomBytes(12).toString("base64"),
+          tag: randomBytes(16).toString("base64"),
+          keyVersion: "v1",
+          status: "active",
+        }),
+      );
+
+      await expect(createModelFromEnv({ installationId: 42 })).rejects.toThrow(
+        "BYOK key material could not be decrypted",
+      );
+    });
+
+    it("should throw when BYOK model is missing and LLM_MODEL is unset", async () => {
+      const masterKey = randomBytes(32);
+      const { ciphertext, iv, tag } = encryptPayload(
+        { apiKey: "sk-byok", provider: "openai" },
+        masterKey,
+      );
+
+      process.env.BYOK_REDIS_REST_URL = "https://example-redis.upstash.io";
+      process.env.BYOK_REDIS_REST_TOKEN = "byok-token";
+      process.env.BYOK_MASTER_KEYS_JSON = JSON.stringify({
+        v1: masterKey.toString("base64"),
+      });
+      delete process.env.LLM_MODEL;
+
+      mockRedisLookup(
+        JSON.stringify({
+          ciphertext,
+          iv,
+          tag,
+          keyVersion: "v1",
+          status: "active",
+        }),
+      );
+
+      await expect(createModelFromEnv({ installationId: 42 })).rejects.toThrow(
+        "BYOK record for installation 42 does not include a model and LLM_MODEL is not set",
+      );
+    });
+
+    it("should throw when BYOK returns an unsupported provider at runtime", async () => {
+      vi.resetModules();
+      vi.doMock("./byok.js", () => ({
+        resolveInstallationBYOKConfig: vi.fn().mockResolvedValue({
+          provider: "unsupported-provider",
+          model: "model-id",
+          apiKey: "sk-byok",
+        }),
+      }));
+
+      const { createModelFromEnv: createModelFromEnvWithMock } = await import("./provider.js");
+
+      await expect(
+        createModelFromEnvWithMock({ installationId: 42 }),
+      ).rejects.toThrow("Unsupported LLM provider: unsupported-provider");
+
+      vi.doUnmock("./byok.js");
     });
   });
 });

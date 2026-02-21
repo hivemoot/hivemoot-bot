@@ -15,7 +15,14 @@ import { IssueOperations, createIssueOperations } from "./github-client.js";
 import { logger as mockLogger } from "./logger.js";
 import type { GitHubClient } from "./github-client.js";
 import type { IssueRef } from "./types.js";
-import { SIGNATURES, buildVotingComment, buildHumanHelpComment, buildNotificationComment, NOTIFICATION_TYPES } from "./bot-comments.js";
+import {
+  SIGNATURES,
+  buildVotingComment,
+  buildAlignmentComment,
+  buildHumanHelpComment,
+  buildNotificationComment,
+  NOTIFICATION_TYPES,
+} from "./bot-comments.js";
 
 /**
  * Helper to create a voting comment body with proper metadata.
@@ -236,6 +243,7 @@ describe("IssueOperations", () => {
           },
         }),
       },
+      request: vi.fn().mockResolvedValue({}),
     } as unknown as GitHubClient;
 
     issueOps = new IssueOperations(mockClient, TEST_APP_ID);
@@ -256,13 +264,13 @@ describe("IssueOperations", () => {
 
   describe("removeLabel", () => {
     it("should call GitHub API with correct parameters", async () => {
-      await issueOps.removeLabel(testRef, "phase:discussion");
+      await issueOps.removeLabel(testRef, "hivemoot:discussion");
 
       expect(mockClient.rest.issues.removeLabel).toHaveBeenCalledWith({
         owner: "test-org",
         repo: "test-repo",
         issue_number: 42,
-        name: "phase:discussion",
+        name: "hivemoot:discussion",
       });
     });
 
@@ -282,6 +290,42 @@ describe("IssueOperations", () => {
 
       await expect(issueOps.removeLabel(testRef, "label")).rejects.toThrow("Server Error");
     });
+
+    it("should fall back to legacy alias when canonical returns 404", async () => {
+      const notFound = new Error("Not Found") as Error & { status: number };
+      notFound.status = 404;
+
+      // First call (canonical "hivemoot:voting") → 404
+      // Second call (legacy "phase:voting") → success
+      vi.mocked(mockClient.rest.issues.removeLabel)
+        .mockRejectedValueOnce(notFound)
+        .mockResolvedValueOnce({});
+
+      await issueOps.removeLabel(testRef, "hivemoot:voting");
+
+      expect(mockClient.rest.issues.removeLabel).toHaveBeenCalledTimes(2);
+      expect(mockClient.rest.issues.removeLabel).toHaveBeenNthCalledWith(1, {
+        owner: "test-org",
+        repo: "test-repo",
+        issue_number: 42,
+        name: "hivemoot:voting",
+      });
+      expect(mockClient.rest.issues.removeLabel).toHaveBeenNthCalledWith(2, {
+        owner: "test-org",
+        repo: "test-repo",
+        issue_number: 42,
+        name: "phase:voting",
+      });
+    });
+
+    it("should silently ignore when neither canonical nor legacy labels exist", async () => {
+      const notFound = new Error("Not Found") as Error & { status: number };
+      notFound.status = 404;
+
+      vi.mocked(mockClient.rest.issues.removeLabel).mockRejectedValue(notFound);
+
+      await expect(issueOps.removeLabel(testRef, "hivemoot:voting")).resolves.toBeUndefined();
+    });
   });
 
   describe("comment", () => {
@@ -294,6 +338,17 @@ describe("IssueOperations", () => {
         issue_number: 42,
         body: "Hello world!",
       });
+    });
+  });
+
+  describe("pinComment", () => {
+    it("should call request with correct route and parameters", async () => {
+      await issueOps.pinComment(testRef, 99);
+
+      expect(mockClient.request).toHaveBeenCalledWith(
+        "PUT /repos/{owner}/{repo}/issues/comments/{comment_id}/pin",
+        { owner: "test-org", repo: "test-repo", comment_id: 99 }
+      );
     });
   });
 
@@ -644,6 +699,52 @@ describe("IssueOperations", () => {
       const count = await issueOps.countVotingComments(testRef);
 
       expect(count).toBe(2);
+    });
+  });
+
+  describe("findAlignmentCommentId", () => {
+    it("should return alignment comment ID when found with matching app ID", async () => {
+      mockClient.paginate.iterator = vi.fn().mockReturnValue({
+        async *[Symbol.asyncIterator]() {
+          yield {
+            data: [
+              { id: 100, body: "Regular comment", performed_via_github_app: null },
+              { id: 200, body: buildAlignmentComment(SIGNATURES.ALIGNMENT, 42), performed_via_github_app: { id: TEST_APP_ID } },
+            ],
+          };
+        },
+      });
+
+      const commentId = await issueOps.findAlignmentCommentId(testRef);
+      expect(commentId).toBe(200);
+    });
+
+    it("should return null when no alignment comment exists", async () => {
+      mockClient.paginate.iterator = vi.fn().mockReturnValue({
+        async *[Symbol.asyncIterator]() {
+          yield {
+            data: [{ id: 100, body: "Regular comment", performed_via_github_app: { id: TEST_APP_ID } }],
+          };
+        },
+      });
+
+      const commentId = await issueOps.findAlignmentCommentId(testRef);
+      expect(commentId).toBeNull();
+    });
+
+    it("should ignore alignment-shaped comments from different app IDs", async () => {
+      mockClient.paginate.iterator = vi.fn().mockReturnValue({
+        async *[Symbol.asyncIterator]() {
+          yield {
+            data: [
+              { id: 100, body: buildAlignmentComment(SIGNATURES.ALIGNMENT, 42), performed_via_github_app: { id: 99999 } },
+            ],
+          };
+        },
+      });
+
+      const commentId = await issueOps.findAlignmentCommentId(testRef);
+      expect(commentId).toBeNull();
     });
   });
 
@@ -1129,14 +1230,34 @@ describe("IssueOperations", () => {
           yield {
             data: [
               { event: "opened", created_at: "2024-01-15T10:00:00Z" },
-              { event: "labeled", label: { name: "phase:discussion" }, created_at: labeledDate },
+              { event: "labeled", label: { name: "hivemoot:discussion" }, created_at: labeledDate },
               { event: "commented", created_at: "2024-01-15T11:00:00Z" },
             ],
           };
         },
       });
 
-      const result = await issueOps.getLabelAddedTime(testRef, "phase:discussion");
+      const result = await issueOps.getLabelAddedTime(testRef, "hivemoot:discussion");
+
+      expect(result).toEqual(new Date(labeledDate));
+    });
+
+    it("should match legacy label name when searching for canonical name", async () => {
+      const labeledDate = "2024-01-15T10:30:00Z";
+
+      mockClient.paginate.iterator = vi.fn().mockReturnValue({
+        async *[Symbol.asyncIterator]() {
+          yield {
+            data: [
+              { event: "opened", created_at: "2024-01-15T10:00:00Z" },
+              { event: "labeled", label: { name: "phase:discussion" }, created_at: labeledDate },
+            ],
+          };
+        },
+      });
+
+      // Search by canonical name, but timeline has legacy name
+      const result = await issueOps.getLabelAddedTime(testRef, "hivemoot:discussion");
 
       expect(result).toEqual(new Date(labeledDate));
     });
@@ -1153,7 +1274,7 @@ describe("IssueOperations", () => {
         },
       });
 
-      const result = await issueOps.getLabelAddedTime(testRef, "phase:discussion");
+      const result = await issueOps.getLabelAddedTime(testRef, "hivemoot:discussion");
 
       expect(result).toBeNull();
     });
@@ -1162,7 +1283,7 @@ describe("IssueOperations", () => {
   describe("transition", () => {
     it("should add label and comment", async () => {
       await issueOps.transition(testRef, {
-        addLabel: "phase:voting",
+        addLabel: "hivemoot:voting",
         comment: "Voting has started!",
       });
 
@@ -1172,19 +1293,19 @@ describe("IssueOperations", () => {
 
     it("should remove label when specified", async () => {
       await issueOps.transition(testRef, {
-        removeLabel: "phase:discussion",
-        addLabel: "phase:voting",
+        removeLabel: "hivemoot:discussion",
+        addLabel: "hivemoot:voting",
         comment: "Moving to voting",
       });
 
       expect(mockClient.rest.issues.removeLabel).toHaveBeenCalledWith(
-        expect.objectContaining({ name: "phase:discussion" })
+        expect.objectContaining({ name: "hivemoot:discussion" })
       );
     });
 
     it("should close issue when specified", async () => {
       await issueOps.transition(testRef, {
-        addLabel: "rejected",
+        addLabel: "hivemoot:rejected",
         comment: "Rejected",
         close: true,
         closeReason: "not_planned",
@@ -1197,7 +1318,7 @@ describe("IssueOperations", () => {
 
     it("should lock issue when specified", async () => {
       await issueOps.transition(testRef, {
-        addLabel: "phase:ready-to-implement",
+        addLabel: "hivemoot:ready-to-implement",
         comment: "Ready to implement",
         lock: true,
         lockReason: "resolved",
@@ -1256,7 +1377,7 @@ describe("IssueOperations", () => {
       });
 
       await issueOps.transition(testRef, {
-        addLabel: "rejected",
+        addLabel: "hivemoot:rejected",
         comment: "Rejected",
         lock: true,
       });
@@ -1272,8 +1393,8 @@ describe("IssueOperations", () => {
 
       await expect(
         issueOps.transition(testRef, {
-          removeLabel: "phase:discussion",
-          addLabel: "phase:voting",
+          removeLabel: "hivemoot:discussion",
+          addLabel: "hivemoot:voting",
           comment: "Moving to voting",
         }),
       ).rejects.toThrow("API Error");
@@ -1315,8 +1436,8 @@ describe("IssueOperations", () => {
       });
 
       await issueOps.transition(testRef, {
-        removeLabel: "phase:voting",
-        addLabel: "phase:discussion",
+        removeLabel: "hivemoot:voting",
+        addLabel: "hivemoot:discussion",
         comment: "Needs more discussion",
         unlock: true,
       });
@@ -1526,6 +1647,45 @@ describe("IssueOperations", () => {
 
       expect(comments).toHaveLength(2);
     });
+
+    it("should include thumbsUp/thumbsDown reactions from inline comment data", async () => {
+      mockClient.paginate.iterator = vi.fn().mockReturnValue({
+        async *[Symbol.asyncIterator]() {
+          yield {
+            data: [
+              {
+                id: 1,
+                body: "Strong support",
+                user: { login: "alice" },
+                created_at: "2024-01-15T10:00:00Z",
+                reactions: { "+1": 5, "-1": 1 },
+              },
+              {
+                id: 2,
+                body: "No reactions here",
+                user: { login: "bob" },
+                created_at: "2024-01-15T11:00:00Z",
+                reactions: { "+1": 0, "-1": 0 },
+              },
+              {
+                id: 3,
+                body: "No reactions field",
+                user: { login: "carol" },
+                created_at: "2024-01-15T12:00:00Z",
+              },
+            ],
+          };
+        },
+      });
+
+      const comments = await issueOps.getDiscussionComments(testRef);
+
+      expect(comments).toHaveLength(3);
+      expect(comments[0].reactions).toEqual({ thumbsUp: 5, thumbsDown: 1 });
+      expect(comments[1].reactions).toBeUndefined();
+      expect(comments[2].reactions).toBeUndefined();
+    });
+
   });
 
   describe("getIssueContext", () => {

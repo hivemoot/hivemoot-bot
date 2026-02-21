@@ -63,7 +63,7 @@ interface RepoDiscussionInfoResponse {
     createdAt: string;
     hasDiscussionsEnabled: boolean;
     discussionCategories: {
-      nodes: DiscussionCategory[];
+      nodes: Array<DiscussionCategory | null>;
     };
   };
 }
@@ -91,7 +91,7 @@ interface FindColonyJournalResponse {
         number: number;
         title: string;
         locked: boolean;
-      }>;
+      } | null>;
     };
   };
 }
@@ -170,7 +170,7 @@ interface LastDiscussionCommentsResponse {
         nodes: Array<{
           body: string;
           createdAt: string;
-        }>;
+        } | null>;
       };
     } | null;
   };
@@ -215,7 +215,9 @@ export async function getRepoDiscussionInfo(
     repoId: response.repository.id,
     repoCreatedAt: response.repository.createdAt,
     hasDiscussions: response.repository.hasDiscussionsEnabled,
-    categories: response.repository.discussionCategories.nodes,
+    categories: response.repository.discussionCategories.nodes.filter(
+      (node): node is DiscussionCategory => node !== null
+    ),
   };
 }
 
@@ -239,7 +241,8 @@ export async function findOrCreateColonyJournal(
   );
 
   const existing = searchResponse.repository.discussions.nodes.find(
-    (d) => d.title.includes(COLONY_JOURNAL_TITLE)
+    (d): d is NonNullable<typeof d> =>
+      d !== null && d.title.includes(COLONY_JOURNAL_TITLE)
   );
 
   if (existing) {
@@ -346,7 +349,10 @@ export async function getLastStandupDate(
 
   // Check comments from newest to oldest for a standup metadata tag
   for (let i = comments.length - 1; i >= 0; i--) {
-    const metadata = parseMetadata(comments[i].body);
+    const comment = comments[i];
+    if (!comment) continue;
+
+    const metadata = parseMetadata(comment.body);
     if (metadata?.type === "standup") {
       return (metadata as StandupMetadata).date;
     }

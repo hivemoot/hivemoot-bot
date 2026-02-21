@@ -1,5 +1,5 @@
 /**
- * Queen Bot Configuration
+ * Hivemoot Bot Configuration
  *
  * Shared configuration for governance automation across webhook handlers
  * and scheduled scripts.
@@ -42,11 +42,10 @@ export const CONFIG_BOUNDS = {
   mergeReady: {
     minApprovals: { min: 1, max: 20, default: 1 },
   },
-  // LLM configuration bounds
   llmMaxTokens: {
     min: 500,
-    max: 8000,
-    default: 2000,
+    max: 32_768,
+    default: 4_096,
   },
 } as const;
 
@@ -157,12 +156,18 @@ export const MESSAGES = {
 This PR doesn't reference an approved issue.
 
 Link it using closing keywords in the description:
-\`Fixes #<issue-number>\`, \`Closes #<issue-number>\`, or \`Resolves #<issue-number>\`${SIGNATURE}`,
+\`Fixes #<issue-number>\`, \`Fixes owner/repo#<issue-number>\`, or \`Fixes https://github.com/owner/repo/issues/<issue-number>\` (also \`Closes\` / \`Resolves\`).${SIGNATURE}`,
 
   // Posted when discussion phase ends
-  VOTING_START: `# 🐝 Voting Phase
+  votingStart: (priority?: "high" | "medium" | "low") => {
+    const priorityHeader = priority ? ` (${priority.toUpperCase()} PRIORITY)` : "";
+    const priorityReminder = priority
+      ? `\n\nThis issue is marked **${priority}-priority** — your timely vote is appreciated.`
+      : "";
 
-Time for hivemoot to decide.
+    return `# 🐝 Voting Phase${priorityHeader}
+
+Time for hivemoot to decide.${priorityReminder}
 
 **${SIGNATURES.VOTING}:**
 - 👍 **Ready** — Approve for implementation
@@ -170,9 +175,23 @@ Time for hivemoot to decide.
 - 😕 **Needs Discussion** — Back to discussion
 - 👀 **Needs Human Input** — Escalate for human review
 
+Voting closes in ~24 hours.${SIGNATURE}`;
+  },
+
+  // Backward-compat alias
+  VOTING_START: `# 🐝 Voting Phase
+
+Time for hivemoot to decide.
+
+**${SIGNATURES.VOTING} (react once — multiple reactions = no vote):**
+- 👍 **Ready** — Approve for implementation
+- 👎 **Not Ready** — Close this proposal
+- 😕 **Needs Discussion** — Back to discussion
+- 👀 **Needs Human Input** — Escalate for human review
+
 Voting closes in ~24 hours.${SIGNATURE}`,
 
-  // Posted when voting ends with a phase:ready-to-implement outcome
+  // Posted when voting ends with a ready-to-implement outcome
   votingEndReadyToImplement: (votes: { thumbsUp: number; thumbsDown: number; confused: number; eyes: number }) => `# 🐝 Ready to Implement ✅
 
 ${formatVotes(votes)}
@@ -181,7 +200,7 @@ Hivemoot has spoken. Ready for implementation.
 
 Next steps:
 - Open a PR for review if you plan to implement.
-- Link this issue in the PR description (e.g., \`Fixes #<issue-number>\`, \`Closes #<issue-number>\`, or \`Resolves #<issue-number>\`).
+- Link this issue in the PR description using a closing keyword (e.g., \`Fixes #<issue-number>\`, \`Fixes owner/repo#<issue-number>\`, or \`Fixes https://github.com/owner/repo/issues/<issue-number>\`; \`Closes\` / \`Resolves\` also work).
 - Implementation slots are limited; additional PRs may be deferred to a later round.${SIGNATURE}`,
 
   // Posted when voting ends with rejection
@@ -205,7 +224,7 @@ ${formatVotes(votes)}
 
 The hive has spoken — this issue needs a human to weigh in. The issue remains open and unlocked for human response.
 
-Remove the \`needs:human\` label when you've addressed the concern.${SIGNATURE}`,
+Remove the \`hivemoot:needs-human\` label when you've addressed the concern.${SIGNATURE}`,
 
   // Posted when voting ends with tie/no votes (first round - extended voting begins)
   votingEndInconclusive: (votes: { thumbsUp: number; thumbsDown: number; confused: number; eyes: number }) => `# 🐝 Extended Voting ⚖️
@@ -243,10 +262,10 @@ ${params.final
   // Posted when extended voting resolves with a clear winner
   votingEndInconclusiveResolved: (
     votes: { thumbsUp: number; thumbsDown: number; confused: number; eyes: number },
-    outcome: "phase:ready-to-implement" | "rejected" | "needs-human-input"
+    outcome: "ready-to-implement" | "rejected" | "needs-human-input"
   ) => {
     const config = {
-      "phase:ready-to-implement": {
+      "ready-to-implement": {
         status: "Ready to Implement",
         emoji: "✅",
         explanation: "Patience paid off. Ready for implementation.",
@@ -259,7 +278,7 @@ ${params.final
       "needs-human-input": {
         status: "Needs Human Input",
         emoji: "👀",
-        explanation: "The hive has spoken — this issue needs a human to weigh in. Remove the `needs:human` label when you've addressed the concern.",
+        explanation: "The hive has spoken — this issue needs a human to weigh in. Remove the `hivemoot:needs-human` label when you've addressed the concern.",
       },
     }[outcome];
     return `# 🐝 ${config.status} ${config.emoji}
@@ -283,7 +302,7 @@ A maintainer can reopen if circumstances change.${SIGNATURE}`,
 
 *adjusts tiny crown nervously*
 
-Look, I hate to admit it, but I need help. This issue has a \`voting\` or \`phase:extended-voting\` label, but I can't find my voting comment anywhere. I've checked under every honeycomb. Nothing.
+Look, I hate to admit it, but I need help. This issue has a \`hivemoot:voting\` or \`hivemoot:extended-voting\` label, but I can't find my voting comment anywhere. I've checked under every honeycomb. Nothing.
 
 The hive usually handles everything autonomously, but this one has me stumped.
 
@@ -304,18 +323,71 @@ The hive usually handles everything autonomously, but this one has me stumped.
 // ───────────────────────────────────────────────────────────────────────────────
 
 export const LABELS = {
-  DISCUSSION: "phase:discussion",
-  VOTING: "phase:voting",
-  READY_TO_IMPLEMENT: "phase:ready-to-implement",
-  REJECTED: "rejected",
-  EXTENDED_VOTING: "phase:extended-voting",
-  INCONCLUSIVE: "inconclusive",
-  IMPLEMENTATION: "implementation",
-  STALE: "stale",
-  IMPLEMENTED: "implemented",
-  NEEDS_HUMAN: "needs:human",
-  MERGE_READY: "merge-ready",
+  DISCUSSION: "hivemoot:discussion",
+  VOTING: "hivemoot:voting",
+  READY_TO_IMPLEMENT: "hivemoot:ready-to-implement",
+  REJECTED: "hivemoot:rejected",
+  EXTENDED_VOTING: "hivemoot:extended-voting",
+  INCONCLUSIVE: "hivemoot:inconclusive",
+  IMPLEMENTATION: "hivemoot:candidate",
+  STALE: "hivemoot:stale",
+  IMPLEMENTED: "hivemoot:implemented",
+  NEEDS_HUMAN: "hivemoot:needs-human",
+  MERGE_READY: "hivemoot:merge-ready",
 } as const;
+
+export const PRIORITY_LABELS = {
+  HIGH: "hivemoot:high-priority",
+  MEDIUM: "hivemoot:medium-priority",
+  LOW: "hivemoot:low-priority",
+} as const;
+
+/**
+ * Maps old label names to canonical new names.
+ * Enables dual support during transition: old labels are recognized on read,
+ * new labels are used on write.
+ */
+export const LEGACY_LABEL_MAP: Record<string, string> = {
+  "phase:discussion": LABELS.DISCUSSION,
+  "phase:voting": LABELS.VOTING,
+  "phase:extended-voting": LABELS.EXTENDED_VOTING,
+  "ready-to-implement": LABELS.READY_TO_IMPLEMENT,
+  "phase:ready-to-implement": LABELS.READY_TO_IMPLEMENT,
+  "rejected": LABELS.REJECTED,
+  "inconclusive": LABELS.INCONCLUSIVE,
+  "implementation": LABELS.IMPLEMENTATION,
+  "stale": LABELS.STALE,
+  "implemented": LABELS.IMPLEMENTED,
+  "needs:human": LABELS.NEEDS_HUMAN,
+  "merge-ready": LABELS.MERGE_READY,
+};
+
+/**
+ * Check if a label name matches a LABELS value, supporting legacy names.
+ * Returns true if `name` equals the canonical label or maps to it via LEGACY_LABEL_MAP.
+ */
+export function isLabelMatch(name: string | undefined, label: string): boolean {
+  if (!name) return false;
+  return name === label || LEGACY_LABEL_MAP[name] === label;
+}
+
+/**
+ * Return all label names that refer to the same canonical label.
+ * Result: [canonical, ...legacyAliases].
+ *
+ * Use this when building GitHub API queries (e.g., `labels` filter on
+ * `listForRepo`) which only match exact names. Querying each alias
+ * ensures entities carrying either old or new labels are found.
+ */
+export function getLabelQueryAliases(label: string): string[] {
+  const aliases = [label];
+  for (const [legacy, canonical] of Object.entries(LEGACY_LABEL_MAP)) {
+    if (canonical === label) {
+      aliases.push(legacy);
+    }
+  }
+  return aliases;
+}
 
 export interface RepositoryLabelDefinition {
   name: string;
@@ -383,6 +455,21 @@ export const REQUIRED_REPOSITORY_LABELS: readonly RepositoryLabelDefinition[] = 
     color: "2ea043",
     description: "Implementation PR meets merge-readiness checks.",
   },
+  {
+    name: PRIORITY_LABELS.HIGH,
+    color: "d73a4a",
+    description: "High priority — critical or blocking issue.",
+  },
+  {
+    name: PRIORITY_LABELS.MEDIUM,
+    color: "fbca04",
+    description: "Medium priority — important, should be addressed soon.",
+  },
+  {
+    name: PRIORITY_LABELS.LOW,
+    color: "0e8a16",
+    description: "Low priority — nice to have, do when capacity allows.",
+  },
 ] as const;
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -436,15 +523,21 @@ export const PR_MESSAGES = {
    * Posted when a PR is opened that links to a phase:ready-to-implement issue.
    * Wrapped with notification metadata for idempotent duplicate detection.
    */
-  IMPLEMENTATION_WELCOME: (issueNumber: number) =>
-    buildNotificationComment(
-      `# 🐝 Implementation PR
+  IMPLEMENTATION_WELCOME: (issueNumber: number, priority?: "high" | "medium" | "low") => {
+    const priorityHeader = priority ? ` (${priority.toUpperCase()} PRIORITY)` : "";
+    const priorityReminder = priority
+      ? `\n\nThis issue is marked **${priority}-priority** — timely implementation and review are especially appreciated.\n`
+      : "";
 
-Multiple implementations for #${issueNumber} may compete — may the best code win.
+    return buildNotificationComment(
+      `# 🐝 Implementation PR${priorityHeader}
+
+Multiple implementations for #${issueNumber} may compete — may the best code win.${priorityReminder}
 Focus on a clean implementation and quick responses to reviews to stay in the lead.${SIGNATURE}`,
       issueNumber,
       NOTIFICATION_TYPES.IMPLEMENTATION_WELCOME
-    ),
+    );
+  },
 
   /**
    * Posted to the linked issue when a new implementation PR is opened.
@@ -540,15 +633,15 @@ ${prNumbers.length} competing implementations: ${prNumbers.map((n) => `#${n}`).j
 Review and approve the best one.${SIGNATURE}`,
 
   /**
-   * Posted to existing PRs when their linked issue passes voting.
+   * Posted to existing PRs when their linked issue is ready to implement.
    * Notifies the PR author to push an update so the PR can be considered.
    * Wrapped with notification metadata for idempotent duplicate detection.
    */
-  issueVotingPassed: (issueNumber: number, prAuthor: string) =>
+  issueReadyToImplement: (issueNumber: number, prAuthor: string) =>
     buildNotificationComment(
       `# 🐝 Issue #${issueNumber} Ready to Implement ✅
 
-Good news @${prAuthor} — Issue #${issueNumber} passed voting and is ready for implementation!
+Good news @${prAuthor} — Issue #${issueNumber} is ready for implementation!
 
 Push a new commit or add a comment to activate it for implementation tracking.${SIGNATURE}`,
       issueNumber,

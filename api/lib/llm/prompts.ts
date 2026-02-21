@@ -6,6 +6,7 @@
  */
 
 import type { IssueContext } from "./types.js";
+import { countUniqueParticipants } from "./types.js";
 import type { StandupData } from "../standup.js";
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -43,7 +44,7 @@ IMPORTANT:
 const MAX_CONTENT_CHARS = 100_000;
 
 /**
- * Build the user prompt from issue context.
+ * Build the user prompt from issue context for voting summarization.
  * Truncates content if necessary, prioritizing recent comments.
  */
 export function buildUserPrompt(context: IssueContext): string {
@@ -67,13 +68,13 @@ export function buildUserPrompt(context: IssueContext): string {
     discussionText = truncateDiscussion(title, body, comments, MAX_CONTENT_CHARS);
   }
 
-  const uniqueParticipants = new Set(comments.map((c) => c.author));
+  const participantCount = countUniqueParticipants(comments);
 
   return `Summarize this GitHub issue discussion for a governance vote.
 
 METADATA:
 - Total comments: ${comments.length}
-- Unique participants: ${uniqueParticipants.size}
+- Unique participants: ${participantCount}
 
 ${discussionText}
 

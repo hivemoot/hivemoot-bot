@@ -72,13 +72,11 @@ let redisClient: Redis | null = null;
 
 function getOrCreateRedisClient(redisUrl: string): Redis {
   if (!redisClient) {
-    const useTls = redisUrl.startsWith("rediss://");
     redisClient = new Redis(redisUrl, {
       lazyConnect: true,
       commandTimeout: REDIS_COMMAND_TIMEOUT_MS,
       maxRetriesPerRequest: 3,
       connectTimeout: 5000,
-      ...(useTls ? { tls: { rejectUnauthorized: false } } : {}),
     });
   }
   return redisClient;

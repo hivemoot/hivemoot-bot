@@ -205,7 +205,10 @@ describe("GovernanceService", () => {
         expect(callArgs.comment).toContain("Formatted voting message with LLM summary");
       });
 
-      it("should fall back to generic message when LLM summarization fails", async () => {
+      it("should fall back to generic message and log warn when LLM summarization fails", async () => {
+        const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+        const govWithLogger = new GovernanceService(mockIssues, mockLogger);
+
         const mockSummarize = vi.fn().mockResolvedValue({
           success: false,
           reason: "API rate limited",
@@ -214,7 +217,7 @@ describe("GovernanceService", () => {
           return { summarize: mockSummarize };
         } as any);
 
-        await governance.transitionToVoting(testRef);
+        await govWithLogger.transitionToVoting(testRef);
 
         expect(mockIssues.getIssueContext).toHaveBeenCalledWith(testRef);
         expect(mockIssues.transition).toHaveBeenCalledWith(testRef, {
@@ -222,6 +225,9 @@ describe("GovernanceService", () => {
           addLabel: LABELS.VOTING,
           comment: expect.stringContaining(MESSAGES.votingStart()),
         });
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          expect.stringContaining("Using generic voting message for issue #42: API rate limited"),
+        );
       });
 
       it("should fall back to generic message when LLM throws an error", async () => {

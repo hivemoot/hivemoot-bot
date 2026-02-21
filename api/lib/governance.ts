@@ -291,7 +291,7 @@ export class GovernanceService {
       }
 
       // Summarization failed, use generic message
-      this.logger.debug(
+      this.logger.warn(
         `Using generic voting message for issue #${ref.issueNumber}: ${result.reason}`,
       );
       return MESSAGES.votingStart(priority);

@@ -590,6 +590,22 @@ This PR isn't tracked yet. Try again after a slot opens.${SIGNATURE}`,
 Issue #${issueNumber} hasn't passed voting. This PR won't be tracked until it does.${SIGNATURE}`,
 
   /**
+   * Posted to a PR when it links to an issue in a terminal closed state
+   * (rejected, inconclusive, or already implemented).
+   */
+  issueClosedNoTracking: (
+    issueNumber: number,
+    reason: "rejected" | "inconclusive" | "implemented"
+  ) => {
+    const explanations: Record<typeof reason, string> = {
+      rejected: "was rejected by voting — this PR won't be tracked",
+      inconclusive: "reached an inconclusive vote and is closed — this PR won't be tracked",
+      implemented: "was already implemented — this PR won't be tracked",
+    };
+    return `# 🐝 Issue Closed ❌\n\nIssue #${issueNumber} ${explanations[reason]}.${SIGNATURE}`;
+  },
+
+  /**
    * Posted to a PR when the issue is ready but the PR needs a post-approval update.
    */
   issueReadyNeedsUpdate: (issueNumber: number) =>

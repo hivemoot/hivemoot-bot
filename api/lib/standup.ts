@@ -719,7 +719,7 @@ export async function generateStandupLLMContent(
   llmContext?: StandupLLMContext
 ): Promise<StandupLLMContent | null> {
   try {
-    const modelResult = createModelFromEnv(
+    const modelResult = await createModelFromEnv(
       llmContext?.installationId !== undefined
         ? { installationId: llmContext.installationId }
         : undefined

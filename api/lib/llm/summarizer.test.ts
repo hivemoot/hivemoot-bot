@@ -45,7 +45,7 @@ describe("DiscussionSummarizer", () => {
   describe("when LLM is not configured", () => {
     it("should return failure with reason", async () => {
       const { createModelFromEnv } = await import("./provider.js");
-      vi.mocked(createModelFromEnv).mockReturnValue(null);
+      vi.mocked(createModelFromEnv).mockResolvedValue(null);
 
       const summarizer = new DiscussionSummarizer({ logger: mockLogger });
       const context: IssueContext = {
@@ -72,7 +72,7 @@ describe("DiscussionSummarizer", () => {
   describe("when there is no meaningful discussion", () => {
     it("should return minimal summary when there are no comments", async () => {
       const { createModelFromEnv } = await import("./provider.js");
-      vi.mocked(createModelFromEnv).mockReturnValue({
+      vi.mocked(createModelFromEnv).mockResolvedValue({
         model: {} as never,
         config: { provider: "anthropic", model: "test", maxTokens: 2000 },
       });
@@ -103,7 +103,7 @@ describe("DiscussionSummarizer", () => {
 
     it("should return minimal summary when all comments are from issue author", async () => {
       const { createModelFromEnv } = await import("./provider.js");
-      vi.mocked(createModelFromEnv).mockReturnValue({
+      vi.mocked(createModelFromEnv).mockResolvedValue({
         model: {} as never,
         config: { provider: "anthropic", model: "test", maxTokens: 2000 },
       });
@@ -149,7 +149,7 @@ describe("DiscussionSummarizer", () => {
       const { createModelFromEnv } = await import("./provider.js");
       const { generateObject } = await import("ai");
 
-      vi.mocked(createModelFromEnv).mockReturnValue({
+      vi.mocked(createModelFromEnv).mockResolvedValue({
         model: {} as never,
         config: { provider: "anthropic", model: "test", maxTokens: 2000 },
       });
@@ -206,7 +206,7 @@ describe("DiscussionSummarizer", () => {
       const { createModelFromEnv } = await import("./provider.js");
       const { generateObject } = await import("ai");
 
-      vi.mocked(createModelFromEnv).mockReturnValue({
+      vi.mocked(createModelFromEnv).mockResolvedValue({
         model: {} as never,
         config: { provider: "anthropic", model: "test", maxTokens: 2000 },
       });
@@ -261,7 +261,7 @@ describe("DiscussionSummarizer", () => {
       const { createModelFromEnv } = await import("./provider.js");
       const { generateObject } = await import("ai");
 
-      vi.mocked(createModelFromEnv).mockReturnValue({
+      vi.mocked(createModelFromEnv).mockResolvedValue({
         model: {} as never,
         config: { provider: "openai", model: "test", maxTokens: 2000 },
       });
@@ -309,7 +309,7 @@ describe("DiscussionSummarizer", () => {
       const { createModelFromEnv } = await import("./provider.js");
       const { generateObject } = await import("ai");
 
-      vi.mocked(createModelFromEnv).mockReturnValue({
+      vi.mocked(createModelFromEnv).mockResolvedValue({
         model: {} as never,
         config: { provider: "anthropic", model: "test", maxTokens: 2000 },
       });

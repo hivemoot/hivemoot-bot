@@ -609,7 +609,13 @@ async function handleGather(ctx: CommandContext): Promise<CommandResult> {
   try {
     const context = await issues.getIssueContext(ref);
     const generator = new BlueprintGenerator();
-    const result = await generator.generate(context);
+    const result = await generator.generate(
+      context,
+      undefined,
+      ctx.installationId !== undefined
+        ? { installationId: ctx.installationId }
+        : undefined
+    );
 
     if (result.success) {
       blueprintContent = buildBlueprintContent(result.plan, ctx.senderLogin);
@@ -619,10 +625,10 @@ async function handleGather(ctx: CommandContext): Promise<CommandResult> {
     }
   } catch (error) {
     if (existingAlignmentCommentId) {
-      const reason = error instanceof Error ? error.message : String(error);
+      ctx.log.error({ err: error, issue: ctx.issueNumber }, "Blueprint refresh failed in handleGather");
       await reply(
         ctx,
-        `I couldn't refresh the blueprint just now (${reason}). Keeping the previous blueprint comment unchanged.\n\nPlease retry \`/gather\` shortly.`,
+        `I couldn't refresh the blueprint just now. Please retry \`/gather\` shortly, or contact your administrator if the problem persists.`,
       );
       return { status: "executed", message: "Blueprint refresh failed; previous comment preserved." };
     }
@@ -710,7 +716,13 @@ async function handlePreflight(ctx: CommandContext): Promise<CommandResult> {
           groupEnd: noop,
         },
       });
-      const result = await generator.generate(prContext);
+      const result = await generator.generate(
+        prContext,
+        undefined,
+        ctx.installationId !== undefined
+          ? { installationId: ctx.installationId }
+          : undefined
+      );
 
       if (result.success) {
         const formatted = formatCommitMessage(result.message, ctx.issueNumber);
@@ -830,7 +842,13 @@ async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
         groupEnd: noop,
       },
     });
-    const result = await generator.generate(prContext);
+    const result = await generator.generate(
+      prContext,
+      undefined,
+      ctx.installationId !== undefined
+        ? { installationId: ctx.installationId }
+        : undefined
+    );
 
     if (!result.success) {
       body += "### Commit Message\n\n";

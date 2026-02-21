@@ -1,6 +1,7 @@
 import { createDecipheriv } from "node:crypto";
 
 import type { LLMProvider } from "./types.js";
+import { normalizeEnvString } from "./env.js";
 
 const DEFAULT_REDIS_KEY_PREFIX = "hive:byok";
 const REDIS_URL_ENV_CANDIDATES = ["BYOK_REDIS_REST_URL", "UPSTASH_REDIS_REST_URL"] as const;
@@ -35,26 +36,6 @@ export interface InstallationBYOKConfig {
   provider: LLMProvider;
   model?: string;
   apiKey: string;
-}
-
-function normalizeEnvString(value: string | undefined): string | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-
-  let normalized = value.trim();
-  if (normalized.length === 0) {
-    return undefined;
-  }
-
-  const hasMatchingQuotes =
-    (normalized.startsWith("\"") && normalized.endsWith("\"")) ||
-    (normalized.startsWith("'") && normalized.endsWith("'"));
-  if (hasMatchingQuotes) {
-    normalized = normalized.slice(1, -1).trim();
-  }
-
-  return normalized.length > 0 ? normalized : undefined;
 }
 
 function readFirstEnv(names: readonly string[]): string | undefined {

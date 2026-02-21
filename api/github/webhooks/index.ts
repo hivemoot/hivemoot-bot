@@ -920,7 +920,12 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-const probot = createProbot();
+// Suppress Probot's auto-detection of REDIS_URL for bottleneck rate-limit
+// clustering. When REDIS_URL is set in the Vercel environment, Probot opens a
+// raw ioredis TCP connection that goes stale between serverless invocations,
+// causing ECONNRESET/EPIPE errors that silently drop webhook commands.
+// The bot does not use distributed rate limiting; force the local datastore.
+const probot = createProbot({ overrides: { redisConfig: "" } });
 const middleware = createNodeMiddleware(app, {
   probot,
   webhooksPath: "/api/github/webhooks",

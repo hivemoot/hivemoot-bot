@@ -20,6 +20,7 @@ import { createOpenAI } from "@ai-sdk/openai";
 import type { LanguageModelV1 } from "ai";
 
 import type { LLMConfig, LLMProvider, LLMReadiness } from "./types.js";
+import { resolveInstallationBYOKConfig } from "./byok.js";
 import { LLM_DEFAULTS } from "./types.js";
 import { CONFIG_BOUNDS } from "../../config.js";
 
@@ -159,36 +160,19 @@ export function getLLMConfig(): LLMConfig | null {
  * @returns LanguageModelV1 instance
  * @throws Error if API key is missing for the provider
  */
-export function createModel(config: LLMConfig): LanguageModelV1 {
+function createModelWithApiKey(config: LLMConfig, apiKey: string): LanguageModelV1 {
   switch (config.provider) {
     case "anthropic": {
-      const apiKey = normalizeEnvString(process.env.ANTHROPIC_API_KEY, "ANTHROPIC_API_KEY");
-      if (!apiKey) {
-        throw new Error("ANTHROPIC_API_KEY environment variable is not set");
-      }
       const anthropic = createAnthropic({ apiKey });
       return anthropic(config.model);
     }
 
     case "openai": {
-      const apiKey = normalizeEnvString(process.env.OPENAI_API_KEY, "OPENAI_API_KEY");
-      if (!apiKey) {
-        throw new Error("OPENAI_API_KEY environment variable is not set");
-      }
       const openai = createOpenAI({ apiKey });
       return openai(config.model);
     }
 
     case "google": {
-      // GOOGLE_API_KEY takes priority for backward compat with existing deployments.
-      // GOOGLE_GENERATIVE_AI_API_KEY is the AI SDK default, accepted as fallback
-      // so users following Vercel AI SDK docs don't need a separate var.
-      const apiKey =
-        normalizeEnvString(process.env.GOOGLE_API_KEY, "GOOGLE_API_KEY") ??
-        normalizeEnvString(process.env.GOOGLE_GENERATIVE_AI_API_KEY, "GOOGLE_GENERATIVE_AI_API_KEY");
-      if (!apiKey) {
-        throw new Error("GOOGLE_API_KEY or GOOGLE_GENERATIVE_AI_API_KEY environment variable is not set");
-      }
       const google = createGoogleGenerativeAI({ apiKey });
       // Disable Gemini's native responseSchema so the SDK injects the JSON
       // schema into the prompt instead.  @ai-sdk/google v1.2.22 (Jul 2025)
@@ -215,10 +199,6 @@ export function createModel(config: LLMConfig): LanguageModelV1 {
     }
 
     case "mistral": {
-      const apiKey = normalizeEnvString(process.env.MISTRAL_API_KEY, "MISTRAL_API_KEY");
-      if (!apiKey) {
-        throw new Error("MISTRAL_API_KEY environment variable is not set");
-      }
       const mistral = createMistral({ apiKey });
       return mistral(config.model);
     }
@@ -231,23 +211,106 @@ export function createModel(config: LLMConfig): LanguageModelV1 {
   }
 }
 
+function getApiKeyFromEnv(provider: LLMProvider): string {
+  switch (provider) {
+    case "anthropic": {
+      const apiKey = normalizeEnvString(process.env.ANTHROPIC_API_KEY, "ANTHROPIC_API_KEY");
+      if (!apiKey) {
+        throw new Error("ANTHROPIC_API_KEY environment variable is not set");
+      }
+      return apiKey;
+    }
+    case "openai": {
+      const apiKey = normalizeEnvString(process.env.OPENAI_API_KEY, "OPENAI_API_KEY");
+      if (!apiKey) {
+        throw new Error("OPENAI_API_KEY environment variable is not set");
+      }
+      return apiKey;
+    }
+    case "google": {
+      // GOOGLE_API_KEY takes priority for backward compat with existing deployments.
+      // GOOGLE_GENERATIVE_AI_API_KEY is the AI SDK default, accepted as fallback
+      // so users following Vercel AI SDK docs don't need a separate var.
+      const apiKey =
+        normalizeEnvString(process.env.GOOGLE_API_KEY, "GOOGLE_API_KEY") ??
+        normalizeEnvString(process.env.GOOGLE_GENERATIVE_AI_API_KEY, "GOOGLE_GENERATIVE_AI_API_KEY");
+      if (!apiKey) {
+        throw new Error("GOOGLE_API_KEY or GOOGLE_GENERATIVE_AI_API_KEY environment variable is not set");
+      }
+      return apiKey;
+    }
+    case "mistral": {
+      const apiKey = normalizeEnvString(process.env.MISTRAL_API_KEY, "MISTRAL_API_KEY");
+      if (!apiKey) {
+        throw new Error("MISTRAL_API_KEY environment variable is not set");
+      }
+      return apiKey;
+    }
+    default: {
+      const _exhaustive: never = provider;
+      throw new Error(`Unsupported LLM provider: ${_exhaustive}`);
+    }
+  }
+}
+
+export function createModel(config: LLMConfig): LanguageModelV1 {
+  const apiKey = getApiKeyFromEnv(config.provider);
+  return createModelWithApiKey(config, apiKey);
+}
+
 /**
  * Create a model from environment configuration.
- * Returns null if LLM is not configured.
  *
- * The optional installation context is reserved for BYOK resolution wiring.
- * Current behavior still uses shared environment variables only.
+ * Without installation context: returns null if LLM is not configured or if
+ * model creation fails (missing API key, unsupported provider). Degrades
+ * gracefully so callers don't need their own try/catch.
+ *
+ * With installation context: resolves per-installation BYOK material from
+ * Redis and does not fall back to shared env keys. Returns null when the
+ * installation has no BYOK record. Throws on Redis/decryption failures so
+ * callers can distinguish "no key" from "key resolution broken".
  */
-export function createModelFromEnv(
-  _options?: ModelResolutionOptions
-): { model: LanguageModelV1; config: LLMConfig } | null {
+export async function createModelFromEnv(
+  options?: ModelResolutionOptions
+): Promise<{ model: LanguageModelV1; config: LLMConfig } | null> {
+  if (options?.installationId !== undefined) {
+    const byokConfig = await resolveInstallationBYOKConfig(options.installationId);
+    if (!byokConfig) {
+      return null;
+    }
+
+    const model = byokConfig.model ?? normalizeEnvString(process.env.LLM_MODEL, "LLM_MODEL");
+    if (!model) {
+      throw new Error(
+        `BYOK record for installation ${options.installationId} does not include a model and LLM_MODEL is not set`
+      );
+    }
+
+    const config: LLMConfig = {
+      provider: byokConfig.provider,
+      model,
+      maxTokens: parseRequestedMaxTokensFromEnv(),
+    };
+
+    return {
+      model: createModelWithApiKey(config, byokConfig.apiKey),
+      config,
+    };
+  }
+
   const config = getLLMConfig();
   if (!config) {
     return null;
   }
 
-  return {
-    model: createModel(config),
-    config,
-  };
+  try {
+    return {
+      model: createModel(config),
+      config,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[llm] createModelFromEnv: model creation failed, degrading to no-LLM: ${message}`);
+    return null;
+  }
 }

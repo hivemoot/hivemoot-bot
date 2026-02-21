@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { createCipheriv, randomBytes } from "node:crypto";
 import { isLLMConfigured, getLLMConfig, createModel, createModelFromEnv, getLLMReadiness } from "./provider.js";
-import type { LLMConfig } from "./types.js";
+import type { LLMConfig, LLMProvider } from "./types.js";
 
 /**
  * Tests for LLM Provider Factory
@@ -15,6 +16,7 @@ describe("LLM Provider", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     process.env = originalEnv;
   });
 
@@ -257,6 +259,18 @@ describe("LLM Provider", () => {
       );
     });
 
+    it("should throw when provider is unsupported at runtime", () => {
+      const config: LLMConfig = {
+        provider: "unsupported-provider" as LLMProvider,
+        model: "model-id",
+        maxTokens: 1000,
+      };
+
+      expect(() => createModel(config)).toThrow(
+        "Unsupported LLM provider: unsupported-provider",
+      );
+    });
+
     it("should create Anthropic model when API key is set", () => {
       process.env.ANTHROPIC_API_KEY = "sk-ant-test-key";
       const config: LLMConfig = {
@@ -401,19 +415,45 @@ describe("LLM Provider", () => {
   });
 
   describe("createModelFromEnv", () => {
-    it("should return null when LLM not configured", () => {
+    function encryptPayload(
+      payload: Record<string, string>,
+      masterKey: Buffer,
+    ): { ciphertext: string; iv: string; tag: string } {
+      const iv = randomBytes(12);
+      const cipher = createCipheriv("aes-256-gcm", masterKey, iv);
+      const plaintext = Buffer.from(JSON.stringify(payload), "utf8");
+      const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+      const tag = cipher.getAuthTag();
+
+      return {
+        ciphertext: ciphertext.toString("base64"),
+        iv: iv.toString("base64"),
+        tag: tag.toString("base64"),
+      };
+    }
+
+    function mockRedisLookup(result: string | null): void {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ result }),
+      });
+      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    }
+
+    it("should return null when LLM not configured", async () => {
       delete process.env.LLM_PROVIDER;
       delete process.env.LLM_MODEL;
 
-      expect(createModelFromEnv()).toBeNull();
+      await expect(createModelFromEnv()).resolves.toBeNull();
     });
 
-    it("should return model and config when configured", () => {
+    it("should return model and config when configured", async () => {
       process.env.LLM_PROVIDER = "anthropic";
       process.env.LLM_MODEL = "claude-3-haiku";
       process.env.ANTHROPIC_API_KEY = "sk-ant-test";
 
-      const result = createModelFromEnv();
+      const result = await createModelFromEnv();
 
       expect(result).not.toBeNull();
       expect(result?.model).toBeDefined();
@@ -422,16 +462,187 @@ describe("LLM Provider", () => {
       expect(result?.config.model).toBe("claude-3-haiku");
     });
 
-    it("should return model and normalized config for gemini alias", () => {
+    it("should return model and normalized config for gemini alias", async () => {
       process.env.LLM_PROVIDER = "Gemini";
       process.env.LLM_MODEL = "gemini-2.0-flash";
       process.env.GOOGLE_GENERATIVE_AI_API_KEY = "google-test";
 
-      const result = createModelFromEnv();
+      const result = await createModelFromEnv();
 
       expect(result).not.toBeNull();
       expect(result?.config.provider).toBe("google");
       expect(result?.config.model).toBe("gemini-2.0-flash");
+    });
+
+    it("should return null and warn when model creation fails (e.g. missing API key)", async () => {
+      // Provider and model are set but API key is absent — createModel() would throw.
+      // createModelFromEnv() must catch this and degrade to null so callers don't
+      // need their own try-catch for BYOK or other config errors.
+      process.env.LLM_PROVIDER = "anthropic";
+      process.env.LLM_MODEL = "claude-3-haiku";
+      delete process.env.ANTHROPIC_API_KEY;
+
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const result = await createModelFromEnv();
+
+      expect(result).toBeNull();
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("createModelFromEnv: model creation failed, degrading to no-LLM")
+      );
+
+      warnSpy.mockRestore();
+    });
+
+    it("should resolve installation-scoped BYOK config from Redis", async () => {
+      const masterKey = randomBytes(32);
+      const { ciphertext, iv, tag } = encryptPayload(
+        { apiKey: "sk-byok", provider: "openai", model: "gpt-4o-mini" },
+        masterKey,
+      );
+
+      process.env.BYOK_REDIS_REST_URL = "https://example-redis.upstash.io";
+      process.env.BYOK_REDIS_REST_TOKEN = "byok-token";
+      process.env.BYOK_MASTER_KEYS_JSON = JSON.stringify({
+        v1: masterKey.toString("base64"),
+      });
+      process.env.LLM_MAX_TOKENS = "2500";
+
+      mockRedisLookup(
+        JSON.stringify({
+          ciphertext,
+          iv,
+          tag,
+          keyVersion: "v1",
+          status: "active",
+        }),
+      );
+
+      const result = await createModelFromEnv({ installationId: 42 });
+      expect(result).not.toBeNull();
+      expect(result?.config.provider).toBe("openai");
+      expect(result?.config.model).toBe("gpt-4o-mini");
+      expect(result?.config.maxTokens).toBe(2500);
+      expect(result?.model.modelId).toBe("gpt-4o-mini");
+
+      const fetchMock = vi.mocked(fetch);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0]?.[0]).toBe(
+        "https://example-redis.upstash.io/get/hive%3Abyok%3A42",
+      );
+    });
+
+    it("should return null when BYOK record is missing for installation", async () => {
+      process.env.BYOK_REDIS_REST_URL = "https://example-redis.upstash.io";
+      process.env.BYOK_REDIS_REST_TOKEN = "byok-token";
+      process.env.BYOK_MASTER_KEYS_JSON = JSON.stringify({
+        v1: randomBytes(32).toString("base64"),
+      });
+      process.env.OPENAI_API_KEY = "shared-key-should-not-be-used";
+      process.env.LLM_PROVIDER = "openai";
+      process.env.LLM_MODEL = "gpt-4o-mini";
+
+      mockRedisLookup(null);
+
+      await expect(createModelFromEnv({ installationId: 42 })).resolves.toBeNull();
+    });
+
+    it("should throw when BYOK key version is unavailable", async () => {
+      const masterKey = randomBytes(32);
+      const { ciphertext, iv, tag } = encryptPayload(
+        { apiKey: "sk-byok", provider: "openai", model: "gpt-4o-mini" },
+        masterKey,
+      );
+
+      process.env.BYOK_REDIS_REST_URL = "https://example-redis.upstash.io";
+      process.env.BYOK_REDIS_REST_TOKEN = "byok-token";
+      process.env.BYOK_MASTER_KEYS_JSON = JSON.stringify({
+        v2: randomBytes(32).toString("base64"),
+      });
+
+      mockRedisLookup(
+        JSON.stringify({
+          ciphertext,
+          iv,
+          tag,
+          keyVersion: "v1",
+          status: "active",
+        }),
+      );
+
+      await expect(createModelFromEnv({ installationId: 42 })).rejects.toThrow(
+        "BYOK key version 'v1' is unavailable",
+      );
+    });
+
+    it("should throw when BYOK payload cannot be decrypted", async () => {
+      process.env.BYOK_REDIS_REST_URL = "https://example-redis.upstash.io";
+      process.env.BYOK_REDIS_REST_TOKEN = "byok-token";
+      process.env.BYOK_MASTER_KEYS_JSON = JSON.stringify({
+        v1: randomBytes(32).toString("base64"),
+      });
+
+      mockRedisLookup(
+        JSON.stringify({
+          ciphertext: "aW52YWxpZA==",
+          iv: randomBytes(12).toString("base64"),
+          tag: randomBytes(16).toString("base64"),
+          keyVersion: "v1",
+          status: "active",
+        }),
+      );
+
+      await expect(createModelFromEnv({ installationId: 42 })).rejects.toThrow(
+        "BYOK key material could not be decrypted",
+      );
+    });
+
+    it("should throw when BYOK model is missing and LLM_MODEL is unset", async () => {
+      const masterKey = randomBytes(32);
+      const { ciphertext, iv, tag } = encryptPayload(
+        { apiKey: "sk-byok", provider: "openai" },
+        masterKey,
+      );
+
+      process.env.BYOK_REDIS_REST_URL = "https://example-redis.upstash.io";
+      process.env.BYOK_REDIS_REST_TOKEN = "byok-token";
+      process.env.BYOK_MASTER_KEYS_JSON = JSON.stringify({
+        v1: masterKey.toString("base64"),
+      });
+      delete process.env.LLM_MODEL;
+
+      mockRedisLookup(
+        JSON.stringify({
+          ciphertext,
+          iv,
+          tag,
+          keyVersion: "v1",
+          status: "active",
+        }),
+      );
+
+      await expect(createModelFromEnv({ installationId: 42 })).rejects.toThrow(
+        "BYOK record for installation 42 does not include a model and LLM_MODEL is not set",
+      );
+    });
+
+    it("should throw when BYOK returns an unsupported provider at runtime", async () => {
+      vi.resetModules();
+      vi.doMock("./byok.js", () => ({
+        resolveInstallationBYOKConfig: vi.fn().mockResolvedValue({
+          provider: "unsupported-provider",
+          model: "model-id",
+          apiKey: "sk-byok",
+        }),
+      }));
+
+      const { createModelFromEnv: createModelFromEnvWithMock } = await import("./provider.js");
+
+      await expect(
+        createModelFromEnvWithMock({ installationId: 42 }),
+      ).rejects.toThrow("Unsupported LLM provider: unsupported-provider");
+
+      vi.doUnmock("./byok.js");
     });
   });
 });

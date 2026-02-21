@@ -2,32 +2,21 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { executeCommand, type CommandContext } from "./handlers.js";
 import { LABELS, REQUIRED_REPOSITORY_LABELS } from "../../config.js";
 
+// Mock the blueprint generator to control success/failure paths.
+// vi.hoisted ensures the mock fn is available before vi.mock runs.
+const { mockBlueprintGenerate, mockCommitMessageGenerate, mockEvaluatePreflightChecks } = vi.hoisted(() => ({
+  mockBlueprintGenerate: vi.fn(),
+  mockCommitMessageGenerate: vi.fn(),
+  mockEvaluatePreflightChecks: vi.fn(),
+}));
+
 // Mock the governance/issue operations modules
 vi.mock("../index.js", () => ({
   createIssueOperations: vi.fn(() => mockIssueOps),
   createGovernanceService: vi.fn(() => mockGovernance),
   createRepositoryLabelService: vi.fn(() => mockLabelService),
-  loadRepositoryConfig: vi.fn().mockResolvedValue({
-    version: 1,
-    governance: {
-      proposals: {
-        discussion: { exits: [{ type: "manual" }], durationMs: 0 },
-        voting: { exits: [{ type: "manual" }], durationMs: 0 },
-        extendedVoting: { exits: [{ type: "manual" }], durationMs: 0 },
-      },
-      pr: {
-        staleDays: 3,
-        maxPRsPerIssue: 3,
-        trustedReviewers: ["alice"],
-        intake: [{ method: "update" }],
-        mergeReady: null,
-      },
-    },
-    standup: {
-      enabled: false,
-      category: "",
-    },
-  }),
+  createPROperations: vi.fn(() => mockPROps),
+  loadRepositoryConfig: vi.fn().mockImplementation(async () => mockRepoConfig),
 }));
 
 vi.mock("../discussions.js", () => ({
@@ -43,11 +32,6 @@ vi.mock("../llm/provider.js", () => ({
   getLLMReadiness: vi.fn(() => ({ ready: false, reason: "not_configured" })),
 }));
 
-// Mock the blueprint generator to control success/failure paths.
-// vi.hoisted ensures the mock fn is available before vi.mock runs.
-const { mockBlueprintGenerate } = vi.hoisted(() => ({
-  mockBlueprintGenerate: vi.fn(),
-}));
 vi.mock("../llm/blueprint.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../llm/blueprint.js")>();
   return {
@@ -58,9 +42,49 @@ vi.mock("../llm/blueprint.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../llm/commit-message.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../llm/commit-message.js")>();
+  return {
+    ...actual,
+    CommitMessageGenerator: class {
+      generate = mockCommitMessageGenerate;
+    },
+  };
+});
+
+vi.mock("../merge-readiness.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../merge-readiness.js")>();
+  return {
+    ...actual,
+    evaluatePreflightChecks: mockEvaluatePreflightChecks,
+  };
+});
+
 let mockIssueOps: Record<string, ReturnType<typeof vi.fn>>;
 let mockGovernance: Record<string, ReturnType<typeof vi.fn>>;
 let mockLabelService: Record<string, ReturnType<typeof vi.fn>>;
+let mockPROps: Record<string, ReturnType<typeof vi.fn>>;
+let mockRepoConfig: {
+  version: number;
+  governance: {
+    proposals: {
+      discussion: { exits: { type: string }[]; durationMs: number };
+      voting: { exits: { type: string }[]; durationMs: number };
+      extendedVoting: { exits: { type: string }[]; durationMs: number };
+    };
+    pr: {
+      staleDays: number;
+      maxPRsPerIssue: number;
+      trustedReviewers: string[];
+      intake: { method: string }[];
+      mergeReady: null;
+    };
+  };
+  standup: {
+    enabled: boolean;
+    category: string;
+  };
+};
 
 function createMockOctokit(permission = "admin") {
   return {
@@ -75,7 +99,9 @@ function createMockOctokit(permission = "admin") {
             content: Buffer.from("version: 1\n").toString("base64"),
           },
         }),
-        get: vi.fn().mockResolvedValue({ data: {} }),
+        get: vi.fn().mockResolvedValue({
+          data: { allow_squash_merge: true },
+        }),
       },
       reactions: {
         createForIssueComment: vi.fn().mockResolvedValue({}),
@@ -91,6 +117,17 @@ function createMockOctokit(permission = "admin") {
       },
       pulls: {
         list: vi.fn().mockResolvedValue({ data: [] }),
+        get: vi.fn().mockResolvedValue({
+          data: {
+            title: "",
+            body: "",
+            mergeable_state: "clean",
+            head: { sha: "head-sha" },
+          },
+        }),
+        listCommits: vi.fn().mockResolvedValue({ data: [] }),
+        merge: vi.fn().mockResolvedValue({}),
+        updateBranch: vi.fn().mockResolvedValue({}),
       },
     },
     paginate: {
@@ -154,6 +191,49 @@ describe("executeCommand", () => {
         renamedLabels: [{ from: "phase:voting", to: "hivemoot:voting" }],
       }),
     };
+    mockPROps = {
+      get: vi.fn().mockResolvedValue({
+        state: "open",
+        merged: false,
+        headSha: "head-sha",
+      }),
+    };
+    mockRepoConfig = {
+      version: 1,
+      governance: {
+        proposals: {
+          discussion: { exits: [{ type: "manual" }], durationMs: 0 },
+          voting: { exits: [{ type: "manual" }], durationMs: 0 },
+          extendedVoting: { exits: [{ type: "manual" }], durationMs: 0 },
+        },
+        pr: {
+          staleDays: 3,
+          maxPRsPerIssue: 3,
+          trustedReviewers: ["alice"],
+          intake: [{ method: "update" }],
+          mergeReady: null,
+        },
+      },
+      standup: {
+        enabled: false,
+        category: "",
+      },
+    };
+    mockEvaluatePreflightChecks.mockResolvedValue({
+      allHardChecksPassed: false,
+      checks: [
+        {
+          name: "CI Checks",
+          detail: "failing",
+          passed: false,
+          severity: "hard",
+        },
+      ],
+    });
+    mockCommitMessageGenerate.mockResolvedValue({
+      success: false,
+      kind: "not_configured",
+    });
     // Default: LLM not configured → fallback blueprint
     mockBlueprintGenerate.mockResolvedValue({
       success: false,
@@ -690,6 +770,29 @@ describe("executeCommand", () => {
       expect(body).toContain("Video tutorials");
     });
 
+    it("should pass installation context into blueprint generation", async () => {
+      mockIssueOps.getIssueContext.mockResolvedValue({
+        title: "Improve onboarding docs",
+        body: "Proposal body",
+        author: "queen",
+        comments: [
+          { author: "alice", body: "Looks good", createdAt: "2026-02-16T00:00:00.000Z" },
+        ],
+      });
+
+      const ctx = createCtx({
+        verb: "gather",
+        installationId: 77,
+      });
+      await executeCommand(ctx);
+
+      expect(mockBlueprintGenerate).toHaveBeenCalledWith(
+        expect.anything(),
+        undefined,
+        { installationId: 77 },
+      );
+    });
+
     it("should log reason when using fallback blueprint", async () => {
       mockIssueOps.getIssueContext.mockResolvedValue({
         title: "Test",
@@ -763,7 +866,156 @@ describe("executeCommand", () => {
       expect(ctx.octokit.rest.issues.updateComment).not.toHaveBeenCalled();
       expect(ctx.octokit.rest.issues.createComment).toHaveBeenCalledWith(
         expect.objectContaining({
-          body: expect.stringContaining("Keeping the previous blueprint comment unchanged."),
+          body: expect.stringContaining("I couldn't refresh the blueprint just now."),
+        }),
+      );
+    });
+
+    it("should not expose raw error message to users when blueprint refresh fails", async () => {
+      mockIssueOps.findAlignmentCommentId.mockResolvedValue(555);
+      const sensitiveError = new Error("AES-256-GCM decryption failed: Invalid auth tag");
+      mockIssueOps.getIssueContext.mockRejectedValue(sensitiveError);
+
+      const ctx = createCtx({ verb: "gather" });
+      await executeCommand(ctx);
+
+      const createCall = (ctx.octokit.rest.issues.createComment as ReturnType<typeof vi.fn>).mock.calls[0];
+      const postedBody: string = createCall[0].body;
+      expect(postedBody).not.toContain("AES-256-GCM");
+      expect(postedBody).not.toContain("Invalid auth tag");
+      expect(postedBody).toContain("contact your administrator");
+    });
+  });
+
+  describe("/preflight command", () => {
+    it("should pass installation context into commit message generation", async () => {
+      mockEvaluatePreflightChecks.mockResolvedValue({
+        allHardChecksPassed: true,
+        checks: [
+          {
+            name: "CI Checks",
+            detail: "passing",
+            passed: true,
+            severity: "hard",
+          },
+        ],
+      });
+      mockCommitMessageGenerate.mockResolvedValue({
+        success: true,
+        message: {
+          subject: "feat: add preflight coverage",
+          body: "Exercise installation-scoped generation options.",
+        },
+      });
+
+      const octokit = createMockOctokit();
+      octokit.rest.pulls.get.mockResolvedValue({
+        data: {
+          title: "Improve preflight output",
+          body: "Adds stronger preflight output.",
+          mergeable_state: "clean",
+          head: { sha: "head-sha" },
+        },
+      });
+      octokit.rest.pulls.listCommits.mockResolvedValue({
+        data: [{ commit: { message: "feat: improve preflight" } }],
+      });
+
+      const ctx = createCtx({
+        verb: "preflight",
+        isPullRequest: true,
+        issueLabels: [],
+        installationId: 88,
+        octokit,
+      });
+
+      const result = await executeCommand(ctx);
+      expect(result).toEqual({ status: "executed", message: "Preflight report posted." });
+      expect(mockCommitMessageGenerate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prNumber: 42,
+          title: "Improve preflight output",
+        }),
+        undefined,
+        { installationId: 88 },
+      );
+    });
+  });
+
+  describe("/squash command", () => {
+    it("should pass installation context into commit message generation", async () => {
+      mockEvaluatePreflightChecks
+        .mockResolvedValueOnce({
+          allHardChecksPassed: true,
+          checks: [
+            {
+              name: "CI Checks",
+              detail: "passing",
+              passed: true,
+              severity: "hard",
+            },
+          ],
+        })
+        .mockResolvedValueOnce({
+          allHardChecksPassed: true,
+          checks: [
+            {
+              name: "CI Checks",
+              detail: "passing",
+              passed: true,
+              severity: "hard",
+            },
+          ],
+        });
+      mockCommitMessageGenerate.mockResolvedValue({
+        success: true,
+        message: {
+          subject: "feat: squash safely",
+          body: "Run hard checks and merge with generated commit message.",
+        },
+      });
+
+      const octokit = createMockOctokit();
+      octokit.rest.repos.get.mockResolvedValue({
+        data: { allow_squash_merge: true },
+      });
+      octokit.rest.pulls.get.mockResolvedValue({
+        data: {
+          title: "Improve squash command",
+          body: "Body",
+          mergeable_state: "clean",
+          head: { sha: "head-sha" },
+        },
+      });
+      octokit.rest.pulls.listCommits.mockResolvedValue({
+        data: [{ commit: { message: "feat: improve squash\n\ndetails" } }],
+      });
+      octokit.rest.pulls.merge.mockResolvedValue({});
+      octokit.rest.pulls.updateBranch.mockResolvedValue({});
+
+      const ctx = createCtx({
+        verb: "squash",
+        isPullRequest: true,
+        issueLabels: [],
+        installationId: 99,
+        octokit,
+      });
+
+      const result = await executeCommand(ctx);
+      expect(result).toEqual({ status: "executed", message: "Squash merge completed." });
+      expect(mockCommitMessageGenerate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prNumber: 42,
+          title: "Improve squash command",
+        }),
+        undefined,
+        { installationId: 99 },
+      );
+      expect(octokit.rest.pulls.merge).toHaveBeenCalledWith(
+        expect.objectContaining({
+          pull_number: 42,
+          sha: "head-sha",
+          merge_method: "squash",
         }),
       );
     });
@@ -912,7 +1164,7 @@ describe("executeCommand", () => {
       );
     });
 
-    it("should log when permission check fails", async () => {
+    it("should log when permission check fails with non-transient error", async () => {
       const octokit = createMockOctokit();
       octokit.rest.repos.getCollaboratorPermissionLevel.mockRejectedValue(
         new Error("Token expired"),
@@ -926,6 +1178,115 @@ describe("executeCommand", () => {
         expect.objectContaining({ user: "maintainer" }),
         expect.stringContaining("Permission check failed"),
       );
+    });
+
+    it("should surface ECONNRESET during auth check as a visible failure instead of silently denying", async () => {
+      const octokit = createMockOctokit();
+      const econnreset = Object.assign(new Error("read ECONNRESET"), {
+        code: "ECONNRESET",
+        errno: -104,
+        syscall: "read",
+      });
+      octokit.rest.repos.getCollaboratorPermissionLevel.mockRejectedValue(econnreset);
+
+      const ctx = createCtx({ octokit });
+      const result = await executeCommand(ctx);
+
+      // Transient errors should surface as command failures with user feedback,
+      // not be silently swallowed as auth denials.
+      expect(result).toEqual({
+        status: "rejected",
+        reason: expect.stringContaining("CMD_VOTE_TRANSIENT"),
+      });
+      expect(octokit.rest.reactions.createForIssueComment).toHaveBeenCalledWith(
+        expect.objectContaining({ content: "confused" }),
+      );
+      expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.stringContaining("transient"),
+        }),
+      );
+    });
+
+    it.each([
+      { code: "ETIMEDOUT", message: "connect ETIMEDOUT 140.82.114.3:443" },
+      { code: "ECONNREFUSED", message: "connect ECONNREFUSED 127.0.0.1:443" },
+      { code: "ENOTFOUND", message: "getaddrinfo ENOTFOUND api.github.com" },
+      { code: "EAI_AGAIN", message: "getaddrinfo EAI_AGAIN api.github.com" },
+      { code: "EPIPE", message: "write EPIPE" },
+    ])("should surface $code during auth check as a visible failure", async ({ code, message }) => {
+      const octokit = createMockOctokit();
+      const err = Object.assign(new Error(message), { code });
+      octokit.rest.repos.getCollaboratorPermissionLevel.mockRejectedValue(err);
+
+      const ctx = createCtx({ octokit });
+      const result = await executeCommand(ctx);
+
+      expect(result).toEqual({
+        status: "rejected",
+        reason: expect.stringContaining("CMD_VOTE_TRANSIENT"),
+      });
+    });
+
+    it("should surface 429 rate-limit during auth check as a visible failure instead of silently denying", async () => {
+      const octokit = createMockOctokit();
+      const rateLimited = Object.assign(new Error("rate limit exceeded"), { status: 429 });
+      octokit.rest.repos.getCollaboratorPermissionLevel.mockRejectedValue(rateLimited);
+
+      const ctx = createCtx({ octokit });
+      const result = await executeCommand(ctx);
+
+      expect(result).toEqual({
+        status: "rejected",
+        reason: expect.stringContaining("CMD_VOTE_TRANSIENT"),
+      });
+      expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.stringContaining("transient"),
+        }),
+      );
+    });
+
+    it("should surface 503 server error during auth check as a visible failure instead of silently denying", async () => {
+      const octokit = createMockOctokit();
+      const serverError = Object.assign(new Error("Service Unavailable"), { status: 503 });
+      octokit.rest.repos.getCollaboratorPermissionLevel.mockRejectedValue(serverError);
+
+      const ctx = createCtx({ octokit });
+      const result = await executeCommand(ctx);
+
+      expect(result).toEqual({
+        status: "rejected",
+        reason: expect.stringContaining("CMD_VOTE_TRANSIENT"),
+      });
+      expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.stringContaining("transient"),
+        }),
+      );
+    });
+
+    it("should not crash when feedback delivery fails during transient auth error", async () => {
+      const octokit = createMockOctokit();
+      const econnreset = Object.assign(new Error("read ECONNRESET"), {
+        code: "ECONNRESET",
+      });
+      octokit.rest.repos.getCollaboratorPermissionLevel.mockRejectedValue(econnreset);
+      // Both feedback calls fail — the API is down
+      octokit.rest.reactions.createForIssueComment.mockRejectedValue(
+        new Error("ECONNRESET"),
+      );
+      octokit.rest.issues.createComment.mockRejectedValue(
+        new Error("ECONNRESET"),
+      );
+
+      const ctx = createCtx({ octokit });
+      const result = await executeCommand(ctx);
+
+      // Should still return rejected, not crash
+      expect(result.status).toBe("rejected");
+      // Should log that feedback delivery failed
+      expect(ctx.log.error).toHaveBeenCalled();
     });
   });
 

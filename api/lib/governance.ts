@@ -165,6 +165,8 @@ export class GovernanceService {
       addLabel: LABELS.VOTING,
       comment: commentBody,
     });
+
+    await this.pinVotingComment(ref);
   }
 
   /**
@@ -184,7 +186,27 @@ export class GovernanceService {
 
     const commentBody = await this.buildVotingCommentBody(ref);
     await this.issues.comment(ref, commentBody);
+    await this.pinVotingComment(ref);
     return "posted";
+  }
+
+  /**
+   * Pin the current voting comment on an issue.
+   *
+   * Fail-safe: pinning is a UX enhancement and must never interrupt the
+   * governance flow if it fails (API unavailable, permission denied, etc.).
+   */
+  private async pinVotingComment(ref: IssueRef): Promise<void> {
+    try {
+      const commentId = await this.issues.findVotingCommentId(ref);
+      if (commentId !== null) {
+        await this.issues.pinComment(ref, commentId);
+        this.logger.info(`Pinned voting comment ${commentId} on issue #${ref.issueNumber}`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`Failed to pin voting comment on issue #${ref.issueNumber}: ${message}`);
+    }
   }
 
   /**
@@ -224,9 +246,9 @@ export class GovernanceService {
 
     // Validate LLM is fully configured (including API key) BEFORE any GitHub calls.
     // createModelFromEnv() returns null if provider/model not set, or throws if API key missing.
-    let modelResult: ReturnType<typeof createModelFromEnv>;
+    let modelResult: Awaited<ReturnType<typeof createModelFromEnv>>;
     try {
-      modelResult = createModelFromEnv(
+      modelResult = await createModelFromEnv(
         ref.installationId !== undefined
           ? { installationId: ref.installationId }
           : undefined

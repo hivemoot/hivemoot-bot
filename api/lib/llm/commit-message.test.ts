@@ -11,7 +11,7 @@ import type { PRContext } from "./types.js";
 
 // Mock the provider to prevent actual API calls
 vi.mock("./provider.js", () => ({
-  createModelFromEnv: vi.fn().mockReturnValue(null),
+  createModelFromEnv: vi.fn().mockResolvedValue(null),
 }));
 
 // Mock the ai package

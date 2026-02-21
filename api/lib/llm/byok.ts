@@ -1,6 +1,6 @@
 import { createDecipheriv } from "node:crypto";
 
-import Redis from "ioredis";
+import { Redis } from "ioredis";
 
 import type { LLMProvider } from "./types.js";
 

@@ -7,11 +7,12 @@ const { mockGet } = vi.hoisted(() => ({
   mockGet: vi.fn(),
 }));
 
-vi.mock("ioredis", () => ({
-  default: class {
+vi.mock("ioredis", () => {
+  const MockRedis = class {
     get = mockGet;
-  },
-}));
+  };
+  return { default: MockRedis, Redis: MockRedis };
+});
 
 /**
  * Tests for LLM Provider Factory

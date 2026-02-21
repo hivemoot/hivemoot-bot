@@ -433,5 +433,25 @@ describe("LLM Provider", () => {
       expect(result?.config.provider).toBe("google");
       expect(result?.config.model).toBe("gemini-2.0-flash");
     });
+
+    it("should return null and warn when model creation fails (e.g. missing API key)", () => {
+      // Provider and model are set but API key is absent — createModel() would throw.
+      // createModelFromEnv() must catch this and degrade to null so callers don't
+      // need their own try-catch for BYOK or other config errors.
+      process.env.LLM_PROVIDER = "anthropic";
+      process.env.LLM_MODEL = "claude-3-haiku";
+      delete process.env.ANTHROPIC_API_KEY;
+
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const result = createModelFromEnv();
+
+      expect(result).toBeNull();
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("createModelFromEnv: model creation failed, degrading to no-LLM")
+      );
+
+      warnSpy.mockRestore();
+    });
   });
 });

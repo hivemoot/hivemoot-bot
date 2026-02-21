@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createCipheriv, randomBytes } from "node:crypto";
 import { isLLMConfigured, getLLMConfig, createModel, createModelFromEnv, getLLMReadiness } from "./provider.js";
+import { _resetMasterKeysCache } from "./byok.js";
 import type { LLMConfig, LLMProvider } from "./types.js";
 
 /**
@@ -18,6 +19,7 @@ describe("LLM Provider", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     process.env = originalEnv;
+    _resetMasterKeysCache();
   });
 
   describe("isLLMConfigured", () => {

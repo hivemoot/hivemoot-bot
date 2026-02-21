@@ -5,10 +5,12 @@
  * Supports multiple providers via environment configuration.
  *
  * Environment Variables:
- * - LLM_PROVIDER: openai | anthropic | google | mistral
+ * - LLM_PROVIDER: openai | anthropic | google | gemini | mistral
+ *     ("gemini" is accepted as an alias for "google")
  * - LLM_MODEL: Model name (e.g., claude-3-haiku-20240307, gpt-4o-mini)
  * - ANTHROPIC_API_KEY / OPENAI_API_KEY / etc: Provider-specific API keys
- * - LLM_MAX_TOKENS: Optional, defaults to 2000
+ *     (Google accepts GOOGLE_API_KEY or GOOGLE_GENERATIVE_AI_API_KEY)
+ * - LLM_MAX_TOKENS: Optional requested output budget, defaults to 4096
  */
 
 import { createAnthropic } from "@ai-sdk/anthropic";
@@ -17,22 +19,113 @@ import { createMistral } from "@ai-sdk/mistral";
 import { createOpenAI } from "@ai-sdk/openai";
 import type { LanguageModelV1 } from "ai";
 
-import type { LLMConfig, LLMProvider } from "./types.js";
+import type { LLMConfig, LLMProvider, LLMReadiness } from "./types.js";
+import { resolveInstallationBYOKConfig } from "./byok.js";
 import { LLM_DEFAULTS } from "./types.js";
+import { CONFIG_BOUNDS } from "../../config.js";
+
+export interface ModelResolutionOptions {
+  installationId?: number;
+}
 
 // ───────────────────────────────────────────────────────────────────────────────
 // Environment Parsing
 // ───────────────────────────────────────────────────────────────────────────────
 
-const VALID_PROVIDERS: readonly LLMProvider[] = ["openai", "anthropic", "google", "mistral"];
+const PROVIDER_ALIASES: Readonly<Record<string, LLMProvider>> = {
+  openai: "openai",
+  anthropic: "anthropic",
+  google: "google",
+  gemini: "google",
+  mistral: "mistral",
+};
+
+function normalizeEnvString(value: string | undefined, name?: string): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  let normalized = value.trim();
+  if (normalized.length === 0) {
+    return undefined;
+  }
+
+  const hasMatchingQuotes =
+    (normalized.startsWith("\"") && normalized.endsWith("\"")) ||
+    (normalized.startsWith("'") && normalized.endsWith("'"));
+  if (hasMatchingQuotes) {
+    normalized = normalized.slice(1, -1).trim();
+  }
+
+  if (normalized !== value && name) {
+    console.warn(`[llm] env var ${name} was normalized (whitespace/quotes removed)`);
+  }
+
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeProvider(provider: string | undefined): LLMProvider | undefined {
+  const normalized = normalizeEnvString(provider, "LLM_PROVIDER")?.toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+
+  return PROVIDER_ALIASES[normalized];
+}
 
 /**
  * Check if LLM is configured (provider and model set).
  */
 export function isLLMConfigured(): boolean {
-  const provider = process.env.LLM_PROVIDER;
-  const model = process.env.LLM_MODEL;
-  return !!provider && !!model && VALID_PROVIDERS.includes(provider as LLMProvider);
+  return getLLMConfig() !== null;
+}
+
+// Map each provider to its accepted API key env vars.
+const API_KEY_VARS: Readonly<Record<LLMProvider, readonly string[]>> = {
+  anthropic: ["ANTHROPIC_API_KEY"],
+  openai: ["OPENAI_API_KEY"],
+  google: ["GOOGLE_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY"],
+  mistral: ["MISTRAL_API_KEY"],
+};
+
+function parseRequestedMaxTokensFromEnv(): number {
+  const rawMaxTokens = normalizeEnvString(process.env.LLM_MAX_TOKENS, "LLM_MAX_TOKENS");
+  const parsedMaxTokens = parseInt(rawMaxTokens ?? "", 10);
+  const hasExplicitPositiveValue = Number.isFinite(parsedMaxTokens) && parsedMaxTokens > 0;
+
+  if (hasExplicitPositiveValue) {
+    const { min, max } = CONFIG_BOUNDS.llmMaxTokens;
+    return Math.max(min, Math.min(max, parsedMaxTokens));
+  }
+
+  return LLM_DEFAULTS.maxTokens;
+}
+
+/**
+ * Lightweight check for whether the provider's API key env var is present.
+ * Does not instantiate any SDK client.
+ */
+function hasApiKey(provider: LLMProvider): boolean {
+  return API_KEY_VARS[provider].some(
+    (key) => !!normalizeEnvString(process.env[key])
+  );
+}
+
+/**
+ * Determine LLM readiness for health-check purposes.
+ *
+ * Returns `{ ready: true }` when provider, model, and API key are all present.
+ * Otherwise returns a reason code — no secrets or internal details are exposed.
+ */
+export function getLLMReadiness(): LLMReadiness {
+  const config = getLLMConfig();
+  if (!config) {
+    return { ready: false, reason: "not_configured" };
+  }
+  if (!hasApiKey(config.provider)) {
+    return { ready: false, reason: "api_key_missing" };
+  }
+  return { ready: true };
 }
 
 /**
@@ -40,23 +133,19 @@ export function isLLMConfigured(): boolean {
  * Returns null if not configured.
  */
 export function getLLMConfig(): LLMConfig | null {
-  const provider = process.env.LLM_PROVIDER as LLMProvider | undefined;
-  const model = process.env.LLM_MODEL;
+  const provider = normalizeProvider(process.env.LLM_PROVIDER);
+  const model = normalizeEnvString(process.env.LLM_MODEL, "LLM_MODEL");
 
   if (!provider || !model) {
     return null;
   }
 
-  if (!VALID_PROVIDERS.includes(provider)) {
-    return null;
-  }
-
-  const maxTokens = parseInt(process.env.LLM_MAX_TOKENS ?? "", 10);
+  const maxTokens = parseRequestedMaxTokensFromEnv();
 
   return {
     provider,
     model,
-    maxTokens: Number.isFinite(maxTokens) ? maxTokens : LLM_DEFAULTS.maxTokens,
+    maxTokens,
   };
 }
 
@@ -71,40 +160,45 @@ export function getLLMConfig(): LLMConfig | null {
  * @returns LanguageModelV1 instance
  * @throws Error if API key is missing for the provider
  */
-export function createModel(config: LLMConfig): LanguageModelV1 {
+function createModelWithApiKey(config: LLMConfig, apiKey: string): LanguageModelV1 {
   switch (config.provider) {
     case "anthropic": {
-      const apiKey = process.env.ANTHROPIC_API_KEY;
-      if (!apiKey) {
-        throw new Error("ANTHROPIC_API_KEY environment variable is not set");
-      }
       const anthropic = createAnthropic({ apiKey });
       return anthropic(config.model);
     }
 
     case "openai": {
-      const apiKey = process.env.OPENAI_API_KEY;
-      if (!apiKey) {
-        throw new Error("OPENAI_API_KEY environment variable is not set");
-      }
       const openai = createOpenAI({ apiKey });
       return openai(config.model);
     }
 
     case "google": {
-      const apiKey = process.env.GOOGLE_API_KEY;
-      if (!apiKey) {
-        throw new Error("GOOGLE_API_KEY environment variable is not set");
-      }
       const google = createGoogleGenerativeAI({ apiKey });
-      return google(config.model);
+      // Disable Gemini's native responseSchema so the SDK injects the JSON
+      // schema into the prompt instead.  @ai-sdk/google v1.2.22 (Jul 2025)
+      // predates gemini-3-flash-preview (Dec 2025); the older SDK's schema
+      // serialization breaks newer models, causing "No object generated" errors.
+      //
+      // How it works (ai SDK source, generateObject json mode):
+      //   supportsStructuredOutputs=true  → sends responseSchema to Gemini API
+      //   supportsStructuredOutputs=false → appends "JSON schema: …" to the
+      //     system prompt and sets responseMimeType only
+      //
+      // Revisit after upgrading @ai-sdk/google beyond v1.2.22 — newer versions
+      // may properly serialize schemas for gemini-3-* models, making this
+      // workaround unnecessary.
+      //
+      // References:
+      //   • AI SDK docs on the flag:
+      //     https://ai-sdk.dev/providers/ai-sdk-providers/google-generative-ai#structured-outputs
+      //   • SDK source (@ai-sdk/google, object-json mode in doGenerate):
+      //     responseSchema is populated only when supportsStructuredOutputs is true
+      //   • SDK source (ai core, generateObject):
+      //     injectJsonInstruction() called when supportsStructuredOutputs is false
+      return google(config.model, { structuredOutputs: false });
     }
 
     case "mistral": {
-      const apiKey = process.env.MISTRAL_API_KEY;
-      if (!apiKey) {
-        throw new Error("MISTRAL_API_KEY environment variable is not set");
-      }
       const mistral = createMistral({ apiKey });
       return mistral(config.model);
     }
@@ -117,18 +211,106 @@ export function createModel(config: LLMConfig): LanguageModelV1 {
   }
 }
 
+function getApiKeyFromEnv(provider: LLMProvider): string {
+  switch (provider) {
+    case "anthropic": {
+      const apiKey = normalizeEnvString(process.env.ANTHROPIC_API_KEY, "ANTHROPIC_API_KEY");
+      if (!apiKey) {
+        throw new Error("ANTHROPIC_API_KEY environment variable is not set");
+      }
+      return apiKey;
+    }
+    case "openai": {
+      const apiKey = normalizeEnvString(process.env.OPENAI_API_KEY, "OPENAI_API_KEY");
+      if (!apiKey) {
+        throw new Error("OPENAI_API_KEY environment variable is not set");
+      }
+      return apiKey;
+    }
+    case "google": {
+      // GOOGLE_API_KEY takes priority for backward compat with existing deployments.
+      // GOOGLE_GENERATIVE_AI_API_KEY is the AI SDK default, accepted as fallback
+      // so users following Vercel AI SDK docs don't need a separate var.
+      const apiKey =
+        normalizeEnvString(process.env.GOOGLE_API_KEY, "GOOGLE_API_KEY") ??
+        normalizeEnvString(process.env.GOOGLE_GENERATIVE_AI_API_KEY, "GOOGLE_GENERATIVE_AI_API_KEY");
+      if (!apiKey) {
+        throw new Error("GOOGLE_API_KEY or GOOGLE_GENERATIVE_AI_API_KEY environment variable is not set");
+      }
+      return apiKey;
+    }
+    case "mistral": {
+      const apiKey = normalizeEnvString(process.env.MISTRAL_API_KEY, "MISTRAL_API_KEY");
+      if (!apiKey) {
+        throw new Error("MISTRAL_API_KEY environment variable is not set");
+      }
+      return apiKey;
+    }
+    default: {
+      const _exhaustive: never = provider;
+      throw new Error(`Unsupported LLM provider: ${_exhaustive}`);
+    }
+  }
+}
+
+export function createModel(config: LLMConfig): LanguageModelV1 {
+  const apiKey = getApiKeyFromEnv(config.provider);
+  return createModelWithApiKey(config, apiKey);
+}
+
 /**
  * Create a model from environment configuration.
- * Returns null if LLM is not configured.
+ *
+ * Without installation context: returns null if LLM is not configured or if
+ * model creation fails (missing API key, unsupported provider). Degrades
+ * gracefully so callers don't need their own try/catch.
+ *
+ * With installation context: resolves per-installation BYOK material from
+ * Redis and does not fall back to shared env keys. Returns null when the
+ * installation has no BYOK record. Throws on Redis/decryption failures so
+ * callers can distinguish "no key" from "key resolution broken".
  */
-export function createModelFromEnv(): { model: LanguageModelV1; config: LLMConfig } | null {
+export async function createModelFromEnv(
+  options?: ModelResolutionOptions
+): Promise<{ model: LanguageModelV1; config: LLMConfig } | null> {
+  if (options?.installationId !== undefined) {
+    const byokConfig = await resolveInstallationBYOKConfig(options.installationId);
+    if (!byokConfig) {
+      return null;
+    }
+
+    const model = byokConfig.model ?? normalizeEnvString(process.env.LLM_MODEL, "LLM_MODEL");
+    if (!model) {
+      throw new Error(
+        `BYOK record for installation ${options.installationId} does not include a model and LLM_MODEL is not set`
+      );
+    }
+
+    const config: LLMConfig = {
+      provider: byokConfig.provider,
+      model,
+      maxTokens: parseRequestedMaxTokensFromEnv(),
+    };
+
+    return {
+      model: createModelWithApiKey(config, byokConfig.apiKey),
+      config,
+    };
+  }
+
   const config = getLLMConfig();
   if (!config) {
     return null;
   }
 
-  return {
-    model: createModel(config),
-    config,
-  };
+  try {
+    return {
+      model: createModel(config),
+      config,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[llm] createModelFromEnv: model creation failed, degrading to no-LLM: ${message}`);
+    return null;
+  }
 }

@@ -45,7 +45,7 @@ describe("DiscussionSummarizer", () => {
   describe("when LLM is not configured", () => {
     it("should return failure with reason", async () => {
       const { createModelFromEnv } = await import("./provider.js");
-      vi.mocked(createModelFromEnv).mockReturnValue(null);
+      vi.mocked(createModelFromEnv).mockResolvedValue(null);
 
       const summarizer = new DiscussionSummarizer({ logger: mockLogger });
       const context: IssueContext = {
@@ -72,7 +72,7 @@ describe("DiscussionSummarizer", () => {
   describe("when there is no meaningful discussion", () => {
     it("should return minimal summary when there are no comments", async () => {
       const { createModelFromEnv } = await import("./provider.js");
-      vi.mocked(createModelFromEnv).mockReturnValue({
+      vi.mocked(createModelFromEnv).mockResolvedValue({
         model: {} as never,
         config: { provider: "anthropic", model: "test", maxTokens: 2000 },
       });
@@ -103,7 +103,7 @@ describe("DiscussionSummarizer", () => {
 
     it("should return minimal summary when all comments are from issue author", async () => {
       const { createModelFromEnv } = await import("./provider.js");
-      vi.mocked(createModelFromEnv).mockReturnValue({
+      vi.mocked(createModelFromEnv).mockResolvedValue({
         model: {} as never,
         config: { provider: "anthropic", model: "test", maxTokens: 2000 },
       });
@@ -149,7 +149,7 @@ describe("DiscussionSummarizer", () => {
       const { createModelFromEnv } = await import("./provider.js");
       const { generateObject } = await import("ai");
 
-      vi.mocked(createModelFromEnv).mockReturnValue({
+      vi.mocked(createModelFromEnv).mockResolvedValue({
         model: {} as never,
         config: { provider: "anthropic", model: "test", maxTokens: 2000 },
       });
@@ -187,6 +187,63 @@ describe("DiscussionSummarizer", () => {
         expect(result.summary.metadata.commentCount).toBe(5);
         expect(result.summary.metadata.participantCount).toBe(3);
       }
+      expect(generateObject).toHaveBeenCalledWith(
+        expect.objectContaining({
+          experimental_repairText: expect.any(Function),
+        })
+      );
+    });
+
+    it("should log when repair hook successfully repairs malformed JSON", async () => {
+      const mockSummary: DiscussionSummary = {
+        proposal: "Test proposal",
+        alignedOn: [],
+        openForPR: [],
+        notIncluded: [],
+        metadata: { commentCount: 1, participantCount: 1 },
+      };
+
+      const { createModelFromEnv } = await import("./provider.js");
+      const { generateObject } = await import("ai");
+
+      vi.mocked(createModelFromEnv).mockResolvedValue({
+        model: {} as never,
+        config: { provider: "anthropic", model: "test", maxTokens: 2000 },
+      });
+      vi.mocked(generateObject).mockResolvedValue({
+        object: mockSummary,
+        finishReason: "stop",
+        usage: { promptTokens: 100, completionTokens: 200 },
+        rawResponse: undefined,
+        response: undefined,
+        warnings: undefined,
+        experimental_providerMetadata: undefined,
+        toJsonResponse: () => new Response(),
+      } as never);
+
+      const summarizer = new DiscussionSummarizer({ logger: mockLogger });
+      const context: IssueContext = {
+        title: "Test",
+        body: "Body",
+        author: "issueAuthor",
+        comments: [
+          { author: "user1", body: "Comment", createdAt: "2024-01-01T00:00:00Z" },
+        ],
+      };
+
+      await summarizer.summarize(context);
+
+      const callArgs = vi.mocked(generateObject).mock.calls[0][0] as Record<string, unknown>;
+      const repairFn = callArgs.experimental_repairText as (args: { text: string; error: { message: string } }) => Promise<string | null>;
+
+      const repaired = await repairFn({
+        text: "```json\n{\"proposal\":\"Test\"}\n```",
+        error: { message: "JSON parsing failed" },
+      });
+      expect(repaired).toBe("{\"proposal\":\"Test\"}");
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        expect.stringContaining("Repaired malformed LLM JSON output")
+      );
     });
 
     it("should fail closed when LLM returns incorrect metadata (possible hallucination)", async () => {
@@ -204,7 +261,7 @@ describe("DiscussionSummarizer", () => {
       const { createModelFromEnv } = await import("./provider.js");
       const { generateObject } = await import("ai");
 
-      vi.mocked(createModelFromEnv).mockReturnValue({
+      vi.mocked(createModelFromEnv).mockResolvedValue({
         model: {} as never,
         config: { provider: "openai", model: "test", maxTokens: 2000 },
       });
@@ -252,7 +309,7 @@ describe("DiscussionSummarizer", () => {
       const { createModelFromEnv } = await import("./provider.js");
       const { generateObject } = await import("ai");
 
-      vi.mocked(createModelFromEnv).mockReturnValue({
+      vi.mocked(createModelFromEnv).mockResolvedValue({
         model: {} as never,
         config: { provider: "anthropic", model: "test", maxTokens: 2000 },
       });

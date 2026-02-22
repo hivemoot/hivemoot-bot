@@ -7,7 +7,7 @@
 
 import { generateObject } from "ai";
 
-import type { LanguageModelV1 } from "ai";
+import type { LanguageModel } from "ai";
 
 import type { Logger } from "../logger.js";
 import { logger as defaultLogger } from "../logger.js";
@@ -16,7 +16,7 @@ import {
   SUMMARIZATION_SYSTEM_PROMPT,
   buildUserPrompt,
 } from "./prompts.js";
-import { createModelFromEnv, type ModelResolutionOptions } from "./provider.js";
+import { createModelFromEnv, providerOptions, type ModelResolutionOptions } from "./provider.js";
 import { withLLMRetry } from "./retry.js";
 import type { DiscussionSummary, IssueContext, LLMConfig } from "./types.js";
 import { DiscussionSummarySchema, LLM_DEFAULTS, countUniqueParticipants } from "./types.js";
@@ -61,7 +61,7 @@ export class DiscussionSummarizer {
    */
   async summarize(
     context: IssueContext,
-    preCreatedModel?: { model: LanguageModelV1; config: LLMConfig },
+    preCreatedModel?: { model: LanguageModel; config: LLMConfig },
     modelOptions?: ModelResolutionOptions
   ): Promise<SummarizationResult> {
     // Handle minimal discussions (no LLM needed)
@@ -102,10 +102,11 @@ export class DiscussionSummarizer {
               }
               return repaired;
             },
-            maxTokens: config.maxTokens,
+            maxOutputTokens: config.maxTokens,
             temperature: LLM_DEFAULTS.temperature,
             maxRetries: 0, // Disable SDK retry; our wrapper handles rate-limits
             abortSignal: AbortSignal.timeout(LLM_DEFAULTS.perCallTimeoutMs),
+            providerOptions: providerOptions(config.provider),
           }),
         undefined,
         this.logger

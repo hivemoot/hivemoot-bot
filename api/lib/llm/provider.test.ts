@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createCipheriv, randomBytes } from "node:crypto";
-import { isLLMConfigured, getLLMConfig, createModel, createModelFromEnv, getLLMReadiness } from "./provider.js";
+import { isLLMConfigured, getLLMConfig, createModel, createModelFromEnv, getLLMReadiness, providerOptions } from "./provider.js";
 import { _resetMasterKeysCache } from "./byok.js";
 import type { LLMConfig, LLMProvider } from "./types.js";
 
@@ -315,17 +315,26 @@ describe("LLM Provider", () => {
       expect(model.modelId).toBe("gemini-pro");
     });
 
-    it("should disable native structured outputs for Google models", () => {
+    it("should disable native structured outputs for Google models via providerOptions", () => {
+      // In ai SDK v6, structuredOutputs is passed via providerOptions in generateObject(),
+      // not at model construction time. Verify providerOptions() returns the right value.
+      expect(providerOptions("google")).toEqual({ google: { structuredOutputs: false } });
+
+      // Verify the model itself is still created successfully.
       process.env.GOOGLE_API_KEY = "google-test-key";
       const config: LLMConfig = {
         provider: "google",
         model: "gemini-3-flash-preview",
         maxTokens: 2000,
       };
-
       const model = createModel(config);
+      expect(model).toBeDefined();
+      expect(model.modelId).toBe("gemini-3-flash-preview");
 
-      expect(model.supportsStructuredOutputs).toBe(false);
+      // Non-Google providers return undefined (no special options needed).
+      expect(providerOptions("openai")).toBeUndefined();
+      expect(providerOptions("anthropic")).toBeUndefined();
+      expect(providerOptions("mistral")).toBeUndefined();
     });
 
     it("should create Google model from GOOGLE_GENERATIVE_AI_API_KEY", () => {

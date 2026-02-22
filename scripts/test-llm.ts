@@ -73,20 +73,22 @@ async function runTest(config: TestConfig): Promise<void> {
   console.log(`${label} Testing...`);
 
   try {
-    // Mirror production: structuredOutputs is set at model construction,
-    // not via providerOptions in generateObject.
-    const model = config.structuredOutputs === false
-      ? google(config.model, { structuredOutputs: false })
-      : google(config.model);
+    const model = google(config.model);
+    // In ai SDK v6, provider-specific options are passed via providerOptions
+    // in generateObject(), not at model construction time.
+    const googleOptions = config.structuredOutputs === false
+      ? { google: { structuredOutputs: false } }
+      : undefined;
 
     const result = await generateObject({
       model,
       schema: simpleSchema,
       system: systemPrompt,
       prompt: testPrompt,
-      maxTokens: 500,
+      maxOutputTokens: 500,
       temperature: 0.3,
       maxRetries: 0,
+      providerOptions: googleOptions,
     });
 
     console.log(`${label} SUCCESS`);

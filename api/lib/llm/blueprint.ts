@@ -11,12 +11,12 @@
 
 import { generateObject } from "ai";
 
-import type { LanguageModelV1 } from "ai";
+import type { LanguageModel } from "ai";
 
 import type { Logger } from "../logger.js";
 import { logger as defaultLogger } from "../logger.js";
 import { repairMalformedJsonText } from "./json-repair.js";
-import { createModelFromEnv, type ModelResolutionOptions } from "./provider.js";
+import { createModelFromEnv, providerOptions, type ModelResolutionOptions } from "./provider.js";
 import { withLLMRetry } from "./retry.js";
 import type { ImplementationPlan, IssueContext, LLMConfig } from "./types.js";
 import { ImplementationPlanSchema, LLM_DEFAULTS, countUniqueParticipants } from "./types.js";
@@ -230,7 +230,7 @@ export class BlueprintGenerator {
    */
   async generate(
     context: IssueContext,
-    preCreatedModel?: { model: LanguageModelV1; config: LLMConfig },
+    preCreatedModel?: { model: LanguageModel; config: LLMConfig },
     modelOptions?: ModelResolutionOptions
   ): Promise<BlueprintResult> {
     // Minimal discussions: no LLM needed
@@ -271,10 +271,11 @@ export class BlueprintGenerator {
               }
               return repaired;
             },
-            maxTokens: config.maxTokens,
+            maxOutputTokens: config.maxTokens,
             temperature: LLM_DEFAULTS.temperature,
             maxRetries: 0, // Disable SDK retry; our wrapper handles rate-limits
             abortSignal: AbortSignal.timeout(LLM_DEFAULTS.perCallTimeoutMs),
+            providerOptions: providerOptions(config.provider),
           }),
         undefined,
         this.logger

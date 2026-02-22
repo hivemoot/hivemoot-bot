@@ -22,6 +22,7 @@ vi.mock("ai", () => ({
 // Mock the provider module
 vi.mock("./provider.js", () => ({
   createModelFromEnv: vi.fn(),
+  providerOptions: vi.fn().mockReturnValue(undefined),
 }));
 
 // Mock the JSON repair module

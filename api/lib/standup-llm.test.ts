@@ -8,6 +8,7 @@ vi.mock("ai", () => ({
 
 vi.mock("./llm/provider.js", () => ({
   createModelFromEnv: vi.fn(),
+  providerOptions: vi.fn().mockReturnValue(undefined),
 }));
 
 vi.mock("./logger.js", () => ({

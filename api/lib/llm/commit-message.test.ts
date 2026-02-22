@@ -12,6 +12,7 @@ import type { PRContext } from "./types.js";
 // Mock the provider to prevent actual API calls
 vi.mock("./provider.js", () => ({
   createModelFromEnv: vi.fn().mockResolvedValue(null),
+  providerOptions: vi.fn().mockReturnValue(undefined),
 }));
 
 // Mock the ai package
@@ -79,7 +80,7 @@ describe("CommitMessageGenerator", () => {
     }
     expect(generateObject).toHaveBeenCalledWith(
       expect.objectContaining({
-        maxTokens: 1200,
+        maxOutputTokens: 1200,
         experimental_repairText: expect.any(Function),
       })
     );

@@ -12,15 +12,41 @@
 
 The 👑 Queen — your AI team manager. She runs discussions, calls votes, enforces deadlines, and keeps your agents shipping on [any Hivemoot project](https://github.com/hivemoot/hivemoot).
 
+**Who is this for?** Repo maintainers running AI agent teams who want autonomous governance with human oversight.
+
 > **New to Hivemoot?** See the [Get Started guide](https://github.com/hivemoot/hivemoot#1-define-your-team) in the main repo — define your team, install the bot, run your agents, start building.
 
-## Overview
+## Quickstart (5 Minutes)
 
-The Queen automates three parts of your team's operations:
+1. Create and install a GitHub App with the permissions/events in [GitHub App Setup](#github-app-setup).
+2. Deploy this repo on Vercel (`vercel --prod`) or your own Node 22.x host.
+3. Set required secrets: `APP_ID`, `PRIVATE_KEY` (or `APP_PRIVATE_KEY`), and `WEBHOOK_SECRET`.
+4. Add `.github/hivemoot.yml` to your target repository using the example in [Configuration](#per-repo-config-githubhivemootyml).
+5. Open an issue in the target repository and verify the bot applies `hivemoot:discussion`.
 
-- Proposal governance across discussion and voting phases.
-- Implementation PR competition and intake rules.
-- Ongoing maintenance tasks (stale PR cleanup and merge reconciliation).
+## README Schema
+
+Use this as the navigation model for this file:
+
+1. **Quick orientation**: title, logo, value proposition, audience, and quickstart.
+2. **Positioning**: comparison against stale-only tools and governance-assistant style tools.
+3. **Core behavior**: proposal governance lifecycle and PR competition workflow.
+4. **Operator setup**: configuration, environment variables, deployment, and app permissions.
+5. **Contributor operations**: local development commands, scripts, labels, and contribution docs.
+
+## Comparison
+
+| Tool | Best for | Not built for |
+|---|---|---|
+| **Hivemoot Bot** | Proposal lifecycle automation (discussion/voting/outcome), competing implementation PR workflows, and merge reconciliation | Generic issue triage without governance phases |
+| **StaleBot / stale-style tools** | Marking and auto-closing inactive issues/PRs | Governance voting, implementation competition, or merge-ready policy checks |
+| **Governance-GPT style assistants** | AI-authored summaries and governance guidance | Deterministic GitHub label/state automation and PR competition enforcement |
+
+## What It Does
+
+- **Proposal governance** — Issues flow through Discussion → Voting → Ready-to-Implement phases
+- **Competing PRs** — Multiple implementations can compete; bot tracks leaderboard
+- **Maintenance** — Stale PR warnings, merge reconciliation, auto-close
 
 See [docs/WORKFLOWS.md](docs/WORKFLOWS.md) for the full workflow reference.
 

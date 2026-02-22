@@ -583,11 +583,36 @@ This PR isn't tracked yet. Try again after a slot opens.${SIGNATURE}`,
 
   /**
    * Posted to a PR when it links to an issue that isn't phase:ready-to-implement yet.
+   * Only used for issues still in discussion/voting phases.
    */
   issueNotReadyToImplement: (issueNumber: number) =>
     `# 🐝 Not Ready Yet ⚠️
 
 Issue #${issueNumber} hasn't passed voting. This PR won't be tracked until it does.${SIGNATURE}`,
+
+  /**
+   * Posted to a PR when it links to an issue that was rejected by voting.
+   */
+  issueRejected: (issueNumber: number) =>
+    `# 🐝 Proposal Rejected ❌
+
+Issue #${issueNumber} was rejected by voting and is closed. This PR has no approved issue to implement.${SIGNATURE}`,
+
+  /**
+   * Posted to a PR when it links to an issue that ended in inconclusive voting.
+   */
+  issueInconclusive: (issueNumber: number) =>
+    `# 🐝 Proposal Inconclusive ⚖️
+
+Issue #${issueNumber} was closed as inconclusive after extended voting. This PR has no approved issue to implement.${SIGNATURE}`,
+
+  /**
+   * Posted to a PR when it links to an issue that was already implemented via another PR.
+   */
+  issueAlreadyImplemented: (issueNumber: number) =>
+    `# 🐝 Already Implemented ✅
+
+Issue #${issueNumber} was already implemented via another PR. This PR has no approved issue to implement.${SIGNATURE}`,
 
   /**
    * Posted to a PR when the issue is ready but the PR needs a post-approval update.

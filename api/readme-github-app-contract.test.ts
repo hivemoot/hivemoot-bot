@@ -29,10 +29,11 @@ function extractBullets(section: string): string[] {
 describe("README GitHub App setup contract", () => {
   it("documents all required GitHub App permissions", () => {
     const permissions = extractBullets(extractSection(readReadme(), "Permissions"));
-    expect(permissions).toHaveLength(6);
+    expect(permissions).toHaveLength(7);
 
     expect(permissions).toEqual(
       expect.arrayContaining([
+        "Contents: Read & Write (required for onboarding PR file creation)",
         "Issues: Read & Write",
         "Pull Requests: Read & Write",
         "Discussions: Read & Write (required for standup discussion posting)",

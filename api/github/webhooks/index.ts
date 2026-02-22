@@ -10,6 +10,7 @@ import {
   createIssueOperations,
   createPROperations,
   createRepositoryLabelService,
+  createOnboardingService,
   createGovernanceService,
   loadRepositoryConfig,
   getOpenPRsForIssue,
@@ -237,6 +238,40 @@ async function ensureLabelsForRepositories(
   }
 }
 
+async function createOnboardingForRepositories(
+  context: LabelBootstrapContext,
+  repositories: readonly InstallationRepoPayload[] | undefined,
+  eventName: string
+): Promise<void> {
+  const targetRepositories = repositories ?? [];
+  if (targetRepositories.length === 0) {
+    return;
+  }
+
+  let service: ReturnType<typeof createOnboardingService>;
+  try {
+    service = createOnboardingService(context.octokit);
+  } catch {
+    context.log.info(`[${eventName}] Onboarding service unavailable; skipping onboarding PR creation`);
+    return;
+  }
+
+  for (const repository of targetRepositories) {
+    const { owner, repo, fullName } = getRepoContext(repository);
+    try {
+      const result = await service.createOnboardingPR(owner, repo);
+      if (result.skipped) {
+        context.log.info(`[${eventName}] Onboarding PR skipped for ${fullName}: ${result.reason}`);
+      } else {
+        context.log.info(`[${eventName}] Onboarding PR #${result.prNumber} created for ${fullName}: ${result.prUrl}`);
+      }
+    } catch (error) {
+      // Onboarding failures must not block label bootstrap or other repos.
+      context.log.error({ err: error, repo: fullName }, `[${eventName}] Failed to create onboarding PR`);
+    }
+  }
+}
+
 export function app(probotApp: Probot): void {
   probotApp.log.info("Queen bot initialized");
   registerHandlerDispatcher(probotApp, { eventMap: handlerEventMap });
@@ -250,6 +285,11 @@ export function app(probotApp: Probot): void {
       context.payload.repositories,
       "installation.created"
     );
+    await createOnboardingForRepositories(
+      context,
+      context.payload.repositories,
+      "installation.created"
+    );
   });
 
   /**
@@ -257,6 +297,11 @@ export function app(probotApp: Probot): void {
    */
   probotApp.on("installation_repositories.added", async (context) => {
     await ensureLabelsForRepositories(
+      context,
+      context.payload.repositories_added,
+      "installation_repositories.added"
+    );
+    await createOnboardingForRepositories(
       context,
       context.payload.repositories_added,
       "installation_repositories.added"

@@ -3,25 +3,67 @@ name: Dependency Audit
 on:
   push:
     branches: [main]
-  pull_request:
+  pull_request_target:
     branches: [main]
   schedule:
     - cron: "17 2 * * 1"
 
+permissions:
+  contents: read
+
+env:
+  TRUSTED_FORK_OWNERS_JSON: '["hivemoot","hivemoot-worker","hivemoot-builder","hivemoot-polisher","hivemoot-scout"]'
+
 jobs:
+  trust_check:
+    name: Evaluate trusted fork owner
+    runs-on: ubuntu-latest
+    outputs:
+      run_pr_jobs: ${{ steps.decision.outputs.run_pr_jobs }}
+    steps:
+      - id: decision
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_OWNER: ${{ github.event.pull_request.head.repo.owner.login }}
+          TRUSTED_FORK_OWNERS_JSON: ${{ env.TRUSTED_FORK_OWNERS_JSON }}
+        run: |
+          if [ "$EVENT_NAME" != "pull_request_target" ]; then
+            echo "run_pr_jobs=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if node -e "const owners = JSON.parse(process.env.TRUSTED_FORK_OWNERS_JSON); process.exit(owners.includes(process.env.PR_OWNER) ? 0 : 1)"; then
+            echo "run_pr_jobs=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run_pr_jobs=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping fork PR workflows for untrusted owner: $PR_OWNER"
+          fi
+
   dependency_audit:
     name: Dependency Audit
+    needs: trust_check
+    if: needs.trust_check.outputs.run_pr_jobs == 'true'
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
 
-      - name: Setup Node.js
+      - name: Setup Node.js (push)
+        if: github.event_name != 'pull_request_target'
         uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: "npm"
+
+      - name: Setup Node.js (pull_request_target)
+        if: github.event_name == 'pull_request_target'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
 
       - name: Install dependencies
         run: npm ci

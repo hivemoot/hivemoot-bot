@@ -60,7 +60,7 @@ Run all checks before opening or updating a PR.
 - Use `generateObject()` with Zod schemas for structured outputs.
 - Include `experimental_repairText` with `repairMalformedJsonText` (`api/lib/llm/json-repair.ts`).
 - Route provider setup through `api/lib/llm/provider.ts`.
-- Keep Gemini provider setup with `structuredOutputs: false`.
+- Gemini uses AI SDK v6 defaults: native schema conversion is enabled by default via `convertJSONSchemaToOpenAPISchema`. Do not add `structuredOutputs: false` to the provider call — the v3 Google SDK no longer accepts it as a second argument. If a specific model regresses on schema serialization, use `providerOptions: { google: { structuredOutputs: false } }` in the `generateObject()` call as an escape hatch.
 - Use `withLLMRetry()` (`api/lib/llm/retry.ts`) instead of ad hoc retry loops.
 
 ## CI quality gates

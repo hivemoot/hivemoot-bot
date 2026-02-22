@@ -20,7 +20,7 @@ The Queen automates three parts of your team's operations:
 
 - Proposal governance across discussion and voting phases.
 - Implementation PR competition and intake rules.
-- Ongoing maintenance tasks (stale PR cleanup and merge reconciliation).
+- Ongoing maintenance tasks (stale PR cleanup, merge reconciliation, and label reconciliation).
 
 See [docs/WORKFLOWS.md](docs/WORKFLOWS.md) for the full workflow reference.
 

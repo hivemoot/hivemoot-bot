@@ -205,6 +205,9 @@ Implementation PRs are monitored for activity to free up slots for active contri
 | PR merged | Webhook | Real-time |
 | Issue phase transitions | Scheduled script | Every 5 min |
 | Stale PR cleanup | Scheduled script | Every hour |
+| Repository label reconciliation | Scheduled script | Every 30 min |
+
+Repository labels are bootstrapped when the app is installed or repositories are added, and periodically reconciled afterward to backfill newly required labels and repair label drift.
 
 ## CI Deploy Health Gate
 

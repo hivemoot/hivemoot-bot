@@ -80,8 +80,11 @@ describe("repo-config", () => {
       expect(defaults.governance.proposals.voting.durationMs).toBe(0);
       expect(defaults.governance.proposals.extendedVoting.exits).toEqual([{ type: "manual" }]);
       expect(defaults.governance.proposals.extendedVoting.durationMs).toBe(0);
-      expect(defaults.governance.pr.staleDays).toBe(PR_STALE_THRESHOLD_DAYS);
-      expect(defaults.governance.pr.maxPRsPerIssue).toBe(MAX_PRS_PER_ISSUE);
+    });
+
+    it("should return null for pr (disabled by default)", () => {
+      const defaults = getDefaultConfig();
+      expect(defaults.governance.pr).toBeNull();
     });
   });
 
@@ -1457,6 +1460,58 @@ governance:
         expect(config.governance.proposals.discussion.durationMs).toBe(0);
       });
 
+      it("should return pr: null when governance exists but pr: section is absent", async () => {
+        const configYaml = `
+governance:
+  proposals:
+    discussion:
+      exits:
+        - type: manual
+`;
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(configYaml),
+            encoding: "base64",
+          },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
+        expect(config.governance.pr).toBeNull();
+      });
+
+      it("should return pr with defaults when pr: section is present but empty", async () => {
+        const configYaml = `
+governance:
+  pr: {}
+`;
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(configYaml),
+            encoding: "base64",
+          },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
+        expect(config.governance.pr).not.toBeNull();
+        expect(config.governance.pr!.staleDays).toBe(PR_STALE_THRESHOLD_DAYS);
+        expect(config.governance.pr!.maxPRsPerIssue).toBe(MAX_PRS_PER_ISSUE);
+        expect(config.governance.pr!.intake).toEqual([{ method: "update" }]);
+      });
+
+      it("should return pr: null when config file is not found (404)", async () => {
+        const octokit = createMockOctokit({
+          error: { status: 404, message: "Not Found" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
+        expect(config.governance.pr).toBeNull();
+      });
+
       it("should use default when staleDays is an object", async () => {
         const configYaml = `
 governance:
@@ -2069,9 +2124,9 @@ governance:
         expect(config.governance.pr.mergeReady).toEqual({ minApprovals: 1 });
       });
 
-      it("should return null mergeReady in default config", () => {
+      it("should return null pr in default config (PR workflows disabled)", () => {
         const defaults = getDefaultConfig();
-        expect(defaults.governance.pr.mergeReady).toBeNull();
+        expect(defaults.governance.pr).toBeNull();
       });
     });
   });

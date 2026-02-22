@@ -127,6 +127,18 @@ export interface RepoConfigFile {
 }
 
 /**
+ * PR workflow configuration when explicitly enabled.
+ * Present only when the `pr:` section exists in the config file.
+ */
+export interface PRConfig {
+  staleDays: number;
+  maxPRsPerIssue: number;
+  trustedReviewers: string[];
+  intake: IntakeMethod[];
+  mergeReady: MergeReadyConfig | null;
+}
+
+/**
  * Effective configuration after merging repo config with defaults.
  * All values are guaranteed to be within safe boundaries.
  */
@@ -150,13 +162,8 @@ export interface EffectiveConfig {
         durationMs: number;
       };
     };
-    pr: {
-      staleDays: number;
-      maxPRsPerIssue: number;
-      trustedReviewers: string[];
-      intake: IntakeMethod[];
-      mergeReady: MergeReadyConfig | null;
-    };
+    /** null when `pr:` section is absent — all PR workflows disabled. */
+    pr: PRConfig | null;
   };
   standup: StandupConfig;
 }
@@ -969,11 +976,26 @@ function parseRepoConfig(raw: unknown, repoFullName: string): EffectiveConfig {
   const discussionExitsRaw = config?.governance?.proposals?.discussion?.exits;
   const discussionExits = parseDiscussionExits(discussionExitsRaw, repoFullName);
 
-  // Resolve PR settings (trustedReviewers parsed first — needed for intake and mergeReady clamping)
-  const prConfig = config?.governance?.pr;
-  const trustedReviewers = parseTrustedReviewers(prConfig?.trustedReviewers, repoFullName);
-  const intake = parseIntakeMethods(prConfig?.intake, trustedReviewers, repoFullName);
-  const mergeReady = parseMergeReadyConfig(prConfig?.mergeReady, trustedReviewers, repoFullName);
+  // PR workflows: opt-in — absent `pr:` section means all PR workflows disabled.
+  // When the key is present (even as empty `pr: {}`), parse with defaults.
+  const prConfigRaw = config?.governance?.pr;
+  const hasPrSection = config?.governance !== undefined
+    && config?.governance !== null
+    && "pr" in (config.governance as object);
+
+  let pr: PRConfig | null = null;
+  if (hasPrSection) {
+    const trustedReviewers = parseTrustedReviewers(prConfigRaw?.trustedReviewers, repoFullName);
+    const intake = parseIntakeMethods(prConfigRaw?.intake, trustedReviewers, repoFullName);
+    const mergeReady = parseMergeReadyConfig(prConfigRaw?.mergeReady, trustedReviewers, repoFullName);
+    pr = {
+      staleDays: parseIntValue(prConfigRaw?.staleDays, PR_STALE_DAYS_BOUNDS, "pr.staleDays", repoFullName),
+      maxPRsPerIssue: parseIntValue(prConfigRaw?.maxPRsPerIssue, MAX_PRS_PER_ISSUE_BOUNDS, "pr.maxPRsPerIssue", repoFullName),
+      trustedReviewers,
+      intake,
+      mergeReady,
+    };
+  }
 
   // Voting exits
   const exitsRaw = config?.governance?.proposals?.voting?.exits;
@@ -999,23 +1021,7 @@ function parseRepoConfig(raw: unknown, repoFullName: string): EffectiveConfig {
           durationMs: deriveVotingDurationMs(extendedExits),
         },
       },
-      pr: {
-        staleDays: parseIntValue(
-          prConfig?.staleDays,
-          PR_STALE_DAYS_BOUNDS,
-          "pr.staleDays",
-          repoFullName
-        ),
-        maxPRsPerIssue: parseIntValue(
-          prConfig?.maxPRsPerIssue,
-          MAX_PRS_PER_ISSUE_BOUNDS,
-          "pr.maxPRsPerIssue",
-          repoFullName
-        ),
-        trustedReviewers,
-        intake,
-        mergeReady,
-      },
+      pr,
     },
     standup: parseStandupConfig(config?.standup, repoFullName),
   };
@@ -1023,6 +1029,9 @@ function parseRepoConfig(raw: unknown, repoFullName: string): EffectiveConfig {
 
 /**
  * Get the default configuration (env-derived, clamped to CONFIG_BOUNDS).
+ *
+ * PR workflows default to null (disabled) — repos must explicitly opt in
+ * by adding a `pr:` section in their .github/hivemoot.yml.
  */
 export function getDefaultConfig(): EffectiveConfig {
   return {
@@ -1042,13 +1051,7 @@ export function getDefaultConfig(): EffectiveConfig {
           durationMs: 0,
         },
       },
-      pr: {
-        staleDays: PR_STALE_THRESHOLD_DAYS,
-        maxPRsPerIssue: MAX_PRS_PER_ISSUE,
-        trustedReviewers: [],
-        intake: [{ method: "update" }],
-        mergeReady: null,
-      },
+      pr: null,
     },
     standup: { enabled: false, category: "" },
   };

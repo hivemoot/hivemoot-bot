@@ -15,6 +15,7 @@ jobs:
   daily-standup:
     name: Post Colony Reports
     runs-on: ubuntu-latest
+    if: github.repository == 'hivemoot/hivemoot-bot'
 
     steps:
       - name: Checkout code

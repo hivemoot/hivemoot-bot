@@ -15,6 +15,7 @@ jobs:
   cleanup-stale-prs:
     name: Cleanup Stale Implementation PRs
     runs-on: ubuntu-latest
+    if: github.repository == 'hivemoot/hivemoot-bot'
 
     steps:
       - name: Checkout code

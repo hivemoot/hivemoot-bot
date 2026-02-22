@@ -15,6 +15,7 @@ jobs:
   reconcile-merge-ready:
     name: Reconcile Merge-Ready Labels
     runs-on: ubuntu-latest
+    if: github.repository == 'hivemoot/hivemoot-bot'
 
     steps:
       - name: Checkout code

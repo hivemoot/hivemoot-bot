@@ -203,8 +203,11 @@ Implementation PRs are monitored for activity to free up slots for active contri
 | Issue opened | Webhook | Real-time |
 | PR opened | Webhook | Real-time |
 | PR merged | Webhook | Real-time |
-| Issue phase transitions | Scheduled script | Every 5 min |
-| Stale PR cleanup | Scheduled script | Every hour |
+| Issue phase transitions | `close-discussions` script | Every 30 min |
+| Stale PR cleanup | `cleanup-stale-prs` script | Every 30 min |
+| PR notification reconciliation | `reconcile-pr-notifications` script | Every 30 min |
+| Merge-ready label reconciliation | `reconcile-merge-ready` script | Every 30 min |
+| Colony standup report | `daily-standup` script | Daily at 00:05 UTC |
 
 ## CI Deploy Health Gate
 

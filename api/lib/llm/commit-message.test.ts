@@ -79,7 +79,7 @@ describe("CommitMessageGenerator", () => {
     }
     expect(generateObject).toHaveBeenCalledWith(
       expect.objectContaining({
-        maxTokens: 1200,
+        maxOutputTokens: 1200,
         experimental_repairText: expect.any(Function),
       })
     );

@@ -6,7 +6,7 @@
  */
 
 import { generateObject } from "ai";
-import type { LanguageModelV1 } from "ai";
+import type { LanguageModel } from "ai";
 
 import type { Logger } from "../logger.js";
 import { logger as defaultLogger } from "../logger.js";
@@ -115,7 +115,7 @@ export class CommitMessageGenerator {
 
   async generate(
     context: PRContext,
-    preCreatedModel?: { model: LanguageModelV1; config: LLMConfig },
+    preCreatedModel?: { model: LanguageModel; config: LLMConfig },
     modelOptions?: ModelResolutionOptions
   ): Promise<CommitMessageResult> {
     try {
@@ -147,7 +147,7 @@ export class CommitMessageGenerator {
               }
               return repaired;
             },
-            maxTokens: config.maxTokens,
+            maxOutputTokens: config.maxTokens,
             temperature: LLM_DEFAULTS.temperature,
             maxRetries: 0,
             abortSignal: AbortSignal.timeout(LLM_DEFAULTS.perCallTimeoutMs),

@@ -1133,6 +1133,32 @@ describe("Queen Bot", () => {
       const commentBody = octokit.rest.issues.createComment.mock.calls[0][0].body;
       expect(commentBody).toContain("Ready to vote?");
     });
+
+    it("should skip all automation when config is null (no .github/hivemoot.yml)", async () => {
+      vi.mocked(loadRepositoryConfig).mockResolvedValueOnce(null);
+
+      const { handlers } = createWebhookHarness();
+      const handler = handlers.get("issues.opened")!;
+      const octokit = createIssuesOpenedOctokit("manual");
+      const log = { info: vi.fn(), error: vi.fn(), warn: vi.fn() };
+
+      await handler({
+        octokit,
+        log,
+        payload: {
+          issue: { number: 43 },
+          repository: {
+            name: "test-repo",
+            full_name: "hivemoot/test-repo",
+            owner: { login: "hivemoot" },
+          },
+        },
+      });
+
+      // No comment should be posted, no label added
+      expect(octokit.rest.issues.createComment).not.toHaveBeenCalled();
+      expect(octokit.rest.issues.addLabels).not.toHaveBeenCalled();
+    });
   });
 
   describe("pull_request_review handlers", () => {

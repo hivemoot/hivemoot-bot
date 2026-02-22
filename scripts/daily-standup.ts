@@ -61,6 +61,10 @@ export async function processRepository(
   try {
     // 1. Load repo config — check if standup is enabled
     const repoConfig = await loadRepositoryConfig(octokit, owner, repoName);
+    if (!repoConfig) {
+      logger.debug(`No config file found for ${repo.full_name}; skipping standup`);
+      return;
+    }
     if (!repoConfig.standup.enabled) {
       logger.debug(`Standup not enabled for ${repo.full_name}`);
       return;

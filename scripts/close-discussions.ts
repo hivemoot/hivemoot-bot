@@ -465,7 +465,10 @@ export async function processIssuePhase(
  *
  * The activation date guard (isActivationAfterReady) in the webhook
  * handler enforces this: PR activity must occur after the ready label
- * was added. See processImplementationIntake in api/github/webhooks/index.ts.
+ * was added. See processImplementationIntake in api/lib/implementation-intake.ts.
+ *
+ * This behavior is configurable via the `intake` config. With `method: "auto"`,
+ * pre-ready PRs are unconditionally activated (bypassing the timing guard).
  */
 export async function notifyPendingPRs(
   octokit: InstanceType<typeof Octokit>,

@@ -40,7 +40,11 @@ interface IntakeMethodApproval {
   minApprovals: number;
 }
 
-export type IntakeMethod = IntakeMethodUpdate | IntakeMethodApproval;
+interface IntakeMethodAuto {
+  method: "auto";
+}
+
+export type IntakeMethod = IntakeMethodUpdate | IntakeMethodApproval | IntakeMethodAuto;
 
 // ── Merge-Ready Config ──────────────────────────────────────────────────
 
@@ -725,8 +729,8 @@ function parseDiscussionExits(
   return autoExits;
 }
 
-const DEFAULT_INTAKE: IntakeMethod[] = [{ method: "update" }];
-const VALID_INTAKE_METHODS = new Set(["update", "approval"]);
+const DEFAULT_INTAKE: IntakeMethod[] = [{ method: "auto" }];
+const VALID_INTAKE_METHODS = new Set(["update", "approval", "auto"]);
 
 /**
  * Parse and validate trustedReviewers from config.
@@ -789,6 +793,11 @@ function parseIntakeMethods(
 
     if (method === "update") {
       methods.push({ method: "update" });
+      continue;
+    }
+
+    if (method === "auto") {
+      methods.push({ method: "auto" });
       continue;
     }
 
@@ -1046,7 +1055,7 @@ export function getDefaultConfig(): EffectiveConfig {
         staleDays: PR_STALE_THRESHOLD_DAYS,
         maxPRsPerIssue: MAX_PRS_PER_ISSUE,
         trustedReviewers: [],
-        intake: [{ method: "update" }],
+        intake: [{ method: "auto" }],
         mergeReady: null,
       },
     },

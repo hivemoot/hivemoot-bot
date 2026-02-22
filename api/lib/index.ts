@@ -75,6 +75,10 @@ export type {
 export { RepositoryLabelService, createRepositoryLabelService } from "./repository-labels.js";
 export type { RepositoryLabelClient, EnsureLabelsResult } from "./repository-labels.js";
 
+// Onboarding PR service
+export { OnboardingService, createOnboardingService, ONBOARDING_BRANCH } from "./onboarding.js";
+export type { OnboardingClient, OnboardingResult } from "./onboarding.js";
+
 // Repository configuration
 export { loadRepositoryConfig, getDefaultConfig } from "./repo-config.js";
 export type {

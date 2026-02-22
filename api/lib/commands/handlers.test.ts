@@ -489,10 +489,38 @@ describe("executeCommand", () => {
       expect(result.status).toBe("rejected");
     });
 
-    it("should reject /implement when no recognized phase label exists", async () => {
+    it("should fast-track unlabeled issues to ready-to-implement", async () => {
       const ctx = createCtx({
         verb: "implement",
         issueLabels: [],
+      });
+      const result = await executeCommand(ctx);
+
+      expect(result.status).toBe("executed");
+      expect(mockIssueOps.transition).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          addLabel: LABELS.READY_TO_IMPLEMENT,
+        }),
+      );
+      const transitionCall = mockIssueOps.transition.mock.calls[0];
+      expect(transitionCall[1].removeLabel).toBeUndefined();
+    });
+
+    it("should reject /implement when inconclusive", async () => {
+      const ctx = createCtx({
+        verb: "implement",
+        issueLabels: [{ name: LABELS.INCONCLUSIVE }],
+      });
+      const result = await executeCommand(ctx);
+
+      expect(result.status).toBe("rejected");
+    });
+
+    it("should reject /implement when already implemented", async () => {
+      const ctx = createCtx({
+        verb: "implement",
+        issueLabels: [{ name: LABELS.IMPLEMENTED }],
       });
       const result = await executeCommand(ctx);
 

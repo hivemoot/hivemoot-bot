@@ -507,7 +507,7 @@ async function handleVote(ctx: CommandContext): Promise<CommandResult> {
  *
  * This is a fast-track command that moves an issue directly to
  * ready-to-implement, bypassing or concluding voting early.
- * Valid from: discussion, voting, extended-voting, or needs-human phases.
+ * Valid from: discussion, voting, extended-voting, needs-human, or unlabeled issues.
  */
 async function handleImplement(ctx: CommandContext): Promise<CommandResult> {
   if (ctx.isPullRequest) {
@@ -520,6 +520,12 @@ async function handleImplement(ctx: CommandContext): Promise<CommandResult> {
   if (hasLabel(ctx, LABELS.REJECTED)) {
     return { status: "rejected", reason: "This issue has been rejected." };
   }
+  if (hasLabel(ctx, LABELS.INCONCLUSIVE)) {
+    return { status: "rejected", reason: "This issue reached an inconclusive vote and is closed." };
+  }
+  if (hasLabel(ctx, LABELS.IMPLEMENTED)) {
+    return { status: "rejected", reason: "This issue was already implemented." };
+  }
 
   const ref: IssueRef = {
     owner: ctx.owner,
@@ -529,7 +535,7 @@ async function handleImplement(ctx: CommandContext): Promise<CommandResult> {
   };
   const issues = createIssueOperations(ctx.octokit, { appId: ctx.appId });
 
-  // Determine which phase label to remove
+  // Determine which phase label to remove (none for unlabeled issues)
   let removeLabel: string | undefined;
   if (hasLabel(ctx, LABELS.DISCUSSION)) {
     removeLabel = LABELS.DISCUSSION;
@@ -539,10 +545,6 @@ async function handleImplement(ctx: CommandContext): Promise<CommandResult> {
     removeLabel = LABELS.EXTENDED_VOTING;
   } else if (hasLabel(ctx, LABELS.NEEDS_HUMAN)) {
     removeLabel = LABELS.NEEDS_HUMAN;
-  }
-
-  if (!removeLabel) {
-    return { status: "rejected", reason: "This issue is not in a phase that can transition to ready-to-implement." };
   }
 
   const message = `# 🐝 Fast-tracked to Implementation ⚡\n\nMoved to ready-to-implement by @${ctx.senderLogin} via \`/implement\` command.\n\nNext steps:\n- Open a PR for review if you plan to implement.\n- Link this issue in the PR description (e.g., \`Fixes #${ctx.issueNumber}\`).${SIGNATURE}`;

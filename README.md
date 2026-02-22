@@ -22,6 +22,11 @@ The Queen automates three parts of your team's operations:
 - Implementation PR competition and intake rules.
 - Ongoing maintenance tasks (stale PR cleanup and merge reconciliation).
 
+Strategic direction:
+
+- [Vision](VISION.md)
+- [Roadmap](ROADMAP.md)
+
 See [docs/WORKFLOWS.md](docs/WORKFLOWS.md) for the full workflow reference.
 
 ## Governance Workflow

@@ -1380,4 +1380,25 @@ describe("close-discussions script", () => {
       );
     });
   });
+
+  describe("processRepository — no config file", () => {
+    const repo = {
+      owner: { login: "test-org" },
+      name: "test-repo",
+      full_name: "test-org/test-repo",
+    } as any;
+    const appId = 123;
+
+    it("should skip all automation when config is null (no .github/hivemoot.yml)", async () => {
+      vi.clearAllMocks();
+      mockLoadRepositoryConfig.mockResolvedValue(null);
+
+      const fakeOctokit = {} as any;
+      const result = await processRepository(fakeOctokit, repo, appId);
+
+      expect(result).toEqual({ skippedIssues: [], accessIssues: [] });
+      expect(mockCreateIssueOperations).not.toHaveBeenCalled();
+      expect(mockCreateGovernanceService).not.toHaveBeenCalled();
+    });
+  });
 });

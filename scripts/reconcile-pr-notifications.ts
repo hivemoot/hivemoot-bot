@@ -215,6 +215,10 @@ export async function processRepository(
     const prs = createPROperations(octokit, { appId });
     const issues = createIssueOperations(octokit, { appId });
     const repoConfig = await loadRepositoryConfig(octokit, owner, repoName);
+    if (!repoConfig) {
+      logger.debug(`[${repo.full_name}] No config file found; skipping PR notification reconciliation`);
+      return;
+    }
     const { maxPRsPerIssue, trustedReviewers, intake } = repoConfig.governance.pr;
 
     // Paginate through all open issues with ready-to-implement label (canonical + legacy)

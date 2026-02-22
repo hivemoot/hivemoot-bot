@@ -39,6 +39,10 @@ export async function processRepository(
 
   try {
     const repoConfig = await loadRepositoryConfig(octokit, owner, repoName);
+    if (!repoConfig) {
+      logger.debug(`[${repo.full_name}] No config file found; skipping merge-ready reconciliation`);
+      return;
+    }
     const { mergeReady, trustedReviewers } = repoConfig.governance.pr;
 
     if (!mergeReady) {

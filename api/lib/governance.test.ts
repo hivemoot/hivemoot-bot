@@ -79,19 +79,38 @@ describe("GovernanceService", () => {
     });
 
     it("should run label and comment in parallel", async () => {
-      const delayMs = 50;
-      const addLabelsPromise = new Promise((resolve) => setTimeout(resolve, delayMs));
-      const commentPromise = new Promise((resolve) => setTimeout(resolve, delayMs));
+      let resolveAddLabels!: () => void;
+      let resolveComment!: () => void;
 
-      vi.mocked(mockIssues.addLabels).mockReturnValue(addLabelsPromise as Promise<void>);
-      vi.mocked(mockIssues.comment).mockReturnValue(commentPromise as Promise<void>);
+      const addLabelsPromise = new Promise<void>((resolve) => {
+        resolveAddLabels = resolve;
+      });
+      const commentPromise = new Promise<void>((resolve) => {
+        resolveComment = resolve;
+      });
 
-      const startTime = Date.now();
-      await governance.startDiscussion(testRef);
-      const elapsed = Date.now() - startTime;
+      vi.mocked(mockIssues.addLabels).mockReturnValue(addLabelsPromise);
+      vi.mocked(mockIssues.comment).mockReturnValue(commentPromise);
 
-      // If run in parallel, it should be close to delayMs, not roughly 2 * delayMs.
-      expect(elapsed).toBeLessThan(90);
+      let settled = false;
+      const startDiscussionPromise = governance.startDiscussion(testRef).then(() => {
+        settled = true;
+      });
+
+      // Allow startDiscussion to queue both operations before either resolves.
+      await Promise.resolve();
+      expect(mockIssues.addLabels).toHaveBeenCalledTimes(1);
+      expect(mockIssues.comment).toHaveBeenCalledTimes(1);
+      expect(settled).toBe(false);
+
+      // Ensure it waits for both operations (Promise.all semantics).
+      resolveAddLabels();
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      resolveComment();
+      await startDiscussionPromise;
+      expect(settled).toBe(true);
     });
   });
 

@@ -339,6 +339,33 @@ describe("withLLMRetry", () => {
     expect(fn).toHaveBeenCalledTimes(2);
   });
 
+  it("normalizes NaN maxTotalElapsedMs to default (does not disable wall-clock budget)", async () => {
+    const rateLimitError = makeAPICallError(429, {
+      // Suggest a delay longer than the default budget (105s) to trigger the guard.
+      // maxRetryDelayMs is set high so this delay is not capped before the check.
+      message: "Please retry in 200.0s",
+    });
+
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(rateLimitError)
+      .mockResolvedValueOnce("should not reach");
+
+    const log = mockLogger();
+
+    // Without normalization, elapsed + delay > NaN is always false, silently
+    // disabling the wall-clock guard. After normalization, NaN falls back to
+    // LLM_RETRY_DEFAULTS.maxTotalElapsedMs (105_000ms). A 200s suggested delay
+    // (uncapped by maxRetryDelayMs: 200_000) exceeds that, so the guard fires
+    // and we abort without sleeping.
+    await expect(
+      withLLMRetry(fn, { maxRetries: 3, maxRetryDelayMs: 200_000, maxTotalElapsedMs: NaN }, log)
+    ).rejects.toThrow();
+
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("budget"));
+  });
+
   it("ignores maxTotalElapsedMs when undefined", async () => {
     const rateLimitError = makeAPICallError(429, {
       message: "Please retry in 1.0s",

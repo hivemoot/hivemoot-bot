@@ -68,6 +68,14 @@ export interface EnsureLabelsResult {
   renamedLabels: Array<{ from: string; to: string }>;
 }
 
+export interface AuditLabelsResult {
+  missing: number;
+  legacyAliases: number;
+  metadataDrift: number;
+  alreadyCorrect: number;
+  renameableLabels: Array<{ from: string; to: string }>;
+}
+
 export function createRepositoryLabelService(octokit: unknown): RepositoryLabelService {
   if (!isValidRepositoryLabelClient(octokit)) {
     throw new Error(
@@ -108,6 +116,27 @@ export class RepositoryLabelService {
   ) {}
 
   /**
+   * Audit required labels without applying changes.
+   *
+   * Uses the same reconciliation logic as ensureRequiredLabels, but performs
+   * a dry run that reports what would be created/renamed/updated.
+   */
+  async auditRequiredLabels(
+    owner: string,
+    repo: string,
+    requiredLabels: readonly RepositoryLabelDefinition[] = REQUIRED_REPOSITORY_LABELS
+  ): Promise<AuditLabelsResult> {
+    const result = await this.reconcileRequiredLabels(owner, repo, requiredLabels, false);
+    return {
+      missing: result.created,
+      legacyAliases: result.renamed,
+      metadataDrift: result.updated,
+      alreadyCorrect: result.skipped,
+      renameableLabels: result.renamedLabels,
+    };
+  }
+
+  /**
    * Ensure required labels exist in a repository.
    *
    * For each required label not already present under its canonical name:
@@ -118,6 +147,15 @@ export class RepositoryLabelService {
     owner: string,
     repo: string,
     requiredLabels: readonly RepositoryLabelDefinition[] = REQUIRED_REPOSITORY_LABELS
+  ): Promise<EnsureLabelsResult> {
+    return this.reconcileRequiredLabels(owner, repo, requiredLabels, true);
+  }
+
+  private async reconcileRequiredLabels(
+    owner: string,
+    repo: string,
+    requiredLabels: readonly RepositoryLabelDefinition[],
+    applyChanges: boolean
   ): Promise<EnsureLabelsResult> {
     const existingLabels = await this.getExistingLabels(owner, repo);
     const reverseLegacy = buildReverseLegacyMap();
@@ -133,13 +171,15 @@ export class RepositoryLabelService {
       if (existing) {
         // Label exists — check if color or description need repair
         if (needsUpdate(existing, label)) {
-          await this.client.rest.issues.updateLabel({
-            owner,
-            repo,
-            name: existing.name,
-            color: label.color,
-            description: label.description,
-          });
+          if (applyChanges) {
+            await this.client.rest.issues.updateLabel({
+              owner,
+              repo,
+              name: existing.name,
+              color: label.color,
+              description: label.description,
+            });
+          }
           updated++;
         } else {
           skipped++;
@@ -152,22 +192,53 @@ export class RepositoryLabelService {
       const foundLegacy = legacyNames.find((name) => existingLabels.has(name.toLowerCase()));
 
       if (foundLegacy) {
+        if (applyChanges) {
+          try {
+            await this.client.rest.issues.updateLabel({
+              owner,
+              repo,
+              name: foundLegacy,
+              new_name: label.name,
+              color: label.color,
+              description: label.description,
+            });
+            existingLabels.delete(foundLegacy.toLowerCase());
+            existingLabels.set(key, { name: label.name, color: label.color, description: label.description ?? null });
+            renamed++;
+            renamedLabels.push({ from: foundLegacy, to: label.name });
+            continue;
+          } catch (error) {
+            // If rename fails (e.g., concurrent rename), fall through to create
+            if ((error as { status?: number }).status === 422) {
+              existingLabels.set(key, { name: label.name, color: label.color, description: label.description ?? null });
+              skipped++;
+              continue;
+            }
+            throw error;
+          }
+        }
+
+        existingLabels.delete(foundLegacy.toLowerCase());
+        existingLabels.set(key, { name: label.name, color: label.color, description: label.description ?? null });
+        renamed++;
+        renamedLabels.push({ from: foundLegacy, to: label.name });
+        continue;
+      }
+
+      if (applyChanges) {
         try {
-          await this.client.rest.issues.updateLabel({
+          await this.client.rest.issues.createLabel({
             owner,
             repo,
-            name: foundLegacy,
-            new_name: label.name,
+            name: label.name,
             color: label.color,
             description: label.description,
           });
-          existingLabels.delete(foundLegacy.toLowerCase());
           existingLabels.set(key, { name: label.name, color: label.color, description: label.description ?? null });
-          renamed++;
-          renamedLabels.push({ from: foundLegacy, to: label.name });
+          created++;
           continue;
         } catch (error) {
-          // If rename fails (e.g., concurrent rename), fall through to create
+          // Label may have been created concurrently by another process
           if ((error as { status?: number }).status === 422) {
             existingLabels.set(key, { name: label.name, color: label.color, description: label.description ?? null });
             skipped++;
@@ -177,25 +248,8 @@ export class RepositoryLabelService {
         }
       }
 
-      try {
-        await this.client.rest.issues.createLabel({
-          owner,
-          repo,
-          name: label.name,
-          color: label.color,
-          description: label.description,
-        });
-        existingLabels.set(key, { name: label.name, color: label.color, description: label.description ?? null });
-        created++;
-      } catch (error) {
-        // Label may have been created concurrently by another process
-        if ((error as { status?: number }).status === 422) {
-          existingLabels.set(key, { name: label.name, color: label.color, description: label.description ?? null });
-          skipped++;
-          continue;
-        }
-        throw error;
-      }
+      existingLabels.set(key, { name: label.name, color: label.color, description: label.description ?? null });
+      created++;
     }
 
     return { created, renamed, updated, skipped, renamedLabels };

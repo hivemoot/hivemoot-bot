@@ -1159,6 +1159,8 @@ type DoctorRepoOctokit = {
   graphql: <T>(query: string, variables?: Record<string, unknown>) => Promise<T>;
 };
 
+type DoctorLabelMode = "audit" | "repair";
+
 function formatDoctorCheckItem(check: DoctorCheckResult): string {
   const icon = check.status === "pass" ? "[x]" : (check.status === "advisory" ? "[!]" : "[ ]");
   return `- ${icon} **${check.name}**: ${check.detail}`;
@@ -1197,23 +1199,59 @@ async function runDoctorCheck(
   }
 }
 
-async function runLabelDoctorCheck(ctx: CommandContext): Promise<DoctorCheckResult> {
+function parseDoctorMode(freeText: string | undefined): {
+  mode: DoctorLabelMode;
+} | {
+  error: string;
+} {
+  const option = freeText?.trim();
+  if (!option) {
+    return { mode: "audit" };
+  }
+  if (option.toLowerCase() === "repair") {
+    return { mode: "repair" };
+  }
+  return {
+    error: `Unknown \`/doctor\` option \`${option}\`. Use \`/doctor\` or \`/doctor repair\`.`,
+  };
+}
+
+async function runLabelDoctorCheck(
+  ctx: CommandContext,
+  mode: DoctorLabelMode
+): Promise<DoctorCheckResult> {
   const labels = createRepositoryLabelService(ctx.octokit as unknown);
-  const result = await labels.ensureRequiredLabels(ctx.owner, ctx.repo);
-  const maybeUpdated = (result as { updated?: unknown }).updated;
-  const updatedCount = typeof maybeUpdated === "number" ? maybeUpdated : 0;
   const totalExpected = REQUIRED_REPOSITORY_LABELS.length;
-  const totalFound = result.created + result.renamed + result.skipped + updatedCount;
-  const status: DoctorCheckStatus = totalFound >= totalExpected ? "pass" : "fail";
-  const detail = `${totalFound}/${totalExpected} labels accounted for (created ${result.created}, renamed ${result.renamed}, updated ${updatedCount}, already present ${result.skipped})`;
-  const subItems = result.renamedLabels.length > 0
-    ? result.renamedLabels.map((entry) => `Renamed \`${entry.from}\` -> \`${entry.to}\``)
-    : ["No legacy labels were renamed"];
+
+  if (mode === "repair") {
+    const result = await labels.ensureRequiredLabels(ctx.owner, ctx.repo);
+    const subItems: string[] = [];
+    if (result.renamedLabels.length > 0) {
+      subItems.push(...result.renamedLabels.map((entry) => `Renamed \`${entry.from}\` -> \`${entry.to}\``));
+    } else {
+      subItems.push("No legacy labels were renamed");
+    }
+
+    return {
+      name: "Labels",
+      status: "pass",
+      detail: `${totalExpected}/${totalExpected} labels accounted for (created ${result.created}, renamed ${result.renamed}, updated ${result.updated}, already present ${result.skipped})`,
+      subItems,
+    };
+  }
+
+  const result = await labels.auditRequiredLabels(ctx.owner, ctx.repo);
+  const pendingChanges = result.missing + result.legacyAliases + result.metadataDrift;
+  const subItems: string[] = [];
+  if (result.renameableLabels.length > 0) {
+    subItems.push(...result.renameableLabels.map((entry) => `Would rename \`${entry.from}\` -> \`${entry.to}\``));
+  }
+  subItems.push(pendingChanges > 0 ? "Run `/doctor repair` to apply label fixes" : "No label repairs needed");
 
   return {
     name: "Labels",
-    status,
-    detail,
+    status: pendingChanges > 0 ? "advisory" : "pass",
+    detail: `${result.alreadyCorrect}/${totalExpected} labels already correct (missing ${result.missing}, legacy aliases ${result.legacyAliases}, metadata drift ${result.metadataDrift})`,
     subItems,
   };
 }
@@ -1451,11 +1489,16 @@ function runLLMDoctorCheck(): DoctorCheckResult {
  * Handle /doctor command: run a setup health report for the current repository.
  */
 async function handleDoctor(ctx: CommandContext): Promise<CommandResult> {
+  const modeOrError = parseDoctorMode(ctx.freeText);
+  if ("error" in modeOrError) {
+    return { status: "rejected", reason: modeOrError.error };
+  }
+  const mode = modeOrError.mode;
   const octokit = ctx.octokit as unknown as DoctorRepoOctokit;
   const repoConfig = await loadRepositoryConfig(octokit, ctx.owner, ctx.repo);
 
   const checks: DoctorCheckResult[] = [];
-  checks.push(await runDoctorCheck("Labels", async () => runLabelDoctorCheck(ctx)));
+  checks.push(await runDoctorCheck("Labels", async () => runLabelDoctorCheck(ctx, mode)));
   checks.push(await runDoctorCheck("Config", async () => runConfigDoctorCheck(ctx, repoConfig)));
   checks.push(await runDoctorCheck("PR Workflow", async () => runPRWorkflowDoctorCheck(repoConfig)));
   checks.push(await runDoctorCheck("Standup", async () => runStandupDoctorCheck(ctx, repoConfig)));
@@ -1464,6 +1507,10 @@ async function handleDoctor(ctx: CommandContext): Promise<CommandResult> {
 
   const lines: string[] = [
     "## 🐝 Doctor Report",
+    "",
+    mode === "repair"
+      ? "_Repair mode: applying label reconciliation._"
+      : "_Read-only mode. Run `/doctor repair` to apply label fixes._",
     "",
   ];
   for (const check of checks) {

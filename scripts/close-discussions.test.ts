@@ -60,7 +60,6 @@ vi.mock("../api/lib/env-validation.js", () => ({
 // Import after all mocks are in place
 import {
   notifyPendingPRs,
-  isRetryableError,
   withRetry,
   makeEarlyDecisionCheck,
   makeDiscussionEarlyCheck,
@@ -71,6 +70,7 @@ import {
   reconcileMissingVotingComments,
   reconcileUnlabeledIssues,
 } from "./close-discussions.js";
+import { isTransientError } from "../api/lib/transient-error.js";
 import type { EarlyDecisionDeps, DiscussionEarlyCheckDeps } from "./close-discussions.js";
 import { getOpenPRsForIssue, logger, loadRepositoryConfig, createIssueOperations, createGovernanceService } from "../api/lib/index.js";
 import { PR_MESSAGES } from "../api/config.js";
@@ -783,15 +783,19 @@ describe("close-discussions script", () => {
     });
 
     it("should report rate-limited issues via onAccessIssue", async () => {
-      // Bare 429 is not retryable by withRetry, but caught by processIssuePhase
+      // 429 is retried by withRetry; after exhausting retries processIssuePhase
+      // catches it and forwards to onAccessIssue as "rate_limit".
       mockGetLabelAddedTime.mockRejectedValue(
         Object.assign(new Error("Too Many Requests"), { status: 429 })
       );
 
-      await processIssuePhase(
+      const promise = processIssuePhase(
         mockIssues as any, {} as any, ref, labelName, durationMs, phaseName,
         transitionFn, onAccessIssue
       );
+      // Advance fake timers so withRetry's delay promises resolve.
+      await vi.runAllTimersAsync();
+      await promise;
 
       expect(onAccessIssue).toHaveBeenCalledWith(ref, 429, "rate_limit");
       expect(transitionFn).not.toHaveBeenCalled();
@@ -826,15 +830,18 @@ describe("close-discussions script", () => {
     });
 
     it("should rethrow unexpected errors", async () => {
+      // Use a non-transient error (400) so withRetry rethrows immediately without
+      // delaying. 500 is now transient (retried); 400 represents a genuine
+      // unexpected error that should propagate without retries.
       mockGetLabelAddedTime.mockRejectedValue(
-        Object.assign(new Error("Internal Server Error"), { status: 500 })
+        Object.assign(new Error("Bad Request"), { status: 400 })
       );
 
       await expect(
         processIssuePhase(
           mockIssues as any, {} as any, ref, labelName, durationMs, phaseName, transitionFn
         )
-      ).rejects.toThrow("Internal Server Error");
+      ).rejects.toThrow("Bad Request");
     });
   });
 
@@ -951,66 +958,66 @@ describe("close-discussions script", () => {
     });
   });
 
-  describe("isRetryableError", () => {
+  describe("isTransientError (via transient-error module)", () => {
     it("should return true for 502 Bad Gateway", () => {
-      expect(isRetryableError({ status: 502 })).toBe(true);
+      expect(isTransientError({ status: 502 })).toBe(true);
     });
 
     it("should return true for 503 Service Unavailable", () => {
-      expect(isRetryableError({ status: 503 })).toBe(true);
+      expect(isTransientError({ status: 503 })).toBe(true);
     });
 
     it("should return true for 504 Gateway Timeout", () => {
-      expect(isRetryableError({ status: 504 })).toBe(true);
+      expect(isTransientError({ status: 504 })).toBe(true);
     });
 
     it("should return true for ETIMEDOUT network errors", () => {
-      expect(isRetryableError({ code: "ETIMEDOUT" })).toBe(true);
+      expect(isTransientError({ code: "ETIMEDOUT" })).toBe(true);
     });
 
     it("should return true for ECONNRESET network errors", () => {
-      expect(isRetryableError({ code: "ECONNRESET" })).toBe(true);
+      expect(isTransientError({ code: "ECONNRESET" })).toBe(true);
     });
 
     it("should return true for 429 with retry-after header", () => {
-      expect(isRetryableError({
+      expect(isTransientError({
         status: 429,
         response: { headers: { "retry-after": "60" } },
       })).toBe(true);
     });
 
     it("should return true for 403 with x-ratelimit-remaining: 0", () => {
-      expect(isRetryableError({
+      expect(isTransientError({
         status: 403,
         response: { headers: { "x-ratelimit-remaining": "0" } },
       })).toBe(true);
     });
 
     it("should return true for 403 with rate limit in message", () => {
-      expect(isRetryableError({
+      expect(isTransientError({
         status: 403,
         message: "API rate limit exceeded",
       })).toBe(true);
     });
 
     it("should return false for 404 Not Found", () => {
-      expect(isRetryableError({ status: 404 })).toBe(false);
+      expect(isTransientError({ status: 404 })).toBe(false);
     });
 
     it("should return false for 401 Unauthorized", () => {
-      expect(isRetryableError({ status: 401 })).toBe(false);
+      expect(isTransientError({ status: 401 })).toBe(false);
     });
 
     it("should return false for 400 Bad Request", () => {
-      expect(isRetryableError({ status: 400 })).toBe(false);
+      expect(isTransientError({ status: 400 })).toBe(false);
     });
 
     it("should return false for 403 without rate limit indicators", () => {
-      expect(isRetryableError({ status: 403 })).toBe(false);
+      expect(isTransientError({ status: 403 })).toBe(false);
     });
 
     it("should return false for plain Error without status or code", () => {
-      expect(isRetryableError(new Error("Something broke"))).toBe(false);
+      expect(isTransientError(new Error("Something broke"))).toBe(false);
     });
   });
 

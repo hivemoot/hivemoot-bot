@@ -24,6 +24,7 @@ import { evaluatePreflightChecks } from "../merge-readiness.js";
 import type { PreflightCheckItem } from "../merge-readiness.js";
 import { CommitMessageGenerator, formatCommitMessage } from "../llm/commit-message.js";
 import type { PRContext } from "../llm/types.js";
+import { isTransientError } from "../transient-error.js";
 import type { IssueRef, PRRef } from "../types.js";
 import type { EffectiveConfig } from "../repo-config.js";
 
@@ -195,41 +196,6 @@ async function isAuthorized(ctx: CommandContext): Promise<AuthorizationResult> {
   }
 }
 
-/** Network-level error codes that indicate a transient failure. */
-const TRANSIENT_NETWORK_CODES = new Set([
-  "ECONNRESET",
-  "ETIMEDOUT",
-  "ECONNREFUSED",
-  "ENOTFOUND",
-  "EAI_AGAIN",
-  "EPIPE",
-]);
-
-/**
- * Determine whether an error is transient (network-level or server-side)
- * and therefore worth surfacing rather than treating as an auth denial.
- */
-function isTransientError(error: unknown): boolean {
-  // Network-level errors: ECONNRESET, ETIMEDOUT, ECONNREFUSED, etc.
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    typeof (error as { code: unknown }).code === "string"
-  ) {
-    if (TRANSIENT_NETWORK_CODES.has((error as { code: string }).code)) {
-      return true;
-    }
-  }
-
-  // HTTP-level: 429 (rate limit) or 5xx (server error)
-  const status = getErrorStatus(error);
-  if (status === 429 || (status !== null && status >= 500)) {
-    return true;
-  }
-
-  return false;
-}
 
 function getErrorStatus(error: unknown): number | null {
   if (typeof error !== "object" || error === null || !("status" in error)) {

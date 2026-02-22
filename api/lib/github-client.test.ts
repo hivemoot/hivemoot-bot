@@ -11,7 +11,7 @@ vi.mock("./logger.js", () => ({
   },
 }));
 
-import { IssueOperations, createIssueOperations } from "./github-client.js";
+import { IssueOperations, createIssueOperations, getErrorStatus } from "./github-client.js";
 import { logger as mockLogger } from "./logger.js";
 import type { GitHubClient } from "./github-client.js";
 import type { IssueRef } from "./types.js";
@@ -1875,5 +1875,35 @@ describe("IssueOperations", () => {
       await issueOps.getDiscussionReadiness(testRef);
       expect(mockLogger.info).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("getErrorStatus", () => {
+  it("returns null for non-object values", () => {
+    expect(getErrorStatus("string error")).toBeNull();
+    expect(getErrorStatus(42)).toBeNull();
+    expect(getErrorStatus(undefined)).toBeNull();
+    expect(getErrorStatus(true)).toBeNull();
+  });
+
+  it("returns null for null", () => {
+    expect(getErrorStatus(null)).toBeNull();
+  });
+
+  it("returns null when error has no status field", () => {
+    expect(getErrorStatus({ message: "not found" })).toBeNull();
+    expect(getErrorStatus({})).toBeNull();
+  });
+
+  it("returns null when status is not a number", () => {
+    expect(getErrorStatus({ status: "404" })).toBeNull();
+    expect(getErrorStatus({ status: null })).toBeNull();
+    expect(getErrorStatus({ status: undefined })).toBeNull();
+  });
+
+  it("returns the numeric status code", () => {
+    expect(getErrorStatus({ status: 404 })).toBe(404);
+    expect(getErrorStatus({ status: 422 })).toBe(422);
+    expect(getErrorStatus({ status: 500 })).toBe(500);
   });
 });

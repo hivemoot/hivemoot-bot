@@ -7,7 +7,7 @@
  */
 
 import * as yaml from "js-yaml";
-import { LABELS, REQUIRED_REPOSITORY_LABELS, SIGNATURE, isLabelMatch } from "../../config.js";
+import { LABELS, REQUIRED_REPOSITORY_LABELS, SIGNATURE } from "../../config.js";
 import { SIGNATURES, buildAlignmentComment } from "../bot-comments.js";
 import {
   createIssueOperations,
@@ -454,7 +454,7 @@ async function resolveAppBotLogin(ctx: CommandContext): Promise<string | undefin
  * Check if the issue currently has a specific label.
  */
 function hasLabel(ctx: CommandContext, label: string): boolean {
-  return ctx.issueLabels.some((l) => isLabelMatch(l.name, label));
+  return ctx.issueLabels.some((l) => l.name === label);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1203,12 +1203,10 @@ async function runLabelDoctorCheck(ctx: CommandContext): Promise<DoctorCheckResu
   const maybeUpdated = (result as { updated?: unknown }).updated;
   const updatedCount = typeof maybeUpdated === "number" ? maybeUpdated : 0;
   const totalExpected = REQUIRED_REPOSITORY_LABELS.length;
-  const totalFound = result.created + result.renamed + result.skipped + updatedCount;
+  const totalFound = result.created + result.skipped + updatedCount;
   const status: DoctorCheckStatus = totalFound >= totalExpected ? "pass" : "fail";
-  const detail = `${totalFound}/${totalExpected} labels accounted for (created ${result.created}, renamed ${result.renamed}, updated ${updatedCount}, already present ${result.skipped})`;
-  const subItems = result.renamedLabels.length > 0
-    ? result.renamedLabels.map((entry) => `Renamed \`${entry.from}\` -> \`${entry.to}\``)
-    : ["No legacy labels were renamed"];
+  const detail = `${totalFound}/${totalExpected} labels accounted for (created ${result.created}, updated ${updatedCount}, already present ${result.skipped})`;
+  const subItems: string[] = [];
 
   return {
     name: "Labels",

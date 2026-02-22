@@ -6,7 +6,7 @@
  * → "hivemoot:voting") to preserve existing issue associations.
  */
 
-import { REQUIRED_REPOSITORY_LABELS, LEGACY_LABEL_MAP, type RepositoryLabelDefinition } from "../config.js";
+import { REQUIRED_REPOSITORY_LABELS, type RepositoryLabelDefinition } from "../config.js";
 import { hasPaginateIterator, validateClient } from "./client-validation.js";
 
 interface ExistingLabel {
@@ -62,10 +62,8 @@ function isValidRepositoryLabelClient(obj: unknown): obj is RepositoryLabelClien
 
 export interface EnsureLabelsResult {
   created: number;
-  renamed: number;
   updated: number;
   skipped: number;
-  renamedLabels: Array<{ from: string; to: string }>;
 }
 
 export function createRepositoryLabelService(octokit: unknown): RepositoryLabelService {
@@ -75,19 +73,6 @@ export function createRepositoryLabelService(octokit: unknown): RepositoryLabelS
     );
   }
   return new RepositoryLabelService(octokit);
-}
-
-/**
- * Build reverse lookup: canonical label name → legacy names that map to it.
- */
-function buildReverseLegacyMap(): Map<string, string[]> {
-  const reverse = new Map<string, string[]>();
-  for (const [legacy, canonical] of Object.entries(LEGACY_LABEL_MAP)) {
-    const existing = reverse.get(canonical) ?? [];
-    existing.push(legacy);
-    reverse.set(canonical, existing);
-  }
-  return reverse;
 }
 
 /**
@@ -120,12 +105,9 @@ export class RepositoryLabelService {
     requiredLabels: readonly RepositoryLabelDefinition[] = REQUIRED_REPOSITORY_LABELS
   ): Promise<EnsureLabelsResult> {
     const existingLabels = await this.getExistingLabels(owner, repo);
-    const reverseLegacy = buildReverseLegacyMap();
     let created = 0;
-    let renamed = 0;
     let updated = 0;
     let skipped = 0;
-    const renamedLabels: Array<{ from: string; to: string }> = [];
 
     for (const label of requiredLabels) {
       const key = label.name.toLowerCase();
@@ -145,36 +127,6 @@ export class RepositoryLabelService {
           skipped++;
         }
         continue;
-      }
-
-      // Check for a legacy label that can be renamed
-      const legacyNames = reverseLegacy.get(label.name) ?? [];
-      const foundLegacy = legacyNames.find((name) => existingLabels.has(name.toLowerCase()));
-
-      if (foundLegacy) {
-        try {
-          await this.client.rest.issues.updateLabel({
-            owner,
-            repo,
-            name: foundLegacy,
-            new_name: label.name,
-            color: label.color,
-            description: label.description,
-          });
-          existingLabels.delete(foundLegacy.toLowerCase());
-          existingLabels.set(key, { name: label.name, color: label.color, description: label.description ?? null });
-          renamed++;
-          renamedLabels.push({ from: foundLegacy, to: label.name });
-          continue;
-        } catch (error) {
-          // If rename fails (e.g., concurrent rename), fall through to create
-          if ((error as { status?: number }).status === 422) {
-            existingLabels.set(key, { name: label.name, color: label.color, description: label.description ?? null });
-            skipped++;
-            continue;
-          }
-          throw error;
-        }
       }
 
       try {
@@ -198,7 +150,7 @@ export class RepositoryLabelService {
       }
     }
 
-    return { created, renamed, updated, skipped, renamedLabels };
+    return { created, updated, skipped };
   }
 
   private async getExistingLabels(owner: string, repo: string): Promise<Map<string, ExistingLabel>> {

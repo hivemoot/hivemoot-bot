@@ -342,52 +342,6 @@ export const PRIORITY_LABELS = {
   LOW: "hivemoot:low-priority",
 } as const;
 
-/**
- * Maps old label names to canonical new names.
- * Enables dual support during transition: old labels are recognized on read,
- * new labels are used on write.
- */
-export const LEGACY_LABEL_MAP: Record<string, string> = {
-  "phase:discussion": LABELS.DISCUSSION,
-  "phase:voting": LABELS.VOTING,
-  "phase:extended-voting": LABELS.EXTENDED_VOTING,
-  "ready-to-implement": LABELS.READY_TO_IMPLEMENT,
-  "phase:ready-to-implement": LABELS.READY_TO_IMPLEMENT,
-  "rejected": LABELS.REJECTED,
-  "inconclusive": LABELS.INCONCLUSIVE,
-  "implementation": LABELS.IMPLEMENTATION,
-  "stale": LABELS.STALE,
-  "implemented": LABELS.IMPLEMENTED,
-  "needs:human": LABELS.NEEDS_HUMAN,
-  "merge-ready": LABELS.MERGE_READY,
-};
-
-/**
- * Check if a label name matches a LABELS value, supporting legacy names.
- * Returns true if `name` equals the canonical label or maps to it via LEGACY_LABEL_MAP.
- */
-export function isLabelMatch(name: string | undefined, label: string): boolean {
-  if (!name) return false;
-  return name === label || LEGACY_LABEL_MAP[name] === label;
-}
-
-/**
- * Return all label names that refer to the same canonical label.
- * Result: [canonical, ...legacyAliases].
- *
- * Use this when building GitHub API queries (e.g., `labels` filter on
- * `listForRepo`) which only match exact names. Querying each alias
- * ensures entities carrying either old or new labels are found.
- */
-export function getLabelQueryAliases(label: string): string[] {
-  const aliases = [label];
-  for (const [legacy, canonical] of Object.entries(LEGACY_LABEL_MAP)) {
-    if (canonical === label) {
-      aliases.push(legacy);
-    }
-  }
-  return aliases;
-}
 
 export interface RepositoryLabelDefinition {
   name: string;

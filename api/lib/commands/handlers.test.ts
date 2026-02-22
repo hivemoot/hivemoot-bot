@@ -185,10 +185,8 @@ describe("executeCommand", () => {
     mockLabelService = {
       ensureRequiredLabels: vi.fn().mockResolvedValue({
         created: 2,
-        renamed: 1,
         updated: 0,
-        skipped: REQUIRED_REPOSITORY_LABELS.length - 3,
-        renamedLabels: [{ from: "phase:voting", to: "hivemoot:voting" }],
+        skipped: REQUIRED_REPOSITORY_LABELS.length - 2,
       }),
     };
     mockPROps = {
@@ -518,7 +516,6 @@ describe("executeCommand", () => {
       expect(commentArgs.body).toContain(
         `${REQUIRED_REPOSITORY_LABELS.length}/${REQUIRED_REPOSITORY_LABELS.length} labels accounted for`,
       );
-      expect(commentArgs.body).toContain("Renamed `phase:voting` -> `hivemoot:voting`");
       expect(commentArgs.body).toContain("**Config**");
       expect(commentArgs.body).toContain("Loaded `.github/hivemoot.yml`");
       expect(commentArgs.body).toContain("**PR Workflow**");
@@ -527,22 +524,6 @@ describe("executeCommand", () => {
       expect(commentArgs.body).toContain("**LLM**");
       expect(commentArgs.body).toContain(`${REQUIRED_REPOSITORY_LABELS.length}`);
       expect(commentArgs.body).toContain("checks passed");
-    });
-
-    it("should report when no legacy labels were renamed", async () => {
-      mockLabelService.ensureRequiredLabels.mockResolvedValueOnce({
-        created: 0,
-        renamed: 0,
-        updated: 0,
-        skipped: REQUIRED_REPOSITORY_LABELS.length,
-        renamedLabels: [],
-      });
-
-      const ctx = createCtx({ verb: "doctor" });
-      await executeCommand(ctx);
-
-      const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
-      expect(commentArgs.body).toContain("No legacy labels were renamed");
     });
 
     it("should fail PR workflow check when approval is enabled without trusted reviewers", async () => {
@@ -1235,16 +1216,6 @@ describe("executeCommand", () => {
       expect(result.status).toBe("rejected");
       // Should log that feedback delivery failed
       expect(ctx.log.error).toHaveBeenCalled();
-    });
-  });
-
-  describe("legacy label support", () => {
-    it("should recognize legacy label names via isLabelMatch", async () => {
-      const ctx = createCtx({
-        issueLabels: [{ name: "phase:discussion" }],
-      });
-      const result = await executeCommand(ctx);
-      expect(result.status).toBe("executed");
     });
   });
 

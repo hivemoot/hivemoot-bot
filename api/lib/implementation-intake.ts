@@ -9,7 +9,6 @@
 import {
   LABELS,
   PR_MESSAGES,
-  isLabelMatch,
 } from "../config.js";
 import { NOTIFICATION_TYPES } from "./bot-comments.js";
 import {
@@ -94,7 +93,7 @@ async function getImplementationPRsByIssue(params: {
 
   if (ensurePRNumber !== undefined && !candidateNumbers.has(ensurePRNumber)) {
     const labels = await prs.getLabels({ owner, repo, prNumber: ensurePRNumber });
-    if (labels.some(l => isLabelMatch(l, LABELS.IMPLEMENTATION))) {
+    if (labels.some(l => l === LABELS.IMPLEMENTATION)) {
       candidateNumbers.add(ensurePRNumber);
       logger.debug(`ensurePR #${ensurePRNumber}: added via direct label check (not yet indexed)`);
     }
@@ -283,7 +282,7 @@ export async function processImplementationIntake(params: {
   ]);
 
   // Avoid re-processing PRs already accepted as implementations
-  if (prLabels.some(l => isLabelMatch(l, LABELS.IMPLEMENTATION))) {
+  if (prLabels.some(l => l === LABELS.IMPLEMENTATION)) {
     return;
   }
 

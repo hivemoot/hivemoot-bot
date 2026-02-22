@@ -229,7 +229,7 @@ npm run typecheck
 npm run build
 ```
 
-This repository targets Node.js 22.x.
+This repository targets Node.js 22.x, pins the major version in `.nvmrc`, and enforces it during dependency install via `.npmrc` (`engine-strict=true`).
 
 For contribution workflows, see [CONTRIBUTING.md](CONTRIBUTING.md).
 

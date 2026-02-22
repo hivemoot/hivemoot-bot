@@ -74,6 +74,7 @@ describe("repo-config", () => {
     it("should return default values from env-derived config", () => {
       const defaults = getDefaultConfig();
 
+      expect(defaults.configured).toBe(true);
       expect(defaults.governance.proposals.discussion.exits).toEqual([{ type: "manual" }]);
       expect(defaults.governance.proposals.discussion.durationMs).toBe(0);
       expect(defaults.governance.proposals.voting.exits).toEqual([{ type: "manual" }]);
@@ -1342,14 +1343,15 @@ governance:
     });
 
     describe("missing file handling", () => {
-      it("should return defaults when config file not found (404)", async () => {
+      it("should return configured=false when config file not found (404)", async () => {
         const octokit = createMockOctokit({
           error: { status: 404, message: "Not Found" },
         });
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
-        expect(config).toEqual(getDefaultConfig());
+        expect(config.configured).toBe(false);
+        expect(config).toEqual({ ...getDefaultConfig(), configured: false });
       });
 
       it("should return defaults for empty file", async () => {

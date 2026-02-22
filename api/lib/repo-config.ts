@@ -129,8 +129,12 @@ export interface RepoConfigFile {
 /**
  * Effective configuration after merging repo config with defaults.
  * All values are guaranteed to be within safe boundaries.
+ *
+ * `configured` is false when no .github/hivemoot.yml file was found (HTTP 404).
+ * Callers should skip automations when this is false — the repo has not opted in.
  */
 export interface EffectiveConfig {
+  configured: boolean;
   version: number;
   governance: {
     proposals: {
@@ -983,6 +987,7 @@ function parseRepoConfig(raw: unknown, repoFullName: string): EffectiveConfig {
   const extendedExits = parseExits(extendedExitsRaw, repoFullName);
 
   return {
+    configured: true,
     version: typeof config?.version === "number" ? config.version : 1,
     governance: {
       proposals: {
@@ -1026,6 +1031,7 @@ function parseRepoConfig(raw: unknown, repoFullName: string): EffectiveConfig {
  */
 export function getDefaultConfig(): EffectiveConfig {
   return {
+    configured: true,
     version: 1,
     governance: {
       proposals: {
@@ -1126,10 +1132,10 @@ export async function loadRepositoryConfig(
   } catch (error) {
     const status = (error as { status?: number }).status;
 
-    // 404 is expected when repo doesn't have a config file
+    // 404 means the repo has no config file — automations are disabled until one is added
     if (status === 404) {
-      logger.debug(`[${repoFullName}] No ${CONFIG_PATH} found. Using defaults.`);
-      return getDefaultConfig();
+      logger.debug(`[${repoFullName}] No ${CONFIG_PATH} found. Automations disabled.`);
+      return { ...getDefaultConfig(), configured: false };
     }
 
     // Policy: config load errors should not block processing; log and use defaults.

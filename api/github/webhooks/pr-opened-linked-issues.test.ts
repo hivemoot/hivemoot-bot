@@ -100,6 +100,7 @@ describe("pull_request.opened linked issue resolution", () => {
     mocks.createIssueOperations.mockReturnValue(mocks.issuesOps);
     mocks.createPROperations.mockReturnValue(mocks.prOps);
     mocks.loadRepositoryConfig.mockResolvedValue({
+      configured: true,
       governance: {
         pr: {
           maxPRsPerIssue: 3,
@@ -355,6 +356,7 @@ describe("pull_request.synchronize non-default branch skip", () => {
     mocks.createIssueOperations.mockReturnValue(mocks.issuesOps);
     mocks.createPROperations.mockReturnValue(mocks.prOps);
     mocks.loadRepositoryConfig.mockResolvedValue({
+      configured: true,
       governance: {
         pr: {
           maxPRsPerIssue: 3,
@@ -408,6 +410,7 @@ describe("pull_request.edited non-default branch skip", () => {
     mocks.createIssueOperations.mockReturnValue(mocks.issuesOps);
     mocks.createPROperations.mockReturnValue(mocks.prOps);
     mocks.loadRepositoryConfig.mockResolvedValue({
+      configured: true,
       governance: {
         pr: {
           maxPRsPerIssue: 3,

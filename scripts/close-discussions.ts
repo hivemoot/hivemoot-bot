@@ -605,6 +605,60 @@ export async function reconcileMissingVotingComments(
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
+// Unlabeled Issue Reconciliation
+// ───────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Reconcile open issues that have no hivemoot:* phase label.
+ *
+ * These issues missed the issues.opened webhook (e.g., during a bot outage)
+ * and were never bootstrapped into the discussion phase. This function finds
+ * them and calls startDiscussion() to apply hivemoot:discussion and post the
+ * welcome comment.
+ *
+ * Idempotent: once startDiscussion succeeds, the issue gains the
+ * hivemoot:discussion label and is skipped on the next run. Errors on
+ * individual issues are logged but do not abort the loop.
+ *
+ * @returns Number of issues that were reconciled
+ */
+export async function reconcileUnlabeledIssues(
+  octokit: InstanceType<typeof Octokit>,
+  owner: string,
+  repoName: string,
+  governance: GovernanceService,
+  installationId?: number,
+): Promise<number> {
+  let reconciledCount = 0;
+
+  const iterator = octokit.paginate.iterator(
+    octokit.rest.issues.listForRepo,
+    { owner, repo: repoName, state: "open", per_page: 100 },
+  );
+
+  for await (const { data: page } of iterator) {
+    for (const issue of page as Issue[]) {
+      if ('pull_request' in issue) continue;
+
+      // Skip issues that already have any hivemoot:* label
+      if (issue.labels.some((l) => l.name.startsWith('hivemoot:'))) continue;
+
+      const ref = createIssueRef(owner, repoName, issue.number, installationId);
+      try {
+        await governance.startDiscussion(ref);
+        reconciledCount++;
+        logger.info(`[${owner}/${repoName}] Reconciled unlabeled issue #${issue.number}`);
+      } catch (error) {
+        logger.warn(
+          `[${owner}/${repoName}] Failed to reconcile unlabeled issue #${issue.number}: ${(error as Error).message}`,
+        );
+      }
+    }
+  }
+  return reconciledCount;
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
 // Repository Processing
 // ───────────────────────────────────────────────────────────────────────────────
 
@@ -720,6 +774,23 @@ export async function processRepository(
     } catch (error) {
       logger.warn(
         `[${repo.full_name}] Reconciliation failed: ${(error as Error).message}. Continuing with phase transitions.`,
+      );
+    }
+
+    try {
+      const reconciled = await reconcileUnlabeledIssues(
+        octokit,
+        owner,
+        repoName,
+        governance,
+        installationId
+      );
+      if (reconciled > 0) {
+        logger.info(`[${repo.full_name}] Reconciled ${reconciled} unlabeled issue(s)`);
+      }
+    } catch (error) {
+      logger.warn(
+        `[${repo.full_name}] Unlabeled issue reconciliation failed: ${(error as Error).message}. Continuing with phase transitions.`,
       );
     }
 

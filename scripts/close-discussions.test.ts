@@ -69,6 +69,7 @@ import {
   hasAutomaticGovernancePhases,
   processRepository,
   reconcileMissingVotingComments,
+  reconcileUnlabeledIssues,
 } from "./close-discussions.js";
 import type { EarlyDecisionDeps, DiscussionEarlyCheckDeps } from "./close-discussions.js";
 import { getOpenPRsForIssue, logger, loadRepositoryConfig, createIssueOperations, createGovernanceService } from "../api/lib/index.js";
@@ -293,6 +294,199 @@ describe("close-discussions script", () => {
     });
   });
 
+  describe("reconcileUnlabeledIssues", () => {
+    const owner = "test-org";
+    const repoName = "test-repo";
+
+    it("should call startDiscussion for issues with no hivemoot:* labels", async () => {
+      const mockGovernance = {
+        startDiscussion: vi.fn().mockResolvedValue(undefined),
+      } as any;
+
+      const fakeOctokit = {
+        rest: { issues: { listForRepo: vi.fn() } },
+        paginate: {
+          iterator: vi.fn().mockReturnValue(
+            buildIterator([[
+              { number: 10, labels: [] },
+              { number: 20, labels: [] },
+            ]])
+          ),
+        },
+      } as any;
+
+      const count = await reconcileUnlabeledIssues(fakeOctokit, owner, repoName, mockGovernance);
+
+      expect(count).toBe(2);
+      expect(mockGovernance.startDiscussion).toHaveBeenCalledTimes(2);
+      expect(mockGovernance.startDiscussion).toHaveBeenCalledWith({ owner, repo: repoName, issueNumber: 10 });
+      expect(mockGovernance.startDiscussion).toHaveBeenCalledWith({ owner, repo: repoName, issueNumber: 20 });
+    });
+
+    it("should skip issues that already have any hivemoot:* label", async () => {
+      const mockGovernance = {
+        startDiscussion: vi.fn().mockResolvedValue(undefined),
+      } as any;
+
+      const fakeOctokit = {
+        rest: { issues: { listForRepo: vi.fn() } },
+        paginate: {
+          iterator: vi.fn().mockReturnValue(
+            buildIterator([[
+              { number: 10, labels: [{ name: "hivemoot:discussion" }] },
+              { number: 20, labels: [{ name: "hivemoot:voting" }] },
+              { number: 30, labels: [] },
+            ]])
+          ),
+        },
+      } as any;
+
+      const count = await reconcileUnlabeledIssues(fakeOctokit, owner, repoName, mockGovernance);
+
+      expect(count).toBe(1);
+      expect(mockGovernance.startDiscussion).toHaveBeenCalledTimes(1);
+      expect(mockGovernance.startDiscussion).toHaveBeenCalledWith({ owner, repo: repoName, issueNumber: 30 });
+    });
+
+    it("should skip pull requests", async () => {
+      const mockGovernance = {
+        startDiscussion: vi.fn().mockResolvedValue(undefined),
+      } as any;
+
+      const fakeOctokit = {
+        rest: { issues: { listForRepo: vi.fn() } },
+        paginate: {
+          iterator: vi.fn().mockReturnValue(
+            buildIterator([[
+              { number: 10, labels: [] },
+              { number: 11, labels: [], pull_request: {} },
+              { number: 20, labels: [] },
+            ]])
+          ),
+        },
+      } as any;
+
+      const count = await reconcileUnlabeledIssues(fakeOctokit, owner, repoName, mockGovernance);
+
+      expect(count).toBe(2);
+      expect(mockGovernance.startDiscussion).toHaveBeenCalledTimes(2);
+      expect(mockGovernance.startDiscussion).not.toHaveBeenCalledWith(
+        expect.objectContaining({ issueNumber: 11 })
+      );
+    });
+
+    it("should survive per-issue errors and continue processing", async () => {
+      const mockGovernance = {
+        startDiscussion: vi.fn()
+          .mockRejectedValueOnce(new Error("API error"))
+          .mockResolvedValueOnce(undefined),
+      } as any;
+
+      const fakeOctokit = {
+        rest: { issues: { listForRepo: vi.fn() } },
+        paginate: {
+          iterator: vi.fn().mockReturnValue(
+            buildIterator([[{ number: 10, labels: [] }, { number: 20, labels: [] }]])
+          ),
+        },
+      } as any;
+
+      const count = await reconcileUnlabeledIssues(fakeOctokit, owner, repoName, mockGovernance);
+
+      expect(count).toBe(1); // Only #20 succeeded
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining("Failed to reconcile unlabeled issue #10"),
+      );
+    });
+
+    it("should return 0 when there are no unlabeled issues", async () => {
+      const mockGovernance = { startDiscussion: vi.fn() } as any;
+
+      const fakeOctokit = {
+        rest: { issues: { listForRepo: vi.fn() } },
+        paginate: {
+          iterator: vi.fn().mockReturnValue(
+            buildIterator([[{ number: 10, labels: [{ name: "hivemoot:ready-to-implement" }] }]])
+          ),
+        },
+      } as any;
+
+      const count = await reconcileUnlabeledIssues(fakeOctokit, owner, repoName, mockGovernance);
+
+      expect(count).toBe(0);
+      expect(mockGovernance.startDiscussion).not.toHaveBeenCalled();
+    });
+
+    it("should return 0 for an empty repository", async () => {
+      const mockGovernance = { startDiscussion: vi.fn() } as any;
+
+      const fakeOctokit = {
+        rest: { issues: { listForRepo: vi.fn() } },
+        paginate: {
+          iterator: vi.fn().mockReturnValue(buildIterator([[]])),
+        },
+      } as any;
+
+      const count = await reconcileUnlabeledIssues(fakeOctokit, owner, repoName, mockGovernance);
+
+      expect(count).toBe(0);
+      expect(mockGovernance.startDiscussion).not.toHaveBeenCalled();
+    });
+
+    it("should include installationId when provided", async () => {
+      const mockGovernance = {
+        startDiscussion: vi.fn().mockResolvedValue(undefined),
+      } as any;
+
+      const fakeOctokit = {
+        rest: { issues: { listForRepo: vi.fn() } },
+        paginate: {
+          iterator: vi.fn().mockReturnValue(
+            buildIterator([[{ number: 10, labels: [] }]])
+          ),
+        },
+      } as any;
+
+      await reconcileUnlabeledIssues(fakeOctokit, owner, repoName, mockGovernance, 999);
+
+      expect(mockGovernance.startDiscussion).toHaveBeenCalledWith({
+        owner,
+        repo: repoName,
+        issueNumber: 10,
+        installationId: 999,
+      });
+    });
+
+    it("should skip issues with non-hivemoot labels but no hivemoot:* label", async () => {
+      const mockGovernance = {
+        startDiscussion: vi.fn().mockResolvedValue(undefined),
+      } as any;
+
+      const fakeOctokit = {
+        rest: { issues: { listForRepo: vi.fn() } },
+        paginate: {
+          iterator: vi.fn().mockReturnValue(
+            buildIterator([[
+              { number: 10, labels: [{ name: "bug" }, { name: "help wanted" }] },
+              { number: 20, labels: [{ name: "hivemoot:discussion" }] },
+            ]])
+          ),
+        },
+      } as any;
+
+      const count = await reconcileUnlabeledIssues(fakeOctokit, owner, repoName, mockGovernance);
+
+      // #10 has no hivemoot:* label so it is reconciled; #20 already has one
+      expect(count).toBe(1);
+      expect(mockGovernance.startDiscussion).toHaveBeenCalledWith(
+        expect.objectContaining({ issueNumber: 10 })
+      );
+      expect(mockGovernance.startDiscussion).not.toHaveBeenCalledWith(
+        expect.objectContaining({ issueNumber: 20 })
+      );
+    });
+  });
+
   describe("processRepository gating", () => {
     const repo = {
       owner: { login: "test-org" },
@@ -392,6 +586,7 @@ describe("close-discussions script", () => {
       const mockGovernance = {
         postVotingComment: vi.fn().mockResolvedValue("posted"),
         transitionToVoting: vi.fn().mockResolvedValue(undefined),
+        startDiscussion: vi.fn().mockResolvedValue(undefined),
       } as any;
       mockCreateGovernanceService.mockReturnValue(mockGovernance);
 
@@ -412,8 +607,10 @@ describe("close-discussions script", () => {
             listForRepo: vi.fn(),
           },
         },
+        // Issue has hivemoot:discussion label so reconcileUnlabeledIssues skips it;
+        // reconcileMissingVotingComments and phase transitions still process it.
         paginate: {
-          iterator: vi.fn().mockReturnValue(buildIterator([[{ number: 42 }]])),
+          iterator: vi.fn().mockReturnValue(buildIterator([[{ number: 42, labels: [{ name: "hivemoot:discussion" }] }]])),
         },
       } as any;
       mockLoadRepositoryConfig.mockResolvedValue(discussionOnlyAutoConfig);

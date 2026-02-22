@@ -284,6 +284,9 @@ describe("config", () => {
       expect(message).not.toContain("PRIORITY");
       expect(message).not.toContain("priority");
       expect(message).toContain(SIGNATURES.VOTING);
+      expect(message).toContain("react once");
+      expect(message).toContain("multiple reactions");
+      expect(message).toContain("no vote");
       expect(message).toContain("👍");
       expect(message).toContain("👎");
       expect(message).toContain("😕");
@@ -330,6 +333,34 @@ describe("config", () => {
       expect(message).toContain("😕");
       expect(message).toContain("👀");
       expect(message).toContain(SIGNATURES.VOTING);
+      expect(message).toContain("react once");
+    });
+
+    it("should include multi-reaction warning for high priority", async () => {
+      const config = await import("./config.js");
+
+      const message = config.MESSAGES.votingStart("high");
+      expect(message).toContain("react once");
+      expect(message).toContain("multiple reactions");
+      expect(message).toContain("no vote");
+    });
+
+    it("should include multi-reaction warning for medium priority", async () => {
+      const config = await import("./config.js");
+
+      const message = config.MESSAGES.votingStart("medium");
+      expect(message).toContain("react once");
+      expect(message).toContain("multiple reactions");
+      expect(message).toContain("no vote");
+    });
+
+    it("should include multi-reaction warning for low priority", async () => {
+      const config = await import("./config.js");
+
+      const message = config.MESSAGES.votingStart("low");
+      expect(message).toContain("react once");
+      expect(message).toContain("multiple reactions");
+      expect(message).toContain("no vote");
     });
   });
 

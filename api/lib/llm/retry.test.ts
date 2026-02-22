@@ -89,6 +89,32 @@ describe("extractRetryDelay", () => {
     expect(delay).toBe(17_000);
   });
 
+  it("parses Retry-After as HTTP date", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-13T00:00:00.000Z"));
+
+    const error = makeAPICallError(429, {
+      responseHeaders: { "Retry-After": "Fri, 13 Feb 2026 00:00:05 GMT" },
+    });
+
+    expect(extractRetryDelay(error)).toBe(5_000);
+    vi.useRealTimers();
+  });
+
+  it("ignores past Retry-After HTTP dates", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-13T00:00:10.000Z"));
+
+    const error = makeAPICallError(429, {
+      responseHeaders: { "Retry-After": "Fri, 13 Feb 2026 00:00:05 GMT" },
+      message: "Please retry in 2.0s",
+    });
+
+    // Falls back to message parsing when date is in the past
+    expect(extractRetryDelay(error)).toBe(2_000);
+    vi.useRealTimers();
+  });
+
   it("prefers retry-after header over message regex", () => {
     const error = makeAPICallError(429, {
       responseHeaders: { "retry-after": "5" },

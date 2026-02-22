@@ -200,6 +200,7 @@ Webhook handling is deployed on [Vercel](https://vercel.com) as a serverless fun
 
 Permissions:
 
+- Contents: Read & Write (required for onboarding PR file creation)
 - Issues: Read & Write
 - Pull Requests: Read & Write
 - Discussions: Read & Write (required for standup discussion posting)

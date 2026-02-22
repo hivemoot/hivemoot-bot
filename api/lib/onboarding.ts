@@ -20,7 +20,7 @@ const ONBOARDING_CONFIG_CONTENT = `# Hivemoot configuration
 # See https://github.com/hivemoot/hivemoot-bot#configuration for all options.
 #
 # Merging this PR activates Hivemoot governance on this repository.
-# Close without merging to opt out — the bot will not re-create this PR.
+# Close without merging to opt out — the bot will not automatically re-create this PR.
 
 version: 1
 governance:
@@ -41,7 +41,7 @@ governance:
     staleDays: 3
     maxPRsPerIssue: 3
     intake:
-      - method: update  # require PR activity after issue approval
+      - method: update  # require PR activity after issue approval (method: auto coming soon — see #326)
     # trustedReviewers:
     #   - your-github-username
     # mergeReady:

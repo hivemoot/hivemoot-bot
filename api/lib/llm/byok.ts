@@ -1,11 +1,12 @@
 import { createDecipheriv } from "node:crypto";
 
 import type { LLMProvider } from "./types.js";
+import { normalizeEnvString } from "./env.js";
 
 const DEFAULT_REDIS_KEY_PREFIX = "hive:byok";
-const REDIS_URL_ENV_CANDIDATES = ["BYOK_REDIS_REST_URL", "UPSTASH_REDIS_REST_URL"] as const;
-const REDIS_TOKEN_ENV_CANDIDATES = ["BYOK_REDIS_REST_TOKEN", "UPSTASH_REDIS_REST_TOKEN"] as const;
-const MASTER_KEYS_ENV = "BYOK_MASTER_KEYS_JSON";
+const REDIS_URL_ENV_CANDIDATES = ["HIVEMOOT_REDIS_REST_URL"] as const;
+const REDIS_TOKEN_ENV_CANDIDATES = ["HIVEMOOT_REDIS_REST_TOKEN"] as const;
+const MASTER_KEYS_ENV = "BYOK_MASTER_KEYS";
 const REDIS_KEY_PREFIX_ENV = "BYOK_REDIS_KEY_PREFIX";
 const REDIS_FETCH_TIMEOUT_MS = 5000;
 
@@ -37,26 +38,6 @@ export interface InstallationBYOKConfig {
   apiKey: string;
 }
 
-function normalizeEnvString(value: string | undefined): string | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-
-  let normalized = value.trim();
-  if (normalized.length === 0) {
-    return undefined;
-  }
-
-  const hasMatchingQuotes =
-    (normalized.startsWith("\"") && normalized.endsWith("\"")) ||
-    (normalized.startsWith("'") && normalized.endsWith("'"));
-  if (hasMatchingQuotes) {
-    normalized = normalized.slice(1, -1).trim();
-  }
-
-  return normalized.length > 0 ? normalized : undefined;
-}
-
 function readFirstEnv(names: readonly string[]): string | undefined {
   for (const name of names) {
     const value = normalizeEnvString(process.env[name]);
@@ -77,7 +58,7 @@ function getRedisRuntimeConfig(): RedisRuntimeConfig | null {
 
   if (!url || !token) {
     throw new Error(
-      "BYOK Redis runtime is misconfigured: set both BYOK_REDIS_REST_URL (or UPSTASH_REDIS_REST_URL) and BYOK_REDIS_REST_TOKEN (or UPSTASH_REDIS_REST_TOKEN)"
+      "BYOK Redis runtime is misconfigured: set both HIVEMOOT_REDIS_REST_URL and HIVEMOOT_REDIS_REST_TOKEN"
     );
   }
 
@@ -109,7 +90,7 @@ function parseProvider(raw: unknown): LLMProvider {
   }
 }
 
-function parseMasterKeys(): ReadonlyMap<string, Buffer> {
+function parseMasterKeysFromEnv(): ReadonlyMap<string, Buffer> {
   const raw = normalizeEnvString(process.env[MASTER_KEYS_ENV]);
   if (!raw) {
     throw new Error(`BYOK master keys are not configured: set ${MASTER_KEYS_ENV}`);
@@ -129,10 +110,14 @@ function parseMasterKeys(): ReadonlyMap<string, Buffer> {
   const result = new Map<string, Buffer>();
   for (const [version, encodedKey] of Object.entries(parsed)) {
     if (typeof encodedKey !== "string" || encodedKey.trim().length === 0) {
-      throw new Error(`${MASTER_KEYS_ENV}.${version} must be a non-empty base64 string`);
+      throw new Error(`${MASTER_KEYS_ENV}.${version} must be a non-empty 64-char hex string`);
     }
 
-    const key = Buffer.from(encodedKey, "base64");
+    if (!/^[0-9a-f]{64}$/i.test(encodedKey.trim())) {
+      throw new Error(`${MASTER_KEYS_ENV}.${version} must be a 64-char hex string (got ${encodedKey.trim().length} chars)`);
+    }
+
+    const key = Buffer.from(encodedKey, "hex");
     if (key.length !== 32) {
       throw new Error(`${MASTER_KEYS_ENV}.${version} must decode to 32 bytes for AES-256-GCM`);
     }
@@ -144,6 +129,17 @@ function parseMasterKeys(): ReadonlyMap<string, Buffer> {
   }
 
   return result;
+}
+
+let _masterKeysCache: ReadonlyMap<string, Buffer> | undefined;
+
+function parseMasterKeys(): ReadonlyMap<string, Buffer> {
+  return (_masterKeysCache ??= parseMasterKeysFromEnv());
+}
+
+/** Reset the master keys cache. Intended for use in tests only. */
+export function _resetMasterKeysCache(): void {
+  _masterKeysCache = undefined;
 }
 
 function decodeBase64Field(fieldName: string, value: string): Buffer {

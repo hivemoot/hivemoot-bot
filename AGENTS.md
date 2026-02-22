@@ -77,7 +77,7 @@ PR checks are expected to include:
 - Missing `.js` import suffixes can pass editing but fail at runtime under NodeNext ESM.
 - Direct bot comment creation can duplicate content; use helper patterns in `api/lib/bot-comments.ts`.
 - Raw label string comparisons can miss legacy compatibility; use `isLabelMatch()` from `api/config.ts`.
-- Environment variables may include quotes/whitespace in hosted setups; use normalization helpers in `api/lib/env-validation.ts` and `api/lib/llm/provider.ts`.
+- Environment variables may include quotes/whitespace in hosted setups; use normalization helpers in `api/lib/env-validation.ts` and `api/lib/llm/env.ts` (`normalizeEnvString`).
 - Vercel functions have execution-time limits based on deployment settings; no `maxDuration` is configured in this repo.
 - If `gh` commands fail with `projectCards` GraphQL errors, use explicit `--json` fields or REST fallback commands from `CONTRIBUTING.md`.
 

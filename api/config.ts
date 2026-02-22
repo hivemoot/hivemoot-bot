@@ -595,8 +595,11 @@ Issue #${issueNumber} hasn't passed voting. This PR won't be tracked until it do
   issueReadyNeedsUpdate: (issueNumber: number) =>
     `# 🐝 Update Needed ⏳
 
-Issue #${issueNumber} is approved, but this PR was opened before approval.
-Add a new commit or leave a comment to activate it for implementation tracking.${SIGNATURE}`,
+Issue #${issueNumber} passed voting, but this PR was opened before approval.
+
+To prevent gaming the proposal system, we require PR activity (commit or comment) to occur after the issue is approved. This ensures implementations respond to the actual approved proposal.
+
+Add a new commit or leave a comment to activate this PR for implementation tracking.${SIGNATURE}`,
 
   /**
    * Posted to a PR when it becomes stale (no activity for threshold days).

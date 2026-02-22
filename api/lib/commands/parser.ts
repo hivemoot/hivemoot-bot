@@ -63,8 +63,8 @@ const COMMAND_PATTERN = new RegExp(
  * - Inline code containing @mention patterns
  */
 function stripNonCommandContent(body: string): string {
-  // Remove fenced code blocks first
-  let cleaned = body.replace(/```[\s\S]*?```/g, "");
+  // Remove fenced code blocks first, including unclosed fences through EOF.
+  let cleaned = body.replace(/```[\s\S]*?(?:```|$)/g, "");
 
   // Remove inline code spans that contain mention patterns
   cleaned = cleaned.replace(/`[^`]*@hivemoot[^`]*`/gi, "");

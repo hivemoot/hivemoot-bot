@@ -225,6 +225,24 @@ describe("RepositoryLabelService", () => {
     expect(client.rest.issues.createLabel).not.toHaveBeenCalled();
   });
 
+  it("should treat 422 rename error as concurrent rename and skip to create", async () => {
+    // Repo has legacy label; concurrent rename triggers 422 — fall through to create
+    vi.mocked(client.paginate.iterator).mockReturnValue(
+      buildIterator([[label("phase:voting", "5319e7", "Voting phase.")]])
+    );
+
+    const concurrentError = new Error("Unprocessable Entity") as Error & { status: number };
+    concurrentError.status = 422;
+    vi.mocked(client.rest.issues.updateLabel).mockRejectedValue(concurrentError);
+
+    const votingLabel = requiredDef(LABELS.VOTING);
+    const result = await service.ensureRequiredLabels("hivemoot", "colony", [votingLabel]);
+
+    // 422 on rename → treated as "already exists under new name", skipped without creating
+    expect(result).toEqual({ created: 0, renamed: 0, updated: 0, skipped: 1, renamedLabels: [] });
+    expect(client.rest.issues.createLabel).not.toHaveBeenCalled();
+  });
+
   it("should skip when canonical label already exists even if legacy also exists", async () => {
     const votingLabel = requiredDef(LABELS.VOTING);
     // Both old and new names exist — skip (canonical takes precedence, and has correct color)

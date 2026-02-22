@@ -326,6 +326,22 @@ describe("IssueOperations", () => {
 
       await expect(issueOps.removeLabel(testRef, "hivemoot:voting")).resolves.toBeUndefined();
     });
+
+    it("should rethrow non-404 errors from alias fallback", async () => {
+      const notFound = new Error("Not Found") as Error & { status: number };
+      notFound.status = 404;
+      const serverError = new Error("Gateway Timeout") as Error & { status: number };
+      serverError.status = 504;
+
+      // Canonical call → 404 triggers alias loop; alias call → 504 should propagate
+      vi.mocked(mockClient.rest.issues.removeLabel)
+        .mockRejectedValueOnce(notFound)
+        .mockRejectedValueOnce(serverError);
+
+      await expect(issueOps.removeLabel(testRef, "hivemoot:voting")).rejects.toThrow(
+        "Gateway Timeout"
+      );
+    });
   });
 
   describe("comment", () => {

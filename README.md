@@ -202,6 +202,7 @@ Permissions:
 
 - Issues: Read & Write
 - Pull Requests: Read & Write
+- Contents: Read & Write
 - Discussions: Read & Write (required for standup discussion posting)
 - Checks: Read (required for merge-readiness evaluation)
 - Commit statuses: Read (required for legacy CI status integration)

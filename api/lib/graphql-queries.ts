@@ -9,6 +9,7 @@
 
 import type { LinkedIssue, PullRequest } from "./types.js";
 import { logger } from "./logger.js";
+import { extractSameRepoClosingIssueNumbers } from "./closing-keywords.js";
 
 /**
  * GraphQL client interface - minimal subset needed for our queries.
@@ -56,8 +57,73 @@ interface LinkedIssuesResponse {
 }
 
 /**
+ * Pattern for GraphQL errors indicating the closingIssuesReferences field
+ * is unavailable. This can occur on older GitHub Enterprise Server versions
+ * or during transient schema issues.
+ */
+const SCHEMA_UNAVAILABLE_PATTERN = /field '?closingIssuesReferences'? doesn't exist|Cannot query field/i;
+
+/**
+ * Fallback query: fetch only the PR body when closingIssuesReferences is unavailable.
+ */
+const GET_PR_BODY_QUERY = `
+  query getPRBody($owner: String!, $repo: String!, $pr: Int!) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $pr) {
+        body
+      }
+    }
+  }
+`;
+
+interface PRBodyResponse {
+  repository: {
+    pullRequest: {
+      body: string | null;
+    } | null;
+  };
+}
+
+/**
+ * Fallback query: fetch a single issue's details by number.
+ */
+const GET_ISSUE_DETAILS_QUERY = `
+  query getIssueDetails($owner: String!, $repo: String!, $issue: Int!) {
+    repository(owner: $owner, name: $repo) {
+      issue(number: $issue) {
+        number
+        title
+        state
+        labels(first: 20) {
+          nodes {
+            name
+          }
+        }
+      }
+    }
+  }
+`;
+
+interface IssueDetailsResponse {
+  repository: {
+    issue: {
+      number: number;
+      title: string;
+      state: "OPEN" | "CLOSED";
+      labels: {
+        nodes: Array<{ name: string } | null>;
+      };
+    } | null;
+  };
+}
+
+/**
  * Get issues that will be closed when a PR is merged.
- * Uses GitHub's closingIssuesReferences which parses "fixes #123" etc.
+ *
+ * Primary path: uses GitHub's closingIssuesReferences GraphQL field.
+ * Fallback path: if closingIssuesReferences is unavailable (schema error),
+ * parses closing keywords from the PR body and fetches each issue individually.
+ * Fails closed if any fallback issue lookup fails to prevent silent data loss.
  */
 export async function getLinkedIssues(
   client: GraphQLClient,
@@ -65,16 +131,83 @@ export async function getLinkedIssues(
   repo: string,
   prNumber: number
 ): Promise<LinkedIssue[]> {
-  const response = await client.graphql<LinkedIssuesResponse>(
-    GET_LINKED_ISSUES_QUERY,
+  try {
+    const response = await client.graphql<LinkedIssuesResponse>(
+      GET_LINKED_ISSUES_QUERY,
+      { owner, repo, pr: prNumber }
+    );
+
+    return (
+      response.repository.pullRequest?.closingIssuesReferences.nodes.filter(
+        (node): node is LinkedIssue => node !== null
+      ) ?? []
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+
+    // Only activate fallback for schema-unavailable errors.
+    // All other errors (auth, rate limit, network) propagate as-is.
+    if (!SCHEMA_UNAVAILABLE_PATTERN.test(message)) {
+      throw error;
+    }
+
+    logger.warn(
+      `closingIssuesReferences unavailable for ${owner}/${repo}#${prNumber}, ` +
+      `using body-parsing fallback: ${message}`
+    );
+
+    return getLinkedIssuesFallback(client, owner, repo, prNumber);
+  }
+}
+
+/**
+ * Fallback: parse closing keywords from PR body, then fetch each issue.
+ * Fails closed: if any individual issue lookup fails, the entire call throws.
+ */
+async function getLinkedIssuesFallback(
+  client: GraphQLClient,
+  owner: string,
+  repo: string,
+  prNumber: number
+): Promise<LinkedIssue[]> {
+  // Step 1: Fetch PR body
+  const bodyResponse = await client.graphql<PRBodyResponse>(
+    GET_PR_BODY_QUERY,
     { owner, repo, pr: prNumber }
   );
 
-  return (
-    response.repository.pullRequest?.closingIssuesReferences.nodes.filter(
-      (node): node is LinkedIssue => node !== null
-    ) ?? []
-  );
+  const body = bodyResponse.repository.pullRequest?.body;
+  if (!body) {
+    return [];
+  }
+
+  // Step 2: Extract issue numbers from closing keywords
+  const issueNumbers = extractSameRepoClosingIssueNumbers(body, { owner, repo });
+  if (issueNumbers.length === 0) {
+    return [];
+  }
+
+  // Step 3: Fetch each issue's details. Fail closed on any lookup failure.
+  const issues: LinkedIssue[] = [];
+  for (const issueNumber of issueNumbers) {
+    const issueResponse = await client.graphql<IssueDetailsResponse>(
+      GET_ISSUE_DETAILS_QUERY,
+      { owner, repo, issue: issueNumber }
+    );
+
+    const issue = issueResponse.repository.issue;
+    if (issue === null) {
+      logger.warn(
+        `Fallback linked-issue resolution: issue #${issueNumber} not found in ${owner}/${repo}. ` +
+        `Skipping deleted issue reference.`
+      );
+      continue;
+    }
+
+    issues.push(issue);
+  }
+
+  return issues;
 }
 
 // ───────────────────────────────────────────────────────────────────────────────

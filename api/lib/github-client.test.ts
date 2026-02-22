@@ -243,6 +243,7 @@ describe("IssueOperations", () => {
           },
         }),
       },
+      request: vi.fn().mockResolvedValue({}),
     } as unknown as GitHubClient;
 
     issueOps = new IssueOperations(mockClient, TEST_APP_ID);
@@ -337,6 +338,17 @@ describe("IssueOperations", () => {
         issue_number: 42,
         body: "Hello world!",
       });
+    });
+  });
+
+  describe("pinComment", () => {
+    it("should call request with correct route and parameters", async () => {
+      await issueOps.pinComment(testRef, 99);
+
+      expect(mockClient.request).toHaveBeenCalledWith(
+        "PUT /repos/{owner}/{repo}/issues/comments/{comment_id}/pin",
+        { owner: "test-org", repo: "test-repo", comment_id: 99 }
+      );
     });
   });
 
@@ -1636,46 +1648,30 @@ describe("IssueOperations", () => {
       expect(comments).toHaveLength(2);
     });
 
-    it("should include reactions when present in API response", async () => {
+    it("should include thumbsUp/thumbsDown reactions from inline comment data", async () => {
       mockClient.paginate.iterator = vi.fn().mockReturnValue({
         async *[Symbol.asyncIterator]() {
           yield {
             data: [
               {
                 id: 1,
-                body: "Great idea!",
-                user: { login: "alice", type: "User" },
+                body: "Strong support",
+                user: { login: "alice" },
                 created_at: "2024-01-15T10:00:00Z",
-                reactions: { "+1": 3, "-1": 1 },
-              },
-            ],
-          };
-        },
-      });
-
-      const comments = await issueOps.getDiscussionComments(testRef);
-
-      expect(comments).toHaveLength(1);
-      expect(comments[0].reactions).toEqual({ thumbsUp: 3, thumbsDown: 1 });
-    });
-
-    it("should omit reactions when counts are zero", async () => {
-      mockClient.paginate.iterator = vi.fn().mockReturnValue({
-        async *[Symbol.asyncIterator]() {
-          yield {
-            data: [
-              {
-                id: 1,
-                body: "Normal comment",
-                user: { login: "alice", type: "User" },
-                created_at: "2024-01-15T10:00:00Z",
-                reactions: { "+1": 0, "-1": 0 },
+                reactions: { "+1": 5, "-1": 1 },
               },
               {
                 id: 2,
-                body: "No reactions field",
-                user: { login: "bob", type: "User" },
+                body: "No reactions here",
+                user: { login: "bob" },
                 created_at: "2024-01-15T11:00:00Z",
+                reactions: { "+1": 0, "-1": 0 },
+              },
+              {
+                id: 3,
+                body: "No reactions field",
+                user: { login: "carol" },
+                created_at: "2024-01-15T12:00:00Z",
               },
             ],
           };
@@ -1684,10 +1680,12 @@ describe("IssueOperations", () => {
 
       const comments = await issueOps.getDiscussionComments(testRef);
 
-      expect(comments).toHaveLength(2);
-      expect(comments[0].reactions).toBeUndefined();
+      expect(comments).toHaveLength(3);
+      expect(comments[0].reactions).toEqual({ thumbsUp: 5, thumbsDown: 1 });
       expect(comments[1].reactions).toBeUndefined();
+      expect(comments[2].reactions).toBeUndefined();
     });
+
   });
 
   describe("getIssueContext", () => {

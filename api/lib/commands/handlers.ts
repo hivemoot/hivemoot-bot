@@ -6,9 +6,18 @@
  * and performs the corresponding governance action.
  */
 
-import { LABELS, SIGNATURE, isLabelMatch } from "../../config.js";
+import * as yaml from "js-yaml";
+import { LABELS, REQUIRED_REPOSITORY_LABELS, SIGNATURE, isLabelMatch } from "../../config.js";
 import { SIGNATURES, buildAlignmentComment } from "../bot-comments.js";
-import { createIssueOperations, createGovernanceService, createPROperations, loadRepositoryConfig } from "../index.js";
+import {
+  createIssueOperations,
+  createGovernanceService,
+  createPROperations,
+  createRepositoryLabelService,
+  loadRepositoryConfig,
+} from "../index.js";
+import { getRepoDiscussionInfo } from "../discussions.js";
+import { getLLMReadiness } from "../llm/provider.js";
 import { BlueprintGenerator, createMinimalPlan } from "../llm/blueprint.js";
 import type { ImplementationPlan, IssueContext } from "../llm/types.js";
 import { evaluatePreflightChecks } from "../merge-readiness.js";
@@ -16,6 +25,7 @@ import type { PreflightCheckItem } from "../merge-readiness.js";
 import { CommitMessageGenerator, formatCommitMessage } from "../llm/commit-message.js";
 import type { PRContext } from "../llm/types.js";
 import type { IssueRef, PRRef } from "../types.js";
+import type { EffectiveConfig } from "../repo-config.js";
 
 /**
  * Minimal interface for the octokit client needed by command handlers.
@@ -43,6 +53,7 @@ export interface CommandOctokit {
         comment_id: number;
         content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
         per_page?: number;
+        page?: number;
       }) => Promise<{ data: Array<{ user: { login: string } | null }> }>;
     };
     issues: {
@@ -58,6 +69,18 @@ export interface CommandOctokit {
         comment_id: number;
         body: string;
       }) => Promise<unknown>;
+      listComments: (params: {
+        owner: string;
+        repo: string;
+        issue_number: number;
+        per_page?: number;
+        page?: number;
+      }) => Promise<{
+        data: Array<{
+          user: { login: string } | null;
+          performed_via_github_app?: { id: number; name: string } | null;
+        }>;
+      }>;
     };
   };
 }
@@ -113,28 +136,171 @@ const RESOLVED_MERGEABLE_STATES = new Set([
   "unstable",
   "has_hooks",
 ]);
+type CommandFailureClassification = "permission" | "validation" | "transient" | "unexpected";
+
+interface AuthorizationResult {
+  authorized: boolean;
+  permission: string | null;
+  /** Set when the auth check itself failed due to a transient error. */
+  transientError?: unknown;
+}
+
+interface CommandLogContext {
+  command: string;
+  owner: string;
+  repo: string;
+  issueNumber: number;
+  commentId: number;
+  senderLogin: string;
+  senderPermission: string;
+  isPullRequest: boolean;
+}
 
 /**
  * Check if the sender has sufficient repo permissions to run commands.
- * Returns true if authorized, false otherwise.
+ * Returns authorization status and the sender's resolved permission (when known).
+ *
+ * Transient errors (ECONNRESET, 429, 5xx) are surfaced via `transientError`
+ * so executeCommand() can post user-visible feedback instead of silently
+ * denying the command.
  */
-async function isAuthorized(ctx: CommandContext): Promise<boolean> {
+async function isAuthorized(ctx: CommandContext): Promise<AuthorizationResult> {
   try {
     const { data } = await ctx.octokit.rest.repos.getCollaboratorPermissionLevel({
       owner: ctx.owner,
       repo: ctx.repo,
       username: ctx.senderLogin,
     });
-    return AUTHORIZED_PERMISSIONS.has(data.permission);
+    return {
+      authorized: AUTHORIZED_PERMISSIONS.has(data.permission),
+      permission: data.permission,
+    };
   } catch (error) {
-    // If we can't check permissions (e.g., user is not a collaborator), deny.
-    // Log so persistent failures (expired token, rate limit) are visible.
+    // Surface transient errors so executeCommand() can post feedback
+    // instead of silently dropping the command.
+    if (isTransientError(error)) {
+      ctx.log.error(
+        { err: error, user: ctx.senderLogin, issue: ctx.issueNumber },
+        `Permission check hit transient error for ${ctx.senderLogin} — surfacing to user`,
+      );
+      return { authorized: false, permission: null, transientError: error };
+    }
+
+    // Non-transient failures (e.g., 404 = user is not a collaborator) → deny.
     ctx.log.error(
       { err: error, user: ctx.senderLogin, issue: ctx.issueNumber },
       `Permission check failed for ${ctx.senderLogin} — denying command`,
     );
-    return false;
+    return { authorized: false, permission: null };
   }
+}
+
+/** Network-level error codes that indicate a transient failure. */
+const TRANSIENT_NETWORK_CODES = new Set([
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "EPIPE",
+]);
+
+/**
+ * Determine whether an error is transient (network-level or server-side)
+ * and therefore worth surfacing rather than treating as an auth denial.
+ */
+function isTransientError(error: unknown): boolean {
+  // Network-level errors: ECONNRESET, ETIMEDOUT, ECONNREFUSED, etc.
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    typeof (error as { code: unknown }).code === "string"
+  ) {
+    if (TRANSIENT_NETWORK_CODES.has((error as { code: string }).code)) {
+      return true;
+    }
+  }
+
+  // HTTP-level: 429 (rate limit) or 5xx (server error)
+  const status = getErrorStatus(error);
+  if (status === 429 || (status !== null && status >= 500)) {
+    return true;
+  }
+
+  return false;
+}
+
+function getErrorStatus(error: unknown): number | null {
+  if (typeof error !== "object" || error === null || !("status" in error)) {
+    return null;
+  }
+  const status = (error as { status?: unknown }).status;
+  return typeof status === "number" ? status : null;
+}
+
+function classifyCommandFailure(error: unknown): CommandFailureClassification {
+  // Delegate to isTransientError() so network-level codes (ECONNRESET, etc.)
+  // are classified as "transient" — not just HTTP 429/5xx.
+  if (isTransientError(error)) {
+    return "transient";
+  }
+  const status = getErrorStatus(error);
+  if (status === 401 || status === 403) {
+    return "permission";
+  }
+  if (status === 400 || status === 404 || status === 409 || status === 422) {
+    return "validation";
+  }
+  return "unexpected";
+}
+
+function buildFailureCode(verb: string, classification: CommandFailureClassification): string {
+  return `CMD_${verb.toUpperCase()}_${classification.toUpperCase()}`;
+}
+
+function buildCommandCorrelationId(ctx: CommandContext): string {
+  return `cmd-${ctx.commentId.toString(36)}`;
+}
+
+function buildCommandFailureReply(
+  ctx: CommandContext,
+  failureCode: string,
+  correlationId: string,
+  classification: CommandFailureClassification,
+): string {
+  let guidance = "Retry the command once. If it fails again, ask a maintainer to inspect logs.";
+  if (classification === "permission") {
+    guidance = "Check repository/app permissions for this command, then retry.";
+  } else if (classification === "validation") {
+    guidance = "Verify repository configuration and pull request state, then retry.";
+  } else if (classification === "transient") {
+    guidance = "This looks transient (GitHub/API). Retry the command shortly.";
+  }
+
+  return [
+    "## 🐝 Command failed",
+    "",
+    `I couldn't complete \`/${ctx.verb}\` due to an internal command error.`,
+    "",
+    `- Failure code: \`${failureCode}\``,
+    `- Correlation id: \`${correlationId}\``,
+    "",
+    guidance,
+  ].join("\n");
+}
+
+function buildCommandLogContext(ctx: CommandContext, permission: string | null): CommandLogContext {
+  return {
+    command: ctx.verb,
+    owner: ctx.owner,
+    repo: ctx.repo,
+    issueNumber: ctx.issueNumber,
+    commentId: ctx.commentId,
+    senderLogin: ctx.senderLogin,
+    senderPermission: permission ?? "unknown",
+    isPullRequest: ctx.isPullRequest,
+  };
 }
 
 /**
@@ -186,23 +352,101 @@ async function reply(ctx: CommandContext, body: string): Promise<void> {
  * Check if the bot has already reacted with 👀 to this comment.
  * Used as an idempotency guard against webhook retries — if we already
  * processed a command (indicated by our eyes reaction), skip re-execution.
+ *
+ * Security: Only trust reactions from THIS app's bot identity, not any [bot].
+ * This prevents unrelated bots from suppressing command execution.
  */
 async function alreadyProcessed(ctx: CommandContext): Promise<boolean> {
   try {
-    const { data: reactions } = await ctx.octokit.rest.reactions.listForIssueComment({
-      owner: ctx.owner,
-      repo: ctx.repo,
-      comment_id: ctx.commentId,
-      content: "eyes",
-      per_page: 100,
-    });
-    // Check if any eyes reaction was created by our app's bot account.
+    // Resolve this app's bot login from comments authored via this app.
     // GitHub App bot usernames follow the pattern "<app-slug>[bot]".
-    return reactions.some((r) => r.user?.login.endsWith("[bot]"));
-  } catch {
+    const botLogin = await resolveAppBotLogin(ctx);
+    if (!botLogin) {
+      // Can't resolve bot identity — proceed to avoid silently dropping commands
+      ctx.log.info("Could not resolve app bot login for idempotency check — proceeding");
+      return false;
+    }
+
+    const perPage = 100;
+    let page = 1;
+
+    while (true) {
+      const { data: reactions } = await ctx.octokit.rest.reactions.listForIssueComment({
+        owner: ctx.owner,
+        repo: ctx.repo,
+        comment_id: ctx.commentId,
+        content: "eyes",
+        per_page: perPage,
+        page,
+      });
+
+      // Only skip if THIS app's bot left the eyes reaction.
+      const processedByUs = reactions.some((r) => r.user?.login === botLogin);
+      if (processedByUs) {
+        ctx.log.info({ botLogin, reactionCount: reactions.length, page }, "Found our own eyes reaction — already processed");
+        return true;
+      }
+
+      // Last page reached.
+      if (reactions.length < perPage) {
+        return false;
+      }
+
+      page += 1;
+    }
+  } catch (error) {
     // If we can't check reactions, proceed with execution to avoid
     // silently dropping commands due to transient API failures.
+    ctx.log.error(
+      { err: error, commentId: ctx.commentId },
+      "Idempotency check failed — proceeding to avoid silent command drop",
+    );
     return false;
+  }
+}
+
+/**
+ * Resolve this GitHub App's bot login by finding a comment authored via this app.
+ * Returns the bot username (e.g., "hivemoot[bot]") or undefined if not found.
+ */
+async function resolveAppBotLogin(ctx: CommandContext): Promise<string | undefined> {
+  try {
+    const perPage = 100;
+    let page = 1;
+
+    while (true) {
+      const { data: comments } = await ctx.octokit.rest.issues.listComments({
+        owner: ctx.owner,
+        repo: ctx.repo,
+        issue_number: ctx.issueNumber,
+        per_page: perPage,
+        page,
+      });
+
+      // Find a comment authored by this GitHub App (via performed_via_github_app)
+      // The API response includes performed_via_github_app.id when the app authored the comment
+      for (const comment of comments) {
+        const app = comment.performed_via_github_app;
+        if (app && typeof app === "object" && "id" in app && app.id === ctx.appId) {
+          // The author field contains the bot user
+          if (comment.user) {
+            return comment.user.login;
+          }
+        }
+      }
+
+      if (comments.length < perPage) {
+        return undefined;
+      }
+
+      page += 1;
+    }
+  } catch (error) {
+    ctx.log.error(
+      { err: error, issue: ctx.issueNumber },
+      "Failed to resolve app bot login for idempotency check",
+    );
+    return undefined;
   }
 }
 
@@ -418,7 +662,13 @@ async function handleGather(ctx: CommandContext): Promise<CommandResult> {
   try {
     const context = await issues.getIssueContext(ref);
     const generator = new BlueprintGenerator();
-    const result = await generator.generate(context);
+    const result = await generator.generate(
+      context,
+      undefined,
+      ctx.installationId !== undefined
+        ? { installationId: ctx.installationId }
+        : undefined
+    );
 
     if (result.success) {
       blueprintContent = buildBlueprintContent(result.plan, ctx.senderLogin);
@@ -428,10 +678,10 @@ async function handleGather(ctx: CommandContext): Promise<CommandResult> {
     }
   } catch (error) {
     if (existingAlignmentCommentId) {
-      const reason = error instanceof Error ? error.message : String(error);
+      ctx.log.error({ err: error, issue: ctx.issueNumber }, "Blueprint refresh failed in handleGather");
       await reply(
         ctx,
-        `I couldn't refresh the blueprint just now (${reason}). Keeping the previous blueprint comment unchanged.\n\nPlease retry \`/gather\` shortly.`,
+        `I couldn't refresh the blueprint just now. Please retry \`/gather\` shortly, or contact your administrator if the problem persists.`,
       );
       return { status: "executed", message: "Blueprint refresh failed; previous comment preserved." };
     }
@@ -519,7 +769,13 @@ async function handlePreflight(ctx: CommandContext): Promise<CommandResult> {
           groupEnd: noop,
         },
       });
-      const result = await generator.generate(prContext);
+      const result = await generator.generate(
+        prContext,
+        undefined,
+        ctx.installationId !== undefined
+          ? { installationId: ctx.installationId }
+          : undefined
+      );
 
       if (result.success) {
         const formatted = formatCommitMessage(result.message, ctx.issueNumber);
@@ -639,7 +895,13 @@ async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
         groupEnd: noop,
       },
     });
-    const result = await generator.generate(prContext);
+    const result = await generator.generate(
+      prContext,
+      undefined,
+      ctx.installationId !== undefined
+        ? { installationId: ctx.installationId }
+        : undefined
+    );
 
     if (!result.success) {
       body += "### Commit Message\n\n";
@@ -869,6 +1131,360 @@ async function gatherPRContext(
   return prContext;
 }
 
+/**
+ * Doctor check item severity.
+ */
+type DoctorCheckStatus = "pass" | "advisory" | "fail";
+
+interface DoctorCheckResult {
+  name: string;
+  status: DoctorCheckStatus;
+  detail: string;
+  subItems?: string[];
+}
+
+type DoctorRepoOctokit = {
+  rest: {
+    repos: {
+      getContent: (params: { owner: string; repo: string; path: string }) => Promise<{ data: unknown }>;
+      get: (params: { owner: string; repo: string }) => Promise<unknown>;
+    };
+    pulls: {
+      list: (params: { owner: string; repo: string; state?: "open" | "closed" | "all"; per_page?: number }) => Promise<unknown>;
+    };
+    issues: {
+      listLabelsForRepo: (params: { owner: string; repo: string; per_page?: number }) => Promise<unknown>;
+    };
+  };
+  graphql: <T>(query: string, variables?: Record<string, unknown>) => Promise<T>;
+};
+
+function formatDoctorCheckItem(check: DoctorCheckResult): string {
+  const icon = check.status === "pass" ? "[x]" : (check.status === "advisory" ? "[!]" : "[ ]");
+  return `- ${icon} **${check.name}**: ${check.detail}`;
+}
+
+function formatDoctorSubItem(item: string): string {
+  return `  - ${item}`;
+}
+
+function summarizeDoctorChecks(checks: DoctorCheckResult[]): string {
+  const passed = checks.filter((c) => c.status === "pass").length;
+  const advisories = checks.filter((c) => c.status === "advisory").length;
+  const failed = checks.filter((c) => c.status === "fail").length;
+  return `**${passed}/${checks.length} checks passed, ${advisories} advisories, ${failed} failures.**`;
+}
+
+function errorMessage(err: unknown): string {
+  if (err instanceof Error && err.message.trim().length > 0) {
+    return err.message;
+  }
+  return String(err);
+}
+
+async function runDoctorCheck(
+  name: string,
+  run: () => Promise<DoctorCheckResult>,
+): Promise<DoctorCheckResult> {
+  try {
+    return await run();
+  } catch (err) {
+    return {
+      name,
+      status: "fail",
+      detail: `Check failed: ${errorMessage(err)}`,
+    };
+  }
+}
+
+async function runLabelDoctorCheck(ctx: CommandContext): Promise<DoctorCheckResult> {
+  const labels = createRepositoryLabelService(ctx.octokit as unknown);
+  const result = await labels.ensureRequiredLabels(ctx.owner, ctx.repo);
+  const maybeUpdated = (result as { updated?: unknown }).updated;
+  const updatedCount = typeof maybeUpdated === "number" ? maybeUpdated : 0;
+  const totalExpected = REQUIRED_REPOSITORY_LABELS.length;
+  const totalFound = result.created + result.renamed + result.skipped + updatedCount;
+  const status: DoctorCheckStatus = totalFound >= totalExpected ? "pass" : "fail";
+  const detail = `${totalFound}/${totalExpected} labels accounted for (created ${result.created}, renamed ${result.renamed}, updated ${updatedCount}, already present ${result.skipped})`;
+  const subItems = result.renamedLabels.length > 0
+    ? result.renamedLabels.map((entry) => `Renamed \`${entry.from}\` -> \`${entry.to}\``)
+    : ["No legacy labels were renamed"];
+
+  return {
+    name: "Labels",
+    status,
+    detail,
+    subItems,
+  };
+}
+
+async function runConfigDoctorCheck(
+  ctx: CommandContext,
+  repoConfig: EffectiveConfig,
+): Promise<DoctorCheckResult> {
+  const octokit = ctx.octokit as unknown as DoctorRepoOctokit;
+  const configPath = ".github/hivemoot.yml";
+
+  try {
+    const response = await octokit.rest.repos.getContent({
+      owner: ctx.owner,
+      repo: ctx.repo,
+      path: configPath,
+    });
+    const data = response.data as { type?: string; content?: string } | unknown[];
+
+    if (Array.isArray(data) || typeof data !== "object" || data === null || data.type !== "file" || !data.content) {
+      return {
+        name: "Config",
+        status: "advisory",
+        detail: `\`${configPath}\` exists but is not a valid file payload; defaults are active`,
+      };
+    }
+
+    const content = Buffer.from(data.content, "base64").toString("utf-8");
+    const parsed = yaml.load(content);
+    if (parsed === null || parsed === undefined) {
+      return {
+        name: "Config",
+        status: "advisory",
+        detail: `\`${configPath}\` is empty; defaults are active`,
+      };
+    }
+    if (typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {
+        name: "Config",
+        status: "fail",
+        detail: `\`${configPath}\` must be a YAML object`,
+      };
+    }
+
+    const intakeMethods = repoConfig.governance.pr.intake.map((entry) => entry.method).join(", ");
+    return {
+      name: "Config",
+      status: "pass",
+      detail: `Loaded \`${configPath}\` (intake: ${intakeMethods || "none"})`,
+    };
+  } catch (err) {
+    const status = (err as { status?: number }).status;
+    if (status === 404) {
+      return {
+        name: "Config",
+        status: "advisory",
+        detail: `\`${configPath}\` not found; defaults are active`,
+      };
+    }
+
+    if (err instanceof yaml.YAMLException) {
+      return {
+        name: "Config",
+        status: "fail",
+        detail: `Invalid YAML in \`${configPath}\`: ${err.message}`,
+      };
+    }
+
+    return {
+      name: "Config",
+      status: "fail",
+      detail: `Unable to load \`${configPath}\`: ${errorMessage(err)}`,
+    };
+  }
+}
+
+function runPRWorkflowDoctorCheck(repoConfig: EffectiveConfig): DoctorCheckResult {
+  const intake = repoConfig.governance.pr.intake;
+  const trustedReviewers = repoConfig.governance.pr.trustedReviewers;
+  const usesApprovalIntake = intake.some((method) => method.method === "approval");
+  const hasMergeReady = repoConfig.governance.pr.mergeReady !== null;
+  const requiresTrustedReviewers = usesApprovalIntake || hasMergeReady;
+
+  if (requiresTrustedReviewers && trustedReviewers.length === 0) {
+    return {
+      name: "PR Workflow",
+      status: "fail",
+      detail: "Approval-based intake/merge-ready is configured but `trustedReviewers` is empty",
+    };
+  }
+
+  if (intake.length === 0) {
+    return {
+      name: "PR Workflow",
+      status: "fail",
+      detail: "No PR intake methods are configured",
+    };
+  }
+
+  if (trustedReviewers.length === 0) {
+    return {
+      name: "PR Workflow",
+      status: "advisory",
+      detail: "No trusted reviewers configured; approval-based workflows are disabled",
+    };
+  }
+
+  return {
+    name: "PR Workflow",
+    status: "pass",
+    detail: `Configured intake methods: ${intake.map((method) => method.method).join(", ")} (trusted reviewers: ${trustedReviewers.length})`,
+  };
+}
+
+async function runStandupDoctorCheck(
+  ctx: CommandContext,
+  repoConfig: EffectiveConfig,
+): Promise<DoctorCheckResult> {
+  if (!repoConfig.standup.enabled) {
+    return {
+      name: "Standup",
+      status: "pass",
+      detail: "Disabled (no action required)",
+    };
+  }
+
+  if (!repoConfig.standup.category.trim()) {
+    return {
+      name: "Standup",
+      status: "fail",
+      detail: "`standup.enabled` is true but `standup.category` is empty",
+    };
+  }
+
+  const discussions = await getRepoDiscussionInfo(ctx.octokit as unknown as DoctorRepoOctokit, ctx.owner, ctx.repo);
+  if (!discussions.hasDiscussions) {
+    return {
+      name: "Standup",
+      status: "fail",
+      detail: "GitHub Discussions are disabled for this repository",
+    };
+  }
+
+  const category = discussions.categories.find((entry) => entry.name === repoConfig.standup.category);
+  if (!category) {
+    return {
+      name: "Standup",
+      status: "fail",
+      detail: `Category \`${repoConfig.standup.category}\` was not found`,
+    };
+  }
+
+  return {
+    name: "Standup",
+    status: "pass",
+    detail: `Category \`${repoConfig.standup.category}\` is available`,
+  };
+}
+
+async function runPermissionsDoctorCheck(ctx: CommandContext): Promise<DoctorCheckResult> {
+  const octokit = ctx.octokit as unknown as DoctorRepoOctokit;
+  const failures: string[] = [];
+
+  const probes: Array<{ label: string; run: () => Promise<void> }> = [
+    {
+      label: "issues",
+      run: async () => {
+        await octokit.rest.issues.listLabelsForRepo({ owner: ctx.owner, repo: ctx.repo, per_page: 1 });
+      },
+    },
+    {
+      label: "pull_requests",
+      run: async () => {
+        await octokit.rest.pulls.list({ owner: ctx.owner, repo: ctx.repo, state: "open", per_page: 1 });
+      },
+    },
+    {
+      label: "metadata",
+      run: async () => {
+        await octokit.rest.repos.get({ owner: ctx.owner, repo: ctx.repo });
+      },
+    },
+  ];
+
+  for (const probe of probes) {
+    try {
+      await probe.run();
+    } catch (err) {
+      failures.push(`${probe.label}: ${errorMessage(err)}`);
+    }
+  }
+
+  if (failures.length > 0) {
+    return {
+      name: "Permissions",
+      status: "fail",
+      detail: `${failures.length}/${probes.length} capability probes failed`,
+      subItems: failures,
+    };
+  }
+
+  return {
+    name: "Permissions",
+    status: "pass",
+    detail: "Issues, pull requests, and metadata capability probes succeeded",
+  };
+}
+
+function runLLMDoctorCheck(): DoctorCheckResult {
+  const readiness = getLLMReadiness();
+  if (readiness.ready) {
+    return {
+      name: "LLM",
+      status: "pass",
+      detail: "Provider, model, and API key are configured",
+    };
+  }
+
+  if (readiness.reason === "api_key_missing") {
+    return {
+      name: "LLM",
+      status: "fail",
+      detail: "Provider/model configured but API key is missing",
+    };
+  }
+
+  return {
+    name: "LLM",
+    status: "advisory",
+    detail: "LLM integration is not configured",
+  };
+}
+
+/**
+ * Handle /doctor command: run a setup health report for the current repository.
+ */
+async function handleDoctor(ctx: CommandContext): Promise<CommandResult> {
+  const octokit = ctx.octokit as unknown as DoctorRepoOctokit;
+  const repoConfig = await loadRepositoryConfig(octokit, ctx.owner, ctx.repo);
+
+  const checks: DoctorCheckResult[] = [];
+  checks.push(await runDoctorCheck("Labels", async () => runLabelDoctorCheck(ctx)));
+  checks.push(await runDoctorCheck("Config", async () => runConfigDoctorCheck(ctx, repoConfig)));
+  checks.push(await runDoctorCheck("PR Workflow", async () => runPRWorkflowDoctorCheck(repoConfig)));
+  checks.push(await runDoctorCheck("Standup", async () => runStandupDoctorCheck(ctx, repoConfig)));
+  checks.push(await runDoctorCheck("Permissions", async () => runPermissionsDoctorCheck(ctx)));
+  checks.push(await runDoctorCheck("LLM", async () => runLLMDoctorCheck()));
+
+  const lines: string[] = [
+    "## 🐝 Doctor Report",
+    "",
+  ];
+  for (const check of checks) {
+    lines.push(formatDoctorCheckItem(check));
+    if (check.subItems) {
+      for (const subItem of check.subItems) {
+        lines.push(formatDoctorSubItem(subItem));
+      }
+    }
+  }
+  lines.push("");
+  lines.push(summarizeDoctorChecks(checks));
+
+  await reply(
+    ctx,
+    lines.join("\n"),
+  );
+
+  return { status: "executed", message: "Doctor report posted." };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Command Router
 // ─────────────────────────────────────────────────────────────────────────────
@@ -877,6 +1493,7 @@ async function gatherPRContext(
 const COMMAND_HANDLERS: Record<string, (ctx: CommandContext) => Promise<CommandResult>> = {
   vote: handleVote,
   implement: handleImplement,
+  doctor: handleDoctor,
   gather: handleGather,
   preflight: handlePreflight,
   squash: handleSquash,
@@ -900,14 +1517,26 @@ export async function executeCommand(ctx: CommandContext): Promise<CommandResult
   }
 
   // Authorization: only maintainers can use commands
-  const authorized = await isAuthorized(ctx);
-  if (!authorized) {
+  const authorization = await isAuthorized(ctx);
+  if (!authorization.authorized) {
+    // Transient auth failures get user-visible feedback so the command
+    // isn't silently swallowed by ECONNRESET or rate-limit errors.
+    if (authorization.transientError) {
+      const classification = classifyCommandFailure(authorization.transientError);
+      const failureCode = buildFailureCode(ctx.verb, classification);
+      const correlationId = buildCommandCorrelationId(ctx);
+      await react(ctx, "confused");
+      await reply(ctx, buildCommandFailureReply(ctx, failureCode, correlationId, classification));
+      return { status: "rejected", reason: `Auth check failed: ${failureCode}` };
+    }
+
     // Per issue #81: "for everyone else this should be ignored"
     ctx.log.info(
       `Command /${ctx.verb} from unauthorized user ${ctx.senderLogin} on #${ctx.issueNumber} — ignoring`,
     );
     return { status: "ignored" };
   }
+  const logContext = buildCommandLogContext(ctx, authorization.permission);
 
   // Idempotency guard: if we already reacted with 👀, this is a webhook
   // retry and the command was already executed. Skip to prevent duplicates.
@@ -922,6 +1551,7 @@ export async function executeCommand(ctx: CommandContext): Promise<CommandResult
   await react(ctx, "eyes");
 
   ctx.log.info(
+    logContext,
     `Executing command /${ctx.verb} from ${ctx.senderLogin} on #${ctx.issueNumber}`,
   );
 
@@ -937,10 +1567,20 @@ export async function executeCommand(ctx: CommandContext): Promise<CommandResult
 
     return result;
   } catch (error) {
+    const classification = classifyCommandFailure(error);
+    const failureCode = buildFailureCode(ctx.verb, classification);
+    const correlationId = buildCommandCorrelationId(ctx);
     await react(ctx, "confused");
+    await reply(ctx, buildCommandFailureReply(ctx, failureCode, correlationId, classification));
     ctx.log.error(
-      { err: error, verb: ctx.verb, issue: ctx.issueNumber },
-      `Command /${ctx.verb} failed`,
+      {
+        err: error,
+        ...logContext,
+        failureCode,
+        correlationId,
+        classification,
+      },
+      `Command /${ctx.verb} failed [${failureCode}]`,
     );
     throw error;
   }

@@ -27,9 +27,11 @@ import {
 } from "../../lib/implementation-intake.js";
 import { parseCommand, executeCommand } from "../../lib/commands/index.js";
 import { getLLMReadiness } from "../../lib/llm/provider.js";
+import { registerHandlerDispatcher } from "../../handlers/dispatcher.js";
+import { handlerEventMap } from "../../handlers/registry.js";
 
 /**
- * Queen Bot - Hivemoot Governance Automation
+ * Hivemoot Bot - Governance Automation
  *
  * Handles GitHub webhooks for AI agent community governance:
  * - New issues: Add `hivemoot:discussion` label + welcome message
@@ -237,6 +239,7 @@ async function ensureLabelsForRepositories(
 
 export function app(probotApp: Probot): void {
   probotApp.log.info("Queen bot initialized");
+  registerHandlerDispatcher(probotApp, { eventMap: handlerEventMap });
 
   /**
    * Bootstrap required labels when the app is first installed.
@@ -917,7 +920,12 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-const probot = createProbot();
+// Suppress Probot's auto-detection of REDIS_URL for bottleneck rate-limit
+// clustering. When REDIS_URL is set in the Vercel environment, Probot opens a
+// raw ioredis TCP connection that goes stale between serverless invocations,
+// causing ECONNRESET/EPIPE errors that silently drop webhook commands.
+// The bot does not use distributed rate limiting; force the local datastore.
+const probot = createProbot({ overrides: { redisConfig: "" } });
 const middleware = createNodeMiddleware(app, {
   probot,
   webhooksPath: "/api/github/webhooks",

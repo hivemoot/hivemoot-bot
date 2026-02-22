@@ -719,7 +719,7 @@ export async function generateStandupLLMContent(
   llmContext?: StandupLLMContext
 ): Promise<StandupLLMContent | null> {
   try {
-    const modelResult = createModelFromEnv(
+    const modelResult = await createModelFromEnv(
       llmContext?.installationId !== undefined
         ? { installationId: llmContext.installationId }
         : undefined
@@ -766,9 +766,11 @@ export async function generateStandupLLMContent(
     logger.info("Standup narrative generated and validated successfully");
     return validated;
   } catch (error) {
-    // Covers both config errors (missing API key) and runtime failures.
     // LLM is Layer 1 (optional) — degrade gracefully to template-only.
-    logger.warn(`LLM standup generation failed: ${(error as Error).message}`);
+    // BYOK infrastructure failures are logged at error for operator visibility.
+    const message = error instanceof Error ? error.message : String(error);
+    const isByokRuntime = message.startsWith("BYOK ");
+    logger[isByokRuntime ? "error" : "warn"](`LLM standup generation failed: ${message}`);
     return null;
   }
 }

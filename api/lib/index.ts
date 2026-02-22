@@ -94,5 +94,6 @@ export type {
   IntakeMethod,
   MergeReadyConfig,
   StandupConfig,
+  AlignmentAutoGatherConfig,
 } from "./repo-config.js";
 export { isAutoVotingExit, isAutoDiscussionExit } from "./repo-config.js";

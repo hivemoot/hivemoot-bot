@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { executeCommand, type CommandContext } from "./handlers.js";
+import { executeCommand, autoGatherIfEligible, type CommandContext, type AutoGatherParams } from "./handlers.js";
 import { LABELS, REQUIRED_REPOSITORY_LABELS } from "../../config.js";
 
 // Mock the blueprint generator to control success/failure paths.
@@ -1438,5 +1438,139 @@ describe("executeCommand", () => {
       const replyCall = ctx.octokit.rest.issues.createComment.mock.calls[0];
       expect(replyCall[0].body).toContain("Hivemoot Queen");
     });
+  });
+});
+
+describe("autoGatherIfEligible", () => {
+  const AUTO_GATHER_CONFIG = {
+    enabled: true,
+    minNewComments: 3,
+    cooldownMinutes: 60,
+  };
+
+  let mockIssueOpsLocal: Record<string, ReturnType<typeof vi.fn>>;
+
+  function createAutoGatherParams(overrides: Partial<AutoGatherParams> = {}): AutoGatherParams {
+    return {
+      octokit: createMockOctokit(),
+      owner: "test-org",
+      repo: "test-repo",
+      issueNumber: 42,
+      installationId: undefined,
+      issueLabels: [{ name: LABELS.DISCUSSION }],
+      autoGatherConfig: AUTO_GATHER_CONFIG,
+      appId: 12345,
+      log: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Reuse the top-level mockIssueOps; just reset and add the new methods
+    mockIssueOps = {
+      ...mockIssueOps,
+      findAlignmentCommentInfo: vi.fn().mockResolvedValue(null),
+      countNonBotCommentsSince: vi.fn().mockResolvedValue(5),
+      getIssueContext: vi.fn().mockResolvedValue({
+        title: "Test issue",
+        body: "Issue body",
+        author: "author",
+        comments: [],
+      }),
+      comment: vi.fn().mockResolvedValue(undefined),
+    };
+    mockIssueOpsLocal = mockIssueOps;
+
+    mockBlueprintGenerate.mockResolvedValue({
+      success: true,
+      plan: {
+        goal: "Test goal",
+        plan: "Test plan",
+        decisions: [],
+        outOfScope: [],
+        openQuestions: [],
+        metadata: { commentCount: 5, participantCount: 2 },
+      },
+    });
+  });
+
+  it("should not trigger when issue has no discussion label", async () => {
+    const params = createAutoGatherParams({
+      issueLabels: [{ name: "hivemoot:ready-to-implement" }],
+    });
+    await autoGatherIfEligible(params);
+    expect(mockIssueOpsLocal.comment).not.toHaveBeenCalled();
+  });
+
+  it("should not trigger when comment count below threshold", async () => {
+    mockIssueOpsLocal.countNonBotCommentsSince.mockResolvedValue(2); // < 3
+    const params = createAutoGatherParams();
+    await autoGatherIfEligible(params);
+    expect(mockIssueOpsLocal.comment).not.toHaveBeenCalled();
+  });
+
+  it("should not trigger during cooldown period", async () => {
+    const recentGather = new Date(Date.now() - 30 * 60 * 1000).toISOString(); // 30 min ago
+    mockIssueOpsLocal.findAlignmentCommentInfo.mockResolvedValue({
+      id: 999,
+      createdAt: recentGather,
+    });
+    mockIssueOpsLocal.countNonBotCommentsSince.mockResolvedValue(10);
+    const params = createAutoGatherParams();
+    await autoGatherIfEligible(params);
+    // Still in 60-min cooldown, should not trigger
+    expect(mockIssueOpsLocal.comment).not.toHaveBeenCalled();
+    expect(params.octokit.rest.issues.updateComment).not.toHaveBeenCalled();
+  });
+
+  it("should create new alignment comment when none exists and threshold met", async () => {
+    mockIssueOpsLocal.findAlignmentCommentInfo.mockResolvedValue(null);
+    mockIssueOpsLocal.countNonBotCommentsSince.mockResolvedValue(5);
+    const params = createAutoGatherParams();
+    await autoGatherIfEligible(params);
+    expect(mockIssueOpsLocal.comment).toHaveBeenCalledOnce();
+    const body = mockIssueOpsLocal.comment.mock.calls[0][1];
+    expect(body).toContain("auto-gather");
+  });
+
+  it("should update existing alignment comment after cooldown", async () => {
+    const oldGather = new Date(Date.now() - 120 * 60 * 1000).toISOString(); // 2 hours ago
+    mockIssueOpsLocal.findAlignmentCommentInfo.mockResolvedValue({
+      id: 777,
+      createdAt: oldGather,
+    });
+    mockIssueOpsLocal.countNonBotCommentsSince.mockResolvedValue(5);
+    const params = createAutoGatherParams();
+    await autoGatherIfEligible(params);
+    expect(params.octokit.rest.issues.updateComment).toHaveBeenCalledWith(
+      expect.objectContaining({ comment_id: 777 })
+    );
+    expect(mockIssueOpsLocal.comment).not.toHaveBeenCalled();
+  });
+
+  it("should use fallback blueprint on LLM failure without posting error", async () => {
+    mockBlueprintGenerate.mockResolvedValue({
+      success: false,
+      reason: "LLM unavailable",
+    });
+    mockIssueOpsLocal.countNonBotCommentsSince.mockResolvedValue(5);
+    const params = createAutoGatherParams();
+    await autoGatherIfEligible(params);
+    // Should still create a comment using the fallback
+    expect(mockIssueOpsLocal.comment).toHaveBeenCalledOnce();
+  });
+
+  it("should fail silently on unexpected errors", async () => {
+    mockIssueOpsLocal.getIssueContext.mockRejectedValue(new Error("Network error"));
+    mockIssueOpsLocal.countNonBotCommentsSince.mockResolvedValue(5);
+    const params = createAutoGatherParams();
+    await expect(autoGatherIfEligible(params)).resolves.toBeUndefined();
+    expect(params.log.warn).toHaveBeenCalled();
+    expect(mockIssueOpsLocal.comment).not.toHaveBeenCalled();
   });
 });

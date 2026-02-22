@@ -125,6 +125,7 @@ describe("status webhook handler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.loadRepositoryConfig.mockResolvedValue({
+      configured: true,
       governance: {
         pr: {
           mergeReady: {
@@ -142,6 +143,7 @@ describe("status webhook handler", () => {
     expect(handler).toBeDefined();
 
     mocks.loadRepositoryConfig.mockResolvedValueOnce({
+      configured: true,
       governance: {
         pr: {
           mergeReady: null,

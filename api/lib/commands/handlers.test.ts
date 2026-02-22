@@ -65,6 +65,7 @@ let mockGovernance: Record<string, ReturnType<typeof vi.fn>>;
 let mockLabelService: Record<string, ReturnType<typeof vi.fn>>;
 let mockPROps: Record<string, ReturnType<typeof vi.fn>>;
 let mockRepoConfig: {
+  configured: boolean;
   version: number;
   governance: {
     proposals: {
@@ -199,6 +200,7 @@ describe("executeCommand", () => {
       }),
     };
     mockRepoConfig = {
+      configured: true,
       version: 1,
       governance: {
         proposals: {
@@ -548,6 +550,7 @@ describe("executeCommand", () => {
     it("should fail PR workflow check when approval is enabled without trusted reviewers", async () => {
       const { loadRepositoryConfig } = await import("../index.js");
       vi.mocked(loadRepositoryConfig).mockResolvedValueOnce({
+        configured: true,
         version: 1,
         governance: {
           proposals: {
@@ -627,6 +630,7 @@ describe("executeCommand", () => {
     it("should report advisory PR workflow and validate enabled standup category", async () => {
       const { loadRepositoryConfig } = await import("../index.js");
       vi.mocked(loadRepositoryConfig).mockResolvedValueOnce({
+        configured: true,
         version: 1,
         governance: {
           proposals: {

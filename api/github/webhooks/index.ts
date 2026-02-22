@@ -273,6 +273,10 @@ export function app(probotApp: Probot): void {
       const issues = createIssueOperations(context.octokit, { appId });
       const governance = createGovernanceService(issues);
       const repoConfig = await loadRepositoryConfig(context.octokit, owner, repo);
+      if (!repoConfig.configured) {
+        context.log.debug({ owner, repo, issue: number }, "No hivemoot.yml — skipping issue governance");
+        return;
+      }
       const hasAutomaticDiscussion = repoConfig.governance.proposals.discussion.exits.some(
         (exit) => exit.type === "auto"
       );
@@ -312,6 +316,10 @@ export function app(probotApp: Probot): void {
         getLinkedIssues(context.octokit, owner, repo, number),
         loadRepositoryConfig(context.octokit, owner, repo),
       ]);
+      if (!repoConfig.configured) {
+        context.log.debug({ owner, repo, pr: number }, "No hivemoot.yml — skipping PR intake");
+        return;
+      }
       let linkedIssues = initialLinkedIssues;
       const hasBodyClosingKeyword = linkedIssues.length === 0
         ? hasSameRepoClosingKeywordRef(context.payload.pull_request.body, { owner, repo })
@@ -400,6 +408,10 @@ export function app(probotApp: Probot): void {
         getLinkedIssues(context.octokit, owner, repo, number),
         loadRepositoryConfig(context.octokit, owner, repo),
       ]);
+      if (!repoConfig.configured) {
+        context.log.debug({ owner, repo, pr: number }, "No hivemoot.yml — skipping PR update intake");
+        return;
+      }
 
       // New commits invalidate CI — optimistically remove merge-ready label
       const prRef = { owner, repo, prNumber: number };
@@ -450,6 +462,10 @@ export function app(probotApp: Probot): void {
         getLinkedIssues(context.octokit, owner, repo, number),
         loadRepositoryConfig(context.octokit, owner, repo),
       ]);
+      if (!repoConfig.configured) {
+        context.log.debug({ owner, repo, pr: number }, "No hivemoot.yml — skipping PR edit intake");
+        return;
+      }
 
       await processImplementationIntake({
         octokit: context.octokit,
@@ -527,6 +543,10 @@ export function app(probotApp: Probot): void {
         getLinkedIssues(context.octokit, owner, repo, prNumber),
         loadRepositoryConfig(context.octokit, owner, repo),
       ]);
+      if (!repoConfig.configured) {
+        context.log.debug({ owner, repo, pr: prNumber }, "No hivemoot.yml — skipping PR comment intake");
+        return;
+      }
 
       await processImplementationIntake({
         octokit: context.octokit,
@@ -634,6 +654,10 @@ export function app(probotApp: Probot): void {
           ? recalculateLeaderboardForPR(context.octokit, context.log, owner, repo, number)
           : Promise.resolve(),
       ]);
+      if (!repoConfig.configured) {
+        context.log.debug({ owner, repo, pr: number }, "No hivemoot.yml — skipping PR review processing");
+        return;
+      }
 
       // Intake processing only on approvals
       if (isApproval) {
@@ -683,6 +707,10 @@ export function app(probotApp: Probot): void {
         recalculateLeaderboardForPR(context.octokit, context.log, owner, repo, number),
         loadRepositoryConfig(context.octokit, owner, repo),
       ]);
+      if (!repoConfig.configured) {
+        context.log.debug({ owner, repo, pr: number }, "No hivemoot.yml — skipping review dismissal processing");
+        return;
+      }
 
       // Dismissed approval may drop below threshold
       await evaluateMergeReadiness({
@@ -712,6 +740,10 @@ export function app(probotApp: Probot): void {
       const appId = getAppId();
       const prs = createPROperations(context.octokit, { appId });
       const repoConfig = await loadRepositoryConfig(context.octokit, owner, repo);
+      if (!repoConfig.configured) {
+        context.log.debug({ owner, repo, pr: number }, "No hivemoot.yml — skipping label-change merge-readiness check");
+        return;
+      }
 
       const currentLabels = context.payload.pull_request.labels?.map(
         (l: { name: string }) => l.name
@@ -746,6 +778,10 @@ export function app(probotApp: Probot): void {
       const appId = getAppId();
       const prs = createPROperations(context.octokit, { appId });
       const repoConfig = await loadRepositoryConfig(context.octokit, owner, repo);
+      if (!repoConfig.configured) {
+        context.log.debug({ owner, repo }, "No hivemoot.yml — skipping check_suite merge-readiness evaluation");
+        return;
+      }
 
       const errors: Error[] = [];
       for (const pr of pull_requests) {
@@ -791,6 +827,10 @@ export function app(probotApp: Probot): void {
       const appId = getAppId();
       const prs = createPROperations(context.octokit, { appId });
       const repoConfig = await loadRepositoryConfig(context.octokit, owner, repo);
+      if (!repoConfig.configured) {
+        context.log.debug({ owner, repo }, "No hivemoot.yml — skipping check_run merge-readiness evaluation");
+        return;
+      }
 
       const errors: Error[] = [];
       for (const pr of pull_requests) {
@@ -833,6 +873,10 @@ export function app(probotApp: Probot): void {
       const appId = getAppId();
       const prs = createPROperations(context.octokit, { appId });
       const repoConfig = await loadRepositoryConfig(context.octokit, owner, repo);
+      if (!repoConfig.configured) {
+        context.log.debug({ owner, repo }, "No hivemoot.yml — skipping status merge-readiness evaluation");
+        return;
+      }
 
       if (!repoConfig.governance.pr.mergeReady) return;
 

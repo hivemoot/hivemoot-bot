@@ -45,6 +45,7 @@ vi.mock("../../lib/index.js", async () => {
   return {
     ...actual,
     loadRepositoryConfig: vi.fn().mockResolvedValue({
+      configured: true,
       governance: {
         proposals: {
           discussion: {
@@ -1061,6 +1062,7 @@ describe("Queen Bot", () => {
 
     it("should use manual welcome when discussion auto-exit is not configured", async () => {
       vi.mocked(loadRepositoryConfig).mockResolvedValueOnce({
+        configured: true,
         governance: {
           proposals: {
             discussion: { exits: [{ type: "manual" }], durationMs: 0 },
@@ -1097,6 +1099,7 @@ describe("Queen Bot", () => {
 
     it("should use voting-focused welcome when discussion auto-exit is configured", async () => {
       vi.mocked(loadRepositoryConfig).mockResolvedValueOnce({
+        configured: true,
         governance: {
           proposals: {
             discussion: {
@@ -1218,6 +1221,7 @@ describe("Queen Bot", () => {
         },
       ];
       const repoConfig = {
+        configured: true,
         governance: {
           pr: {
             maxPRsPerIssue: 5,
@@ -1278,6 +1282,7 @@ describe("Queen Bot", () => {
       const octokit = createReviewOctokit();
       const log = { info: vi.fn(), error: vi.fn() };
       const repoConfig = {
+        configured: true,
         governance: {
           pr: {
             maxPRsPerIssue: 3,
@@ -1325,6 +1330,7 @@ describe("Queen Bot", () => {
       const octokit = createReviewOctokit();
       const log = { info: vi.fn(), error: vi.fn() };
       const repoConfig = {
+        configured: true,
         governance: {
           pr: {
             maxPRsPerIssue: 3,

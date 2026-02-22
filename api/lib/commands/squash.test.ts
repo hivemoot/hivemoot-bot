@@ -21,6 +21,7 @@ vi.mock("../index.js", () => ({
     get: vi.fn().mockResolvedValue({ number: 42, state: "open", merged: false, headSha: "abc123", mergeable: true }),
   })),
   loadRepositoryConfig: vi.fn().mockResolvedValue({
+    configured: true,
     governance: {
       pr: {
         mergeReady: { minApprovals: 1 },

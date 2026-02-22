@@ -73,6 +73,33 @@ Before opening or updating a PR:
 - Address all review comments before requesting re-review.
 - Keep changes focused and reviewable — one concern per PR.
 
+## Testing Patterns
+
+### Constructor mocks
+
+When mocking a class that will be instantiated with `new`, use a plain `function` (not an arrow function). Arrow functions are not constructable and will throw `"X is not a constructor"` at runtime:
+
+```typescript
+// ✅ Correct: regular function is constructable; returns the mock instance
+vi.mocked(CommitMessageGenerator).mockImplementation(function () {
+  return { generate: vi.fn() };
+} as unknown as typeof CommitMessageGenerator);
+
+// ✅ Also correct: class syntax in vi.mock factory
+vi.mock("./my-module.js", () => ({
+  MyClass: class {
+    myMethod = vi.fn();
+  },
+}));
+
+// ❌ Wrong: arrow function throws "X is not a constructor" at runtime
+vi.mocked(CommitMessageGenerator).mockImplementation(
+  (() => ({ generate: vi.fn() })) as unknown as typeof CommitMessageGenerator,
+);
+```
+
+This matters for `CommitMessageGenerator`, `BlueprintGenerator`, and any other imported class used with `new` in source code.
+
 ## GitHub CLI Compatibility Notes
 
 Some `gh` builds request deprecated GraphQL fields in default output paths. If you see errors mentioning `projectCards`, use explicit JSON fields:

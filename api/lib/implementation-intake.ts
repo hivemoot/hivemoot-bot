@@ -229,6 +229,26 @@ async function fetchApprovalScores(
   return scores;
 }
 
+/**
+ * Build the appropriate "issue not ready" message based on the issue's actual state.
+ *
+ * The generic "hasn't passed voting" message is only correct for issues still in
+ * discussion/voting phases. For terminal states (rejected, inconclusive, implemented),
+ * the message must reflect reality — the issue is closed and won't be implemented.
+ */
+function buildIssueNotReadyMessage(linkedIssue: LinkedIssue): string {
+  if (hasLabel(linkedIssue, LABELS.REJECTED)) {
+    return PR_MESSAGES.issueRejected(linkedIssue.number);
+  }
+  if (hasLabel(linkedIssue, LABELS.INCONCLUSIVE)) {
+    return PR_MESSAGES.issueInconclusive(linkedIssue.number);
+  }
+  if (hasLabel(linkedIssue, LABELS.IMPLEMENTED)) {
+    return PR_MESSAGES.issueAlreadyImplemented(linkedIssue.number);
+  }
+  return PR_MESSAGES.issueNotReadyToImplement(linkedIssue.number);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Exported Functions
 // ─────────────────────────────────────────────────────────────────────────────
@@ -309,7 +329,7 @@ export async function processImplementationIntake(params: {
   for (const linkedIssue of linkedIssues) {
     if (!hasLabel(linkedIssue, LABELS.READY_TO_IMPLEMENT)) {
       if (trigger === "opened") {
-        await prs.comment(prRef, PR_MESSAGES.issueNotReadyToImplement(linkedIssue.number));
+        await prs.comment(prRef, buildIssueNotReadyMessage(linkedIssue));
       }
       continue;
     }

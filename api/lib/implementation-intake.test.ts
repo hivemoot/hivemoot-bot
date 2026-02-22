@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { LABELS } from "../config.js";
+import { LABELS, PR_MESSAGES } from "../config.js";
 import { processImplementationIntake, recalculateLeaderboardForPR } from "./implementation-intake.js";
 import type { LinkedIssue } from "./types.js";
 
@@ -201,6 +201,102 @@ describe("Implementation Intake", () => {
 
     // "edited" trigger should NOT post the "issue not ready" comment
     expect(prs.comment).not.toHaveBeenCalled();
+  });
+
+  describe("issue terminal state messages", () => {
+    function makePrsMock() {
+      return {
+        get: vi.fn().mockResolvedValue({ createdAt: new Date("2026-02-01T00:00:00Z") }),
+        getLabels: vi.fn().mockResolvedValue([]),
+        getLatestAuthorActivityDate: vi.fn().mockResolvedValue(new Date("2026-02-02T00:00:00Z")),
+        findPRsWithLabel: vi.fn().mockResolvedValue([]),
+        addLabels: vi.fn().mockResolvedValue(undefined),
+        comment: vi.fn().mockResolvedValue(undefined),
+      };
+    }
+
+    function makeIssuesMock() {
+      return {
+        getLabelAddedTime: vi.fn(),
+        comment: vi.fn().mockResolvedValue(undefined),
+      };
+    }
+
+    async function runIntake(linkedIssue: LinkedIssue, prs: ReturnType<typeof makePrsMock>) {
+      const mockOctokit = createMockOctokit();
+      return processImplementationIntake({
+        octokit: mockOctokit,
+        issues: makeIssuesMock(),
+        prs,
+        log: { info: vi.fn(), warn: vi.fn() },
+        owner: "hivemoot",
+        repo: "colony",
+        prNumber: 101,
+        linkedIssues: [linkedIssue],
+        trigger: "opened",
+        maxPRsPerIssue: 3,
+      });
+    }
+
+    it("posts rejected message when linked issue was rejected", async () => {
+      const prs = makePrsMock();
+      await runIntake(
+        { number: 7, title: "Rejected issue", state: "CLOSED", labels: { nodes: [{ name: LABELS.REJECTED }] } },
+        prs
+      );
+      expect(prs.comment).toHaveBeenCalledWith(
+        { owner: "hivemoot", repo: "colony", prNumber: 101 },
+        PR_MESSAGES.issueRejected(7)
+      );
+    });
+
+    it("posts inconclusive message when linked issue ended inconclusively", async () => {
+      const prs = makePrsMock();
+      await runIntake(
+        { number: 7, title: "Inconclusive issue", state: "CLOSED", labels: { nodes: [{ name: LABELS.INCONCLUSIVE }] } },
+        prs
+      );
+      expect(prs.comment).toHaveBeenCalledWith(
+        { owner: "hivemoot", repo: "colony", prNumber: 101 },
+        PR_MESSAGES.issueInconclusive(7)
+      );
+    });
+
+    it("posts already-implemented message when linked issue was already implemented", async () => {
+      const prs = makePrsMock();
+      await runIntake(
+        { number: 7, title: "Implemented issue", state: "CLOSED", labels: { nodes: [{ name: LABELS.IMPLEMENTED }] } },
+        prs
+      );
+      expect(prs.comment).toHaveBeenCalledWith(
+        { owner: "hivemoot", repo: "colony", prNumber: 101 },
+        PR_MESSAGES.issueAlreadyImplemented(7)
+      );
+    });
+
+    it("posts not-ready message when linked issue is still in discussion", async () => {
+      const prs = makePrsMock();
+      await runIntake(
+        { number: 7, title: "Discussion issue", state: "OPEN", labels: { nodes: [{ name: LABELS.DISCUSSION }] } },
+        prs
+      );
+      expect(prs.comment).toHaveBeenCalledWith(
+        { owner: "hivemoot", repo: "colony", prNumber: 101 },
+        PR_MESSAGES.issueNotReadyToImplement(7)
+      );
+    });
+
+    it("posts not-ready message when linked issue is in voting", async () => {
+      const prs = makePrsMock();
+      await runIntake(
+        { number: 7, title: "Voting issue", state: "OPEN", labels: { nodes: [{ name: LABELS.VOTING }] } },
+        prs
+      );
+      expect(prs.comment).toHaveBeenCalledWith(
+        { owner: "hivemoot", repo: "colony", prNumber: 101 },
+        PR_MESSAGES.issueNotReadyToImplement(7)
+      );
+    });
   });
 
   it("should silently skip when activation is before ready date on edited trigger without editedAt", async () => {

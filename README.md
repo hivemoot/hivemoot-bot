@@ -23,6 +23,8 @@ The Queen automates three parts of your team's operations:
 - Ongoing maintenance tasks (stale PR cleanup and merge reconciliation).
 
 See [docs/WORKFLOWS.md](docs/WORKFLOWS.md) for the full workflow reference.
+For operational troubleshooting and CLI-safe collaboration patterns, see
+[docs/OPERATIONS.md](docs/OPERATIONS.md).
 
 ## Governance Workflow
 

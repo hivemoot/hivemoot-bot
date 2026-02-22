@@ -2074,5 +2074,254 @@ governance:
         expect(defaults.governance.pr.mergeReady).toBeNull();
       });
     });
+
+    describe("standup parsing", () => {
+      it("should default to disabled when standup is not configured", async () => {
+        const configYaml = `
+governance:
+  pr:
+    staleDays: 5
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config.standup).toEqual({ enabled: false, category: "" });
+      });
+
+      it("should parse standup with enabled and category", async () => {
+        const configYaml = `
+standup:
+  enabled: true
+  category: "Colony Reports"
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config.standup).toEqual({ enabled: true, category: "Colony Reports" });
+      });
+
+      it("should disable standup when enabled is false", async () => {
+        const configYaml = `
+standup:
+  enabled: false
+  category: "Colony Reports"
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config.standup).toEqual({ enabled: false, category: "" });
+      });
+
+      it("should disable standup when enabled is not a boolean", async () => {
+        const configYaml = `
+standup:
+  enabled: "yes"
+  category: "Colony Reports"
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config.standup).toEqual({ enabled: false, category: "" });
+      });
+
+      it("should disable standup when category is missing but enabled is true", async () => {
+        const configYaml = `
+standup:
+  enabled: true
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config.standup).toEqual({ enabled: false, category: "" });
+      });
+
+      it("should disable standup when category is empty string", async () => {
+        const configYaml = `
+standup:
+  enabled: true
+  category: ""
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config.standup).toEqual({ enabled: false, category: "" });
+      });
+
+      it("should disable standup when category is only whitespace", async () => {
+        const configYaml = `
+standup:
+  enabled: true
+  category: "   "
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config.standup).toEqual({ enabled: false, category: "" });
+      });
+
+      it("should trim whitespace from category", async () => {
+        const configYaml = `
+standup:
+  enabled: true
+  category: "  Colony Reports  "
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config.standup).toEqual({ enabled: true, category: "Colony Reports" });
+      });
+
+      it("should disable standup when standup is not an object", async () => {
+        const configYaml = `
+standup: "enabled"
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config.standup).toEqual({ enabled: false, category: "" });
+      });
+
+      it("should disable standup when standup is an array", async () => {
+        const configYaml = `
+standup:
+  - enabled: true
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config.standup).toEqual({ enabled: false, category: "" });
+      });
+
+      it("should default to disabled when enabled field is absent", async () => {
+        const configYaml = `
+standup:
+  category: "Colony Reports"
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config.standup).toEqual({ enabled: false, category: "" });
+      });
+
+      it("should return disabled standup in default config", () => {
+        const defaults = getDefaultConfig();
+        expect(defaults.standup).toEqual({ enabled: false, category: "" });
+      });
+    });
+
+    describe("requiredVoters explicit minCount", () => {
+      it("should parse explicit minCount for requiredVoters", async () => {
+        const configYaml = `
+governance:
+  proposals:
+    voting:
+      exits:
+        - type: auto
+          afterMinutes: 60
+          requiredVoters:
+            minCount: 1
+            voters:
+              - alice
+              - bob
+              - charlie
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[0]).requiredVoters).toEqual({
+          minCount: 1,
+          voters: ["alice", "bob", "charlie"],
+        });
+      });
+
+      it("should clamp requiredVoters minCount to voters.length when too large", async () => {
+        const configYaml = `
+governance:
+  proposals:
+    voting:
+      exits:
+        - type: auto
+          afterMinutes: 60
+          requiredVoters:
+            minCount: 10
+            voters:
+              - alice
+              - bob
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[0]).requiredVoters.minCount).toBe(2);
+      });
+
+      it("should clamp requiredVoters minCount to 0 when negative", async () => {
+        const configYaml = `
+governance:
+  proposals:
+    voting:
+      exits:
+        - type: auto
+          afterMinutes: 60
+          requiredVoters:
+            minCount: -1
+            voters:
+              - alice
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[0]).requiredVoters.minCount).toBe(0);
+      });
+
+      it("should fall back to voters.length when minCount is not a number", async () => {
+        const configYaml = `
+governance:
+  proposals:
+    voting:
+      exits:
+        - type: auto
+          afterMinutes: 60
+          requiredVoters:
+            minCount: "two"
+            voters:
+              - alice
+              - bob
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(getAutoVotingExit(config.governance.proposals.voting.exits[0]).requiredVoters.minCount).toBe(2);
+      });
+    });
   });
 });

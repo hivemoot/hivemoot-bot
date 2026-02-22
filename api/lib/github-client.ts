@@ -31,6 +31,18 @@ import { logger } from "./logger.js";
 export type { IssueComment } from "./types.js";
 
 /**
+ * Extract the HTTP status code from an unknown error object.
+ * Returns null for non-objects, null values, or objects without a numeric status field.
+ */
+export function getErrorStatus(error: unknown): number | null {
+  if (typeof error !== "object" || error === null || !("status" in error)) {
+    return null;
+  }
+  const status = (error as { status?: unknown }).status;
+  return typeof status === "number" ? status : null;
+}
+
+/**
  * Reaction data structure from GitHub API
  */
 export interface Reaction {
@@ -234,7 +246,7 @@ export class IssueOperations {
         name: label,
       });
     } catch (error) {
-      if ((error as { status?: number }).status !== 404) {
+      if (getErrorStatus(error) !== 404) {
         throw error;
       }
       // Canonical not found — try legacy aliases
@@ -249,7 +261,7 @@ export class IssueOperations {
             });
             return;
           } catch (e) {
-            if ((e as { status?: number }).status !== 404) throw e;
+            if (getErrorStatus(e) !== 404) throw e;
           }
         }
       }
@@ -307,7 +319,7 @@ export class IssueOperations {
     } catch (error) {
       // Issue might not be locked - ignore 422 errors
       // This makes unlock idempotent (safe to call regardless of lock state)
-      if ((error as { status?: number }).status !== 422) {
+      if (getErrorStatus(error) !== 422) {
         throw error;
       }
     }

@@ -192,6 +192,8 @@ governance:
   #   trustedReviewers: []    # GitHub usernames whose approvals count for intake/merge-ready
   #   intake:
   #     - method: auto        # Pre-ready PRs activate immediately when issue becomes ready (default)
+  #     - method: approval    # Makes the PR a candidate after N approvals from trustedReviewers
+  #       minApprovals: 2
   #   mergeReady:             # Omit to disable merge-ready automation
   #     minApprovals: 1
 `;

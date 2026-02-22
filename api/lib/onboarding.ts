@@ -12,7 +12,10 @@
  */
 
 import { SIGNATURE } from "../config.js";
-import { validateClient, ONBOARDING_CLIENT_CHECKS } from "./client-validation.js";
+import {
+  validateClient,
+  ONBOARDING_CLIENT_CHECKS,
+} from "./client-validation.js";
 import { logger } from "./logger.js";
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -22,10 +25,7 @@ import { logger } from "./logger.js";
 export interface OnboardingClient {
   rest: {
     repos: {
-      get: (params: {
-        owner: string;
-        repo: string;
-      }) => Promise<{
+      get: (params: { owner: string; repo: string }) => Promise<{
         data: {
           archived: boolean;
           disabled: boolean;
@@ -86,10 +86,21 @@ export interface OnboardingClient {
 
 export type OnboardingResult =
   | { status: "created"; prNumber: number; prUrl: string }
-  | { status: "skipped"; reason: "config-exists" | "archived" | "pr-exists" | "pr-previously-closed" | "empty-repo" };
+  | {
+      status: "skipped";
+      reason:
+        | "config-exists"
+        | "archived"
+        | "pr-exists"
+        | "pr-previously-closed"
+        | "empty-repo";
+    };
 
 export interface OnboardingService {
-  createOnboardingPR: (owner: string, repo: string) => Promise<OnboardingResult>;
+  createOnboardingPR: (
+    owner: string,
+    repo: string,
+  ) => Promise<OnboardingResult>;
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -180,7 +191,7 @@ governance:
   #   maxPRsPerIssue: 3       # Max competing implementations per issue
   #   trustedReviewers: []    # GitHub usernames whose approvals count for intake/merge-ready
   #   intake:
-  #     - method: update      # PR activates on any update (default)
+  #     - method: auto        # Pre-ready PRs activate immediately when issue becomes ready (default)
   #   mergeReady:             # Omit to disable merge-ready automation
   #     minApprovals: 1
 `;
@@ -253,7 +264,7 @@ export function createOnboardingService(octokit: unknown): OnboardingService {
   if (!isValidOnboardingClient(octokit)) {
     throw new Error(
       "Invalid GitHub client: expected an Octokit-like object with repos.get, repos.getContent, " +
-      "repos.createOrUpdateFileContents, repos.getBranch, git.createRef, pulls.create, and pulls.list"
+        "repos.createOrUpdateFileContents, repos.getBranch, git.createRef, pulls.create, and pulls.list",
     );
   }
 
@@ -321,7 +332,9 @@ async function createOnboardingPR(
     baseSha = branchData.commit.sha;
   } catch (error) {
     if ((error as { status?: number }).status === 404) {
-      logger.info(`[onboarding] Skipping ${fullName}: empty repo (no default branch)`);
+      logger.info(
+        `[onboarding] Skipping ${fullName}: empty repo (no default branch)`,
+      );
       return { status: "skipped", reason: "empty-repo" };
     }
     throw error;
@@ -340,11 +353,15 @@ async function createOnboardingPR(
       throw error;
     }
     // 422 means branch already exists (concurrent webhook delivery) — continue
-    logger.info(`[onboarding] Branch ${BRANCH_NAME} already exists in ${fullName} (race condition)`);
+    logger.info(
+      `[onboarding] Branch ${BRANCH_NAME} already exists in ${fullName} (race condition)`,
+    );
   }
 
   // 6. Commit the default config file
-  const contentBase64 = Buffer.from(DEFAULT_CONFIG_YAML, "utf-8").toString("base64");
+  const contentBase64 = Buffer.from(DEFAULT_CONFIG_YAML, "utf-8").toString(
+    "base64",
+  );
   await client.rest.repos.createOrUpdateFileContents({
     owner,
     repo,
@@ -364,6 +381,8 @@ async function createOnboardingPR(
     base: defaultBranch,
   });
 
-  logger.info(`[onboarding] Created onboarding PR #${pr.number} in ${fullName}`);
+  logger.info(
+    `[onboarding] Created onboarding PR #${pr.number} in ${fullName}`,
+  );
   return { status: "created", prNumber: pr.number, prUrl: pr.html_url };
 }

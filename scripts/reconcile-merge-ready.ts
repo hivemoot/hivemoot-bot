@@ -1,17 +1,18 @@
 /**
  * Scheduled Merge-Ready Label Reconciliation
  *
- * Sweeps all open PRs with the `implementation` label and re-evaluates
- * whether each should have the `merge-ready` label.
+ * Sweeps ALL open PRs and re-evaluates whether each should have the
+ * `merge-ready` label.
  *
  * Covers gaps that webhooks can't:
  * - Missed webhook events (transient errors, GitHub delivery failures)
  * - Stale labels from any cause (eventual consistency guarantee)
  * - Base branch updates causing conflicts (mergeable may be null during webhooks)
+ * - PRs opened without a linked ready-to-implement issue (docs, fixes, tests)
+ *   that never receive `hivemoot:candidate` via implementation intake
  */
 
 import { Octokit } from "octokit";
-import { LABELS } from "../api/config.js";
 import {
   createPROperations,
   loadRepositoryConfig,
@@ -47,21 +48,21 @@ export async function processRepository(
     }
 
     const prs = createPROperations(octokit, { appId });
-    const implementationPRs = await prs.findPRsWithLabel(owner, repoName, LABELS.IMPLEMENTATION);
+    const openPRs = await prs.findAllOpenPRs(owner, repoName);
 
-    if (implementationPRs.length === 0) {
-      logger.debug(`[${repo.full_name}] No implementation PRs found`);
+    if (openPRs.length === 0) {
+      logger.debug(`[${repo.full_name}] No open PRs found`);
       return;
     }
 
-    logger.info(`[${repo.full_name}] Found ${implementationPRs.length} implementation PR(s)`);
+    logger.info(`[${repo.full_name}] Found ${openPRs.length} open PR(s)`);
 
     let added = 0;
     let removed = 0;
     let unchanged = 0;
     const collectedErrors: Error[] = [];
 
-    for (const pr of implementationPRs) {
+    for (const pr of openPRs) {
       try {
         const result = await evaluateMergeReadiness({
           prs,

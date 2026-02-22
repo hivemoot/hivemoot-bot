@@ -402,6 +402,64 @@ export class PROperations {
   }
 
   /**
+   * List all open PRs in a repository, without label filtering.
+   *
+   * Used by scheduled reconciliation to evaluate merge-readiness for every open PR,
+   * not just those already tagged with `hivemoot:candidate`. PRs opened without a
+   * linked ready-to-implement issue (docs, bug fixes, tests) never receive the
+   * candidate label via intake, so they are invisible to label-filtered sweeps.
+   */
+  async findAllOpenPRs(
+    owner: string,
+    repo: string
+  ): Promise<
+    Array<{
+      number: number;
+      createdAt: Date;
+      updatedAt: Date;
+      labels: Array<{ name: string }>;
+    }>
+  > {
+    const allPRs: Array<{
+      number: number;
+      createdAt: Date;
+      updatedAt: Date;
+      labels: Array<{ name: string }>;
+    }> = [];
+
+    let page = 1;
+    const perPage = 100;
+
+    while (true) {
+      const { data } = await this.client.rest.issues.listForRepo({
+        owner,
+        repo,
+        state: "open",
+        per_page: perPage,
+        page,
+      });
+
+      if (data.length === 0) break;
+
+      for (const item of data) {
+        if (item.pull_request !== undefined) {
+          allPRs.push({
+            number: item.number,
+            createdAt: new Date(item.created_at),
+            updatedAt: new Date(item.updated_at),
+            labels: item.labels,
+          });
+        }
+      }
+
+      if (data.length < perPage) break;
+      page++;
+    }
+
+    return allPRs;
+  }
+
+  /**
    * Get the date of the latest activity on a PR (any source).
    *
    * Checks all activity types: issue comments, commits, reviews, and review comments.

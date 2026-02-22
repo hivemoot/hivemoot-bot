@@ -617,6 +617,137 @@ describe("PROperations", () => {
     });
   });
 
+  describe("findAllOpenPRs", () => {
+    it("should return only items with pull_request property (filter out plain issues)", async () => {
+      vi.mocked(mockClient.rest.issues.listForRepo).mockResolvedValue({
+        data: [
+          { number: 1, pull_request: {}, created_at: "2024-01-10T10:00:00Z", updated_at: "2024-01-15T10:00:00Z", labels: [] },
+          { number: 2, created_at: "2024-01-10T11:00:00Z", updated_at: "2024-01-15T11:00:00Z", labels: [] }, // plain issue, no pull_request
+          { number: 3, pull_request: {}, created_at: "2024-01-10T12:00:00Z", updated_at: "2024-01-15T12:00:00Z", labels: [] },
+        ],
+      });
+
+      const result = await prOps.findAllOpenPRs("test-org", "test-repo");
+
+      expect(result).toHaveLength(2);
+      expect(result.map((pr) => pr.number)).toEqual([1, 3]);
+    });
+
+    it("should return PRs with no labels (the previously invisible case)", async () => {
+      vi.mocked(mockClient.rest.issues.listForRepo).mockResolvedValue({
+        data: [
+          { number: 10, pull_request: {}, created_at: "2024-01-10T10:00:00Z", updated_at: "2024-01-15T10:00:00Z", labels: [] },
+          { number: 11, pull_request: {}, created_at: "2024-01-10T11:00:00Z", updated_at: "2024-01-15T11:00:00Z", labels: [{ name: "hivemoot:candidate" }] },
+        ],
+      });
+
+      const result = await prOps.findAllOpenPRs("test-org", "test-repo");
+
+      expect(result).toHaveLength(2);
+      expect(result[0].labels).toEqual([]);
+      expect(result[1].labels).toEqual([{ name: "hivemoot:candidate" }]);
+    });
+
+    it("should call listForRepo with correct parameters (no labels filter)", async () => {
+      vi.mocked(mockClient.rest.issues.listForRepo).mockResolvedValue({ data: [] });
+
+      await prOps.findAllOpenPRs("owner", "repo");
+
+      expect(mockClient.rest.issues.listForRepo).toHaveBeenCalledWith({
+        owner: "owner",
+        repo: "repo",
+        state: "open",
+        per_page: 100,
+        page: 1,
+      });
+      // Must not pass a labels filter — that's what makes it see all PRs
+      expect(mockClient.rest.issues.listForRepo).not.toHaveBeenCalledWith(
+        expect.objectContaining({ labels: expect.anything() })
+      );
+    });
+
+    it("should paginate through all pages when results fill full pages", async () => {
+      const page1 = Array.from({ length: 100 }, (_, i) => ({
+        number: i + 1,
+        pull_request: {},
+        created_at: "2024-01-10T10:00:00Z",
+        updated_at: "2024-01-15T10:00:00Z",
+        labels: [],
+      }));
+      const page2 = Array.from({ length: 30 }, (_, i) => ({
+        number: i + 101,
+        pull_request: {},
+        created_at: "2024-01-10T10:00:00Z",
+        updated_at: "2024-01-15T10:00:00Z",
+        labels: [],
+      }));
+
+      vi.mocked(mockClient.rest.issues.listForRepo)
+        .mockResolvedValueOnce({ data: page1 })
+        .mockResolvedValueOnce({ data: page2 });
+
+      const result = await prOps.findAllOpenPRs("test-org", "test-repo");
+
+      expect(result).toHaveLength(130);
+      expect(mockClient.rest.issues.listForRepo).toHaveBeenCalledTimes(2);
+      expect(mockClient.rest.issues.listForRepo).toHaveBeenNthCalledWith(1, expect.objectContaining({ page: 1 }));
+      expect(mockClient.rest.issues.listForRepo).toHaveBeenNthCalledWith(2, expect.objectContaining({ page: 2 }));
+    });
+
+    it("should stop paginating when an empty page is returned", async () => {
+      const page1 = Array.from({ length: 100 }, (_, i) => ({
+        number: i + 1,
+        pull_request: {},
+        created_at: "2024-01-10T10:00:00Z",
+        updated_at: "2024-01-15T10:00:00Z",
+        labels: [],
+      }));
+
+      vi.mocked(mockClient.rest.issues.listForRepo)
+        .mockResolvedValueOnce({ data: page1 })
+        .mockResolvedValueOnce({ data: [] });
+
+      const result = await prOps.findAllOpenPRs("test-org", "test-repo");
+
+      expect(result).toHaveLength(100);
+      expect(mockClient.rest.issues.listForRepo).toHaveBeenCalledTimes(2);
+    });
+
+    it("should return empty array for a repo with no open PRs", async () => {
+      vi.mocked(mockClient.rest.issues.listForRepo).mockResolvedValue({ data: [] });
+
+      const result = await prOps.findAllOpenPRs("test-org", "test-repo");
+
+      expect(result).toEqual([]);
+      expect(mockClient.rest.issues.listForRepo).toHaveBeenCalledTimes(1);
+    });
+
+    it("should transform data correctly (dates, labels)", async () => {
+      vi.mocked(mockClient.rest.issues.listForRepo).mockResolvedValue({
+        data: [
+          {
+            number: 42,
+            pull_request: {},
+            created_at: "2024-01-10T08:00:00Z",
+            updated_at: "2024-01-15T10:30:00Z",
+            labels: [{ name: "hivemoot:candidate" }, { name: "bug" }],
+          },
+        ],
+      });
+
+      const result = await prOps.findAllOpenPRs("test-org", "test-repo");
+
+      expect(result).toEqual([
+        {
+          number: 42,
+          createdAt: new Date("2024-01-10T08:00:00Z"),
+          updatedAt: new Date("2024-01-15T10:30:00Z"),
+          labels: [{ name: "hivemoot:candidate" }, { name: "bug" }],
+        },
+      ]);
+    });
+  });
+
   describe("getLatestActivityDate", () => {
     const prCreatedAt = new Date("2024-01-10T08:00:00Z");
 

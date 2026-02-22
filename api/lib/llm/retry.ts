@@ -79,13 +79,20 @@ export function isLLMRateLimitError(error: unknown): boolean {
 export function extractRetryDelay(error: unknown): number | null {
   if (!APICallError.isInstance(error)) return null;
 
-  // Source 1: Standard retry-after header (value in seconds)
-  const retryAfterHeader =
-    error.responseHeaders?.["retry-after"] ?? error.responseHeaders?.["Retry-After"];
+  // Source 1: Standard retry-after header (value in seconds or HTTP-date)
+  const retryAfterHeader = getRetryAfterHeader(error.responseHeaders);
   if (retryAfterHeader) {
     const seconds = parseFloat(retryAfterHeader);
     if (!isNaN(seconds) && seconds > 0) {
       return Math.ceil(seconds * 1000);
+    }
+
+    const retryAtMs = Date.parse(retryAfterHeader);
+    if (!isNaN(retryAtMs)) {
+      const delayMs = retryAtMs - Date.now();
+      if (delayMs > 0) {
+        return Math.ceil(delayMs);
+      }
     }
   }
 
@@ -96,6 +103,18 @@ export function extractRetryDelay(error: unknown): number | null {
     if (!isNaN(seconds) && seconds > 0) {
       return Math.ceil(seconds * 1000);
     }
+  }
+
+  return null;
+}
+
+function getRetryAfterHeader(headers: Record<string, string> | undefined): string | null {
+  if (!headers) return null;
+
+  for (const [name, value] of Object.entries(headers)) {
+    if (name.toLowerCase() !== "retry-after") continue;
+    const trimmed = value.trim();
+    if (trimmed) return trimmed;
   }
 
   return null;

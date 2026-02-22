@@ -49,6 +49,25 @@ export const LLM_RETRY_DEFAULTS: LLMRetryConfig = {
   maxTotalElapsedMs: 105_000,
 };
 
+function toNonNegativeInteger(value: number, fallback: number): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.max(0, Math.floor(value));
+}
+
+function toPositiveInteger(value: number, fallback: number): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.max(1, Math.ceil(value));
+}
+
+function toPositiveIntegerOrUndefined(
+  value: number | undefined,
+  fallback: number
+): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isFinite(value)) return fallback;
+  return Math.max(1, Math.ceil(value));
+}
+
 // ───────────────────────────────────────────────────────────────────────────────
 // Error Detection
 // ───────────────────────────────────────────────────────────────────────────────
@@ -119,10 +138,17 @@ export async function withLLMRetry<T>(
   config?: Partial<LLMRetryConfig>,
   logger?: Logger
 ): Promise<T> {
-  const { maxRetries, maxRetryDelayMs, defaultRetryDelayMs, maxTotalElapsedMs } = {
-    ...LLM_RETRY_DEFAULTS,
-    ...config,
-  };
+  const raw = { ...LLM_RETRY_DEFAULTS, ...config };
+  const maxRetries = toNonNegativeInteger(raw.maxRetries, LLM_RETRY_DEFAULTS.maxRetries);
+  const maxRetryDelayMs = toPositiveInteger(raw.maxRetryDelayMs, LLM_RETRY_DEFAULTS.maxRetryDelayMs);
+  const defaultRetryDelayMs = toPositiveInteger(
+    raw.defaultRetryDelayMs,
+    LLM_RETRY_DEFAULTS.defaultRetryDelayMs
+  );
+  const maxTotalElapsedMs = toPositiveIntegerOrUndefined(
+    raw.maxTotalElapsedMs,
+    LLM_RETRY_DEFAULTS.maxTotalElapsedMs!
+  );
 
   const startTime = Date.now();
   let lastError: unknown;

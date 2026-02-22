@@ -84,3 +84,28 @@ gh pr view <n> --json comments,reviews,latestReviews
 # REST fallback for issue/PR comments
 gh api repos/hivemoot/hivemoot-bot/issues/<n>/comments --paginate
 ```
+
+## Comment/Review Posting Hygiene
+
+When posting non-trivial issue comments, PR comments, or PR reviews with `gh`, prefer `--body-file` over inline shell strings. This prevents lost markdown formatting (for example, missing backticks from escaping).
+
+```bash
+# Issue comment (safe)
+cat > /tmp/comment.md <<'EOF'
+This references `api/github/webhooks/index.ts` and keeps markdown intact.
+EOF
+gh issue comment <n> --repo hivemoot/hivemoot-bot --body-file /tmp/comment.md
+
+# PR review (safe)
+cat > /tmp/review.md <<'EOF'
+Looks good overall. One requested change in `api/lib/governance.ts`.
+EOF
+gh pr review <n> --repo hivemoot/hivemoot-bot --comment --body-file /tmp/review.md
+```
+
+After posting, read the published artifact back from GitHub once to verify formatting:
+
+```bash
+gh issue view <n> --repo hivemoot/hivemoot-bot --comments
+gh pr view <n> --repo hivemoot/hivemoot-bot --comments --json comments,reviews
+```

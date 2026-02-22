@@ -624,6 +624,32 @@ describe("executeCommand", () => {
       expect(commentArgs.body).toContain("**Config**");
     });
 
+    it("should report PR Workflow as disabled and config intake as disabled when pr is null", async () => {
+      const { loadRepositoryConfig } = await import("../index.js");
+      vi.mocked(loadRepositoryConfig).mockResolvedValueOnce({
+        version: 1,
+        governance: {
+          proposals: {
+            discussion: { exits: [{ type: "manual" }], durationMs: 0 },
+            voting: { exits: [{ type: "manual" }], durationMs: 0 },
+            extendedVoting: { exits: [{ type: "manual" }], durationMs: 0 },
+          },
+          pr: null,
+        },
+        standup: {
+          enabled: false,
+          category: "",
+        },
+      });
+
+      const ctx = createCtx({ verb: "doctor" });
+      await executeCommand(ctx);
+
+      const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
+      expect(commentArgs.body).toContain("**PR Workflow**: Disabled");
+      expect(commentArgs.body).toContain("PR workflows: disabled");
+    });
+
     it("should report advisory PR workflow and validate enabled standup category", async () => {
       const { loadRepositoryConfig } = await import("../index.js");
       vi.mocked(loadRepositoryConfig).mockResolvedValueOnce({

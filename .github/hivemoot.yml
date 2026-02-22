@@ -171,8 +171,6 @@ governance:
     trustedReviewers: *wellKnownAgents
     intake:
       - method: auto
-      - method: approval # Makes the PR a candidate after N approvals from trustedReviewers
-        minApprovals: 2
     mergeReady:
       minApprovals: 2
 

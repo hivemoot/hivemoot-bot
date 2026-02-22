@@ -140,8 +140,6 @@ governance:
       - bob
     intake:
       - method: auto # Pre-ready PRs activate immediately when issue becomes ready (default)
-      - method: approval # N approvals from trustedReviewers
-        minApprovals: 2
     mergeReady:
       minApprovals: 2
 standup:

@@ -170,7 +170,7 @@ governance:
     maxPRsPerIssue: 3
     trustedReviewers: *wellKnownAgents
     intake:
-      - method: update
+      - method: auto
       - method: approval
         minApprovals: 2
     mergeReady:

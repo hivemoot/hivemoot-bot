@@ -11,6 +11,7 @@ import {
   createPROperations,
   createRepositoryLabelService,
   createGovernanceService,
+  createOnboardingService,
   loadRepositoryConfig,
   getOpenPRsForIssue,
   evaluateMergeReadiness,
@@ -237,12 +238,52 @@ async function ensureLabelsForRepositories(
   }
 }
 
+/**
+ * Best-effort onboarding: create a "Configure Hivemoot" PR in each repo.
+ * Failures are logged but never propagated — label bootstrap must not be blocked.
+ */
+async function createOnboardingPRsForRepositories(
+  context: LabelBootstrapContext,
+  repositories: readonly InstallationRepoPayload[] | undefined,
+  eventName: string
+): Promise<void> {
+  const targetRepositories = repositories ?? [];
+  if (targetRepositories.length === 0) {
+    return;
+  }
+
+  let onboardingService;
+  try {
+    onboardingService = createOnboardingService(context.octokit);
+  } catch {
+    context.log.info(`[${eventName}] Onboarding service unavailable (client missing required methods); skipping`);
+    return;
+  }
+
+  for (const repository of targetRepositories) {
+    const { owner, repo, fullName } = getRepoContext(repository);
+    try {
+      const result = await onboardingService.createOnboardingPR(owner, repo);
+      if (result.status === "created") {
+        context.log.info(`[${eventName}] Created onboarding PR #${result.prNumber} in ${fullName}`);
+      } else {
+        context.log.info(`[${eventName}] Onboarding skipped for ${fullName}: ${result.reason}`);
+      }
+    } catch (error) {
+      context.log.error(
+        { err: error, repo: fullName },
+        `[${eventName}] Failed to create onboarding PR (non-fatal)`
+      );
+    }
+  }
+}
+
 export function app(probotApp: Probot): void {
   probotApp.log.info("Queen bot initialized");
   registerHandlerDispatcher(probotApp, { eventMap: handlerEventMap });
 
   /**
-   * Bootstrap required labels when the app is first installed.
+   * Bootstrap required labels and create onboarding PR when the app is first installed.
    */
   probotApp.on("installation.created", async (context) => {
     await ensureLabelsForRepositories(
@@ -250,13 +291,23 @@ export function app(probotApp: Probot): void {
       context.payload.repositories,
       "installation.created"
     );
+    await createOnboardingPRsForRepositories(
+      context,
+      context.payload.repositories,
+      "installation.created"
+    );
   });
 
   /**
-   * Bootstrap required labels for repositories added to an existing installation.
+   * Bootstrap required labels and create onboarding PR for repositories added to an existing installation.
    */
   probotApp.on("installation_repositories.added", async (context) => {
     await ensureLabelsForRepositories(
+      context,
+      context.payload.repositories_added,
+      "installation_repositories.added"
+    );
+    await createOnboardingPRsForRepositories(
       context,
       context.payload.repositories_added,
       "installation_repositories.added"

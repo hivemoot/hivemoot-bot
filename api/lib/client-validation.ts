@@ -163,3 +163,21 @@ export const LEADERBOARD_CLIENT_CHECKS: ValidationCheck[] = [
     requiredMethods: ["listComments", "createComment", "updateComment"],
   },
 ];
+
+/**
+ * Common validation checks for OnboardingService client.
+ */
+export const ONBOARDING_CLIENT_CHECKS: ValidationCheck[] = [
+  {
+    path: "rest.repos",
+    requiredMethods: ["get", "getContent", "createOrUpdateFileContents", "getBranch"],
+  },
+  {
+    path: "rest.git",
+    requiredMethods: ["createRef"],
+  },
+  {
+    path: "rest.pulls",
+    requiredMethods: ["create", "list"],
+  },
+];

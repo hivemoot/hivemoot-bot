@@ -281,12 +281,14 @@ export class GovernanceService {
 
       if (result.success) {
         this.logger.info(`Generated LLM summary for issue #${ref.issueNumber}`);
+        const alignmentCommentUrl = await this.findAlignmentCommentUrl(ref);
         return formatVotingMessage(
           result.summary,
           context.title,
           SIGNATURE,
           SIGNATURES.VOTING,
           priority,
+          alignmentCommentUrl,
         );
       }
 
@@ -302,6 +304,22 @@ export class GovernanceService {
         `Failed to generate voting summary for issue #${ref.issueNumber}: ${message}. Using generic message.`,
       );
       return MESSAGES.votingStart(priority);
+    }
+  }
+
+  private async findAlignmentCommentUrl(ref: IssueRef): Promise<string | undefined> {
+    try {
+      const commentId = await this.issues.findAlignmentCommentId(ref);
+      if (!commentId) {
+        return undefined;
+      }
+      return `https://github.com/${ref.owner}/${ref.repo}/issues/${ref.issueNumber}#issuecomment-${commentId}`;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.debug(
+        `Failed to resolve alignment comment for issue #${ref.issueNumber}: ${message}`,
+      );
+      return undefined;
     }
   }
 

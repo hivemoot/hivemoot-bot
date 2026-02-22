@@ -402,4 +402,27 @@ describe("formatVotingMessage", () => {
     expect(message).not.toContain("0 participants"); // Should be omitted when 0
     expect(message).toContain(votingSignature);
   });
+
+  it("should include a current alignment link when provided", () => {
+    const summary: DiscussionSummary = {
+      proposal: "Add logging",
+      alignedOn: [],
+      openForPR: [],
+      notIncluded: [],
+      metadata: { commentCount: 1, participantCount: 1 },
+    };
+
+    const message = formatVotingMessage(
+      summary,
+      "Add Logging",
+      signature,
+      votingSignature,
+      undefined,
+      "https://github.com/hivemoot/hivemoot-bot/issues/184#issuecomment-123456789"
+    );
+
+    expect(message).toContain(
+      "Current alignment: https://github.com/hivemoot/hivemoot-bot/issues/184#issuecomment-123456789"
+    );
+  });
 });

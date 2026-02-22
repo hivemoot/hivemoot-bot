@@ -181,7 +181,8 @@ export function formatVotingMessage(
   issueTitle: string,
   signature: string,
   votingSignature: string,
-  priority?: "high" | "medium" | "low"
+  priority?: "high" | "medium" | "low",
+  alignmentCommentUrl?: string
 ): string {
   const lines: string[] = [];
 
@@ -196,6 +197,11 @@ export function formatVotingMessage(
   lines.push("## Proposal");
   lines.push(`> ${summary.proposal}`);
   lines.push("");
+
+  if (alignmentCommentUrl) {
+    lines.push(`Current alignment: ${alignmentCommentUrl}`);
+    lines.push("");
+  }
 
   // Priority reminder (if present)
   if (priority) {

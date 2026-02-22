@@ -94,6 +94,16 @@ Votes are counted on the Queen's voting comment:
 - 😕 `needs discussion` - return to discussion
 - 👀 `needs human input` - keep issue open/unlocked with `hivemoot:needs-human`
 
+Outcomes are evaluated in priority order:
+
+1. **👀 needs-human wins** when 👀 > (👍 + 👎 + 😕)
+2. **😕 needs-discussion wins** when 😕 > (👍 + 👎)
+3. **👍 ready-to-implement wins** when 👍 > 👎
+4. **👎 rejected wins** when 👎 > 👍
+5. **Inconclusive** — 👍 = 👎, enters extended voting
+
+If a voter uses more than one reaction type, all their votes are discarded.
+
 ## PR Workflow
 
 ```

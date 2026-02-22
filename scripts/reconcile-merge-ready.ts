@@ -39,12 +39,12 @@ export async function processRepository(
 
   try {
     const repoConfig = await loadRepositoryConfig(octokit, owner, repoName);
-    const { mergeReady, trustedReviewers } = repoConfig.governance.pr;
 
-    if (!mergeReady) {
-      logger.debug(`[${repo.full_name}] mergeReady not configured, skipping`);
+    if (!repoConfig.governance.pr?.mergeReady) {
+      logger.debug(`[${repo.full_name}] PR workflows or mergeReady not configured, skipping`);
       return;
     }
+    const { mergeReady, trustedReviewers } = repoConfig.governance.pr;
 
     const prs = createPROperations(octokit, { appId });
     const implementationPRs = await prs.findPRsWithLabel(owner, repoName, LABELS.IMPLEMENTATION);

@@ -817,8 +817,13 @@ export async function processRepository(
     };
 
     const { discussion, voting, extendedVoting } = repoConfig.governance.proposals;
-    const { trustedReviewers, intake, maxPRsPerIssue } = repoConfig.governance.pr;
-    const prIntakeConfig = { maxPRsPerIssue, trustedReviewers, intake };
+    const prIntakeConfig = repoConfig.governance.pr
+      ? {
+          maxPRsPerIssue: repoConfig.governance.pr.maxPRsPerIssue,
+          trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+          intake: repoConfig.governance.pr.intake,
+        }
+      : undefined;
 
     // Voting/inconclusive phases share a transition pattern: end voting, track
     // outcome, and notify pending PRs if the proposal passed.

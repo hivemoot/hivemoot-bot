@@ -80,6 +80,17 @@ describe("reconcile-merge-ready", () => {
       expect(mockEvaluateMergeReadiness).not.toHaveBeenCalled();
     });
 
+    it("should skip repos with PR workflows disabled (pr: null)", async () => {
+      mockLoadRepositoryConfig.mockResolvedValue({
+        governance: { pr: null },
+      } as ReturnType<typeof loadRepositoryConfig> extends Promise<infer T> ? T : never);
+
+      await processRepository({} as never, testRepo, testAppId);
+
+      expect(mockFindPRsWithLabel).not.toHaveBeenCalled();
+      expect(mockEvaluateMergeReadiness).not.toHaveBeenCalled();
+    });
+
     it("should process all implementation PRs", async () => {
       mockLoadRepositoryConfig.mockResolvedValue({
         governance: {

@@ -215,6 +215,11 @@ export async function processRepository(
     const prs = createPROperations(octokit, { appId });
     const issues = createIssueOperations(octokit, { appId });
     const repoConfig = await loadRepositoryConfig(octokit, owner, repoName);
+
+    if (!repoConfig.governance.pr) {
+      logger.debug(`[${repo.full_name}] PR workflows disabled, skipping`);
+      return;
+    }
     const { maxPRsPerIssue, trustedReviewers, intake } = repoConfig.governance.pr;
 
     // Paginate through all open issues with ready-to-implement label (canonical + legacy)

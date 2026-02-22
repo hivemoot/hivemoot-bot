@@ -532,6 +532,18 @@ describe("reconcile-pr-notifications", () => {
       };
     }
 
+    it("should skip processing when PR workflows are disabled (pr: null)", async () => {
+      mockLoadRepositoryConfig.mockResolvedValueOnce({
+        governance: { pr: null },
+      } as any);
+
+      const { octokit: mockOctokit } = createMockOctokit([]);
+      const repoObj = { owner: { login: owner }, name: repo, full_name: `${owner}/${repo}` };
+      await processRepository(mockOctokit, repoObj, appId);
+
+      expect(mockOctokit.paginate.iterator).not.toHaveBeenCalled();
+    });
+
     it("should process ready-to-implement issues", async () => {
       const { octokit: mockOctokit } = createMockOctokit([
         { number: 42, labels: [{ name: LABELS.READY_TO_IMPLEMENT }] },

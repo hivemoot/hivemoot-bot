@@ -219,6 +219,11 @@ export async function processRepository(
       logger.debug(`[${repo.full_name}] No config file found; skipping PR notification reconciliation`);
       return;
     }
+
+    if (!repoConfig.governance.pr) {
+      logger.debug(`[${repo.full_name}] PR workflows disabled, skipping`);
+      return;
+    }
     const { maxPRsPerIssue, trustedReviewers, intake } = repoConfig.governance.pr;
 
     // Paginate through all open issues with ready-to-implement label (canonical + legacy)

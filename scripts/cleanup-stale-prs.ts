@@ -112,6 +112,12 @@ export async function processRepository(
       return;
     }
 
+    // PR workflows disabled for this repo — skip stale cleanup
+    if (!repoConfig.governance.pr) {
+      logger.debug("PR workflows disabled (no pr: section in config). Skipping.");
+      return;
+    }
+
     const prs = createPROperations(octokit, { appId });
 
     // Find all open PRs with 'implementation' label

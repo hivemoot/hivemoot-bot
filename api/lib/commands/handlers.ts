@@ -534,14 +534,10 @@ async function handleImplement(ctx: CommandContext): Promise<CommandResult> {
     removeLabel = LABELS.NEEDS_HUMAN;
   }
 
-  if (!removeLabel) {
-    return { status: "rejected", reason: "This issue is not in a phase that can transition to ready-to-implement." };
-  }
-
   const message = `# 🐝 Fast-tracked to Implementation ⚡\n\nMoved to ready-to-implement by @${ctx.senderLogin} via \`/implement\` command.\n\nNext steps:\n- Open a PR for review if you plan to implement.\n- Link this issue in the PR description (e.g., \`Fixes #${ctx.issueNumber}\`).${SIGNATURE}`;
 
   await issues.transition(ref, {
-    removeLabel,
+    ...(removeLabel ? { removeLabel } : {}),
     addLabel: LABELS.READY_TO_IMPLEMENT,
     comment: message,
     unlock: true,

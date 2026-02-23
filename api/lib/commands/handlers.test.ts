@@ -489,14 +489,26 @@ describe("executeCommand", () => {
       expect(result.status).toBe("rejected");
     });
 
-    it("should reject /implement when no recognized phase label exists", async () => {
+    it("should succeed when no recognized phase label exists (label lost during outage)", async () => {
       const ctx = createCtx({
         verb: "implement",
         issueLabels: [],
       });
       const result = await executeCommand(ctx);
 
-      expect(result.status).toBe("rejected");
+      expect(result.status).toBe("executed");
+      expect(mockIssueOps.transition).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          addLabel: LABELS.READY_TO_IMPLEMENT,
+        }),
+      );
+      expect(mockIssueOps.transition).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.not.objectContaining({
+          removeLabel: expect.anything(),
+        }),
+      );
     });
   });
 

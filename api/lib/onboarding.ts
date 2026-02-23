@@ -41,7 +41,7 @@ governance:
     staleDays: 3
     maxPRsPerIssue: 3
     intake:
-      - method: update  # require PR activity after issue approval (method: auto coming soon — see #326)
+      - method: auto
     # trustedReviewers:
     #   - your-github-username
     # mergeReady:

@@ -274,7 +274,7 @@ export function app(probotApp: Probot): void {
       const governance = createGovernanceService(issues);
       const repoConfig = await loadRepositoryConfig(context.octokit, owner, repo);
       if (!repoConfig) {
-        context.log.info(`No config in ${fullName}; skipping issue automation`);
+        context.log.debug(`No config in ${fullName}; skipping issue automation`);
         return;
       }
       const hasAutomaticDiscussion = repoConfig.governance.proposals.discussion.exits.some(
@@ -317,7 +317,7 @@ export function app(probotApp: Probot): void {
         loadRepositoryConfig(context.octokit, owner, repo),
       ]);
       if (!repoConfig) {
-        context.log.info(`No config in ${fullName}; skipping PR automation`);
+        context.log.debug(`No config in ${fullName}; skipping PR automation`);
         return;
       }
       let linkedIssues = initialLinkedIssues;
@@ -409,7 +409,7 @@ export function app(probotApp: Probot): void {
         loadRepositoryConfig(context.octokit, owner, repo),
       ]);
       if (!repoConfig) {
-        context.log.info(`No config in ${fullName}; skipping PR update automation`);
+        context.log.debug(`No config in ${fullName}; skipping PR update automation`);
         return;
       }
 
@@ -463,7 +463,7 @@ export function app(probotApp: Probot): void {
         loadRepositoryConfig(context.octokit, owner, repo),
       ]);
       if (!repoConfig) {
-        context.log.info(`No config in ${fullName}; skipping PR edit automation`);
+        context.log.debug(`No config in ${fullName}; skipping PR edit automation`);
         return;
       }
 
@@ -544,7 +544,7 @@ export function app(probotApp: Probot): void {
         loadRepositoryConfig(context.octokit, owner, repo),
       ]);
       if (!repoConfig) {
-        context.log.info(`No config in ${fullName}; skipping PR comment intake`);
+        context.log.debug(`No config in ${fullName}; skipping PR comment intake`);
         return;
       }
 
@@ -655,7 +655,7 @@ export function app(probotApp: Probot): void {
           : Promise.resolve(),
       ]);
       if (!repoConfig) {
-        context.log.info(`No config in ${fullName}; skipping review automation`);
+        context.log.debug(`No config in ${fullName}; skipping review automation`);
         return;
       }
 
@@ -708,7 +708,7 @@ export function app(probotApp: Probot): void {
         loadRepositoryConfig(context.octokit, owner, repo),
       ]);
       if (!repoConfig) {
-        context.log.info(`No config in ${fullName}; skipping dismissed review automation`);
+        context.log.debug(`No config in ${fullName}; skipping dismissed review automation`);
         return;
       }
 
@@ -741,7 +741,7 @@ export function app(probotApp: Probot): void {
       const prs = createPROperations(context.octokit, { appId });
       const repoConfig = await loadRepositoryConfig(context.octokit, owner, repo);
       if (!repoConfig) {
-        context.log.info(`No config in ${fullName}; skipping label change automation`);
+        context.log.debug(`No config in ${fullName}; skipping label change automation`);
         return;
       }
 
@@ -779,7 +779,7 @@ export function app(probotApp: Probot): void {
       const prs = createPROperations(context.octokit, { appId });
       const repoConfig = await loadRepositoryConfig(context.octokit, owner, repo);
       if (!repoConfig) {
-        context.log.info(`No config in ${fullName}; skipping check_suite automation`);
+        context.log.debug(`No config in ${fullName}; skipping check_suite automation`);
         return;
       }
 
@@ -828,7 +828,7 @@ export function app(probotApp: Probot): void {
       const prs = createPROperations(context.octokit, { appId });
       const repoConfig = await loadRepositoryConfig(context.octokit, owner, repo);
       if (!repoConfig) {
-        context.log.info(`No config in ${fullName}; skipping check_run automation`);
+        context.log.debug(`No config in ${fullName}; skipping check_run automation`);
         return;
       }
 
@@ -875,7 +875,7 @@ export function app(probotApp: Probot): void {
       const repoConfig = await loadRepositoryConfig(context.octokit, owner, repo);
 
       if (!repoConfig) {
-        context.log.info(`No config in ${fullName}; skipping status automation`);
+        context.log.debug(`No config in ${fullName}; skipping status automation`);
         return;
       }
       if (!repoConfig.governance.pr.mergeReady) return;

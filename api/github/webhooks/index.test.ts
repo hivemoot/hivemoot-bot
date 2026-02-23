@@ -1140,7 +1140,7 @@ describe("Queen Bot", () => {
       const { handlers } = createWebhookHarness();
       const handler = handlers.get("issues.opened")!;
       const octokit = createIssuesOpenedOctokit("manual");
-      const log = { info: vi.fn(), error: vi.fn(), warn: vi.fn() };
+      const log = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() };
 
       await handler({
         octokit,

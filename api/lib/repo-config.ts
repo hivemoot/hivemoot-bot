@@ -15,6 +15,7 @@ import {
   MAX_PRS_PER_ISSUE,
   PR_STALE_THRESHOLD_DAYS,
 } from "../config.js";
+import { getErrorStatus } from "./github-client.js";
 import { logger } from "./logger.js";
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -1144,7 +1145,7 @@ export async function loadRepositoryConfig(
     logger.info(`[${repoFullName}] Loaded config from ${CONFIG_PATH}`);
     return parseRepoConfig(parsed, repoFullName);
   } catch (error) {
-    const status = (error as { status?: number }).status;
+    const status = getErrorStatus(error);
 
     // 404 means no config file — return null so callers skip all automation.
     if (status === 404) {

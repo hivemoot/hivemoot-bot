@@ -22,7 +22,7 @@ import {
   logger,
 } from "../api/lib/index.js";
 import { runForAllRepositories, runIfMain } from "./shared/run-installations.js";
-import type { Repository, PRRef, EffectiveConfig } from "../api/lib/index.js";
+import type { Repository, PRRef } from "../api/lib/index.js";
 import type { PROperations } from "../api/lib/pr-operations.js";
 import type { InstallationContext } from "./shared/run-installations.js";
 
@@ -105,8 +105,18 @@ export async function processRepository(
   logger.group(`Processing ${repo.full_name}`);
 
   try {
-    // Load per-repo configuration (falls back to defaults if not present)
-    const repoConfig: EffectiveConfig = await loadRepositoryConfig(octokit, owner, repoName);
+    // Load per-repo configuration (returns null when no config file exists)
+    const repoConfig = await loadRepositoryConfig(octokit, owner, repoName);
+    if (!repoConfig) {
+      logger.debug(`[${repo.full_name}] No config file found; skipping stale PR cleanup`);
+      return;
+    }
+
+    // PR workflows disabled for this repo — skip stale cleanup
+    if (!repoConfig.governance.pr) {
+      logger.debug("PR workflows disabled (no pr: section in config). Skipping.");
+      return;
+    }
 
     const prs = createPROperations(octokit, { appId });
 

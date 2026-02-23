@@ -270,7 +270,7 @@ export async function processImplementationIntake(params: {
     maxPRsPerIssue,
   } = params;
   const trustedReviewers = params.trustedReviewers ?? [];
-  const intake: IntakeMethod[] = params.intake ?? [{ method: "update" }];
+  const intake: IntakeMethod[] = params.intake ?? [{ method: "auto" }];
 
   if (linkedIssues.length === 0) {
     return;
@@ -342,6 +342,11 @@ export async function processImplementationIntake(params: {
         if (rule.method === "update") {
           // The timing guard already failed — this method cannot activate.
           continue;
+        }
+        if (rule.method === "auto") {
+          log.info(`PR #${prNumber} activated via auto intake for issue #${linkedIssue.number}`);
+          activated = true;
+          break;
         }
         if (rule.method === "approval") {
           const approverLogins = await prs.getApproverLogins(prRef);

@@ -9,6 +9,7 @@ import type { PRRef } from "./types.js";
 import { validateClient, PR_CLIENT_CHECKS } from "./client-validation.js";
 import { isNotificationComment } from "./bot-comments.js";
 import { LABELS, isLabelMatch, getLabelQueryAliases } from "../config.js";
+import { getErrorStatus } from "./github-client.js";
 
 /**
  * Minimal GitHub client interface for PR operations.
@@ -293,7 +294,7 @@ export class PROperations {
       });
     } catch (error) {
       // Label might not exist - ignore 404 errors
-      if ((error as { status?: number }).status !== 404) {
+      if (getErrorStatus(error) !== 404) {
         throw error;
       }
     }

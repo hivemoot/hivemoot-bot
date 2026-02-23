@@ -79,6 +79,7 @@ describe("RepositoryLabelService", () => {
       renamed: 0,
       updated: 0,
       skipped: 0,
+      renamedLabels: [],
     });
 
     expect(client.paginate.iterator).toHaveBeenCalledWith(
@@ -122,6 +123,7 @@ describe("RepositoryLabelService", () => {
       renamed: 0,
       updated: 0,
       skipped: 2,
+      renamedLabels: [],
     });
 
     const createdNames = vi
@@ -149,6 +151,7 @@ describe("RepositoryLabelService", () => {
       renamed: 0,
       updated: 0,
       skipped: 1,
+      renamedLabels: [],
     });
 
     const createdNames = vi
@@ -177,6 +180,7 @@ describe("RepositoryLabelService", () => {
       renamed: 0,
       updated: 0,
       skipped: 1,
+      renamedLabels: [],
     });
   });
 
@@ -202,7 +206,13 @@ describe("RepositoryLabelService", () => {
     const votingLabel = requiredDef(LABELS.VOTING);
     const result = await service.ensureRequiredLabels("hivemoot", "colony", [votingLabel]);
 
-    expect(result).toEqual({ created: 0, renamed: 1, updated: 0, skipped: 0 });
+    expect(result).toEqual({
+      created: 0,
+      renamed: 1,
+      updated: 0,
+      skipped: 0,
+      renamedLabels: [{ from: "phase:voting", to: LABELS.VOTING }],
+    });
 
     expect(client.rest.issues.updateLabel).toHaveBeenCalledWith({
       owner: "hivemoot",
@@ -212,6 +222,24 @@ describe("RepositoryLabelService", () => {
       color: votingLabel.color,
       description: votingLabel.description,
     });
+    expect(client.rest.issues.createLabel).not.toHaveBeenCalled();
+  });
+
+  it("should treat 422 rename error as concurrent rename and skip to create", async () => {
+    // Repo has legacy label; concurrent rename triggers 422 — fall through to create
+    vi.mocked(client.paginate.iterator).mockReturnValue(
+      buildIterator([[label("phase:voting", "5319e7", "Voting phase.")]])
+    );
+
+    const concurrentError = new Error("Unprocessable Entity") as Error & { status: number };
+    concurrentError.status = 422;
+    vi.mocked(client.rest.issues.updateLabel).mockRejectedValue(concurrentError);
+
+    const votingLabel = requiredDef(LABELS.VOTING);
+    const result = await service.ensureRequiredLabels("hivemoot", "colony", [votingLabel]);
+
+    // 422 on rename → treated as "already exists under new name", skipped without creating
+    expect(result).toEqual({ created: 0, renamed: 0, updated: 0, skipped: 1, renamedLabels: [] });
     expect(client.rest.issues.createLabel).not.toHaveBeenCalled();
   });
 
@@ -229,7 +257,7 @@ describe("RepositoryLabelService", () => {
 
     const result = await service.ensureRequiredLabels("hivemoot", "colony", [votingLabel]);
 
-    expect(result).toEqual({ created: 0, renamed: 0, updated: 0, skipped: 1 });
+    expect(result).toEqual({ created: 0, renamed: 0, updated: 0, skipped: 1, renamedLabels: [] });
     expect(client.rest.issues.updateLabel).not.toHaveBeenCalled();
     expect(client.rest.issues.createLabel).not.toHaveBeenCalled();
   });
@@ -245,7 +273,7 @@ describe("RepositoryLabelService", () => {
 
     const result = await service.ensureRequiredLabels("hivemoot", "colony", [votingLabel]);
 
-    expect(result).toEqual({ created: 0, renamed: 0, updated: 1, skipped: 0 });
+    expect(result).toEqual({ created: 0, renamed: 0, updated: 1, skipped: 0, renamedLabels: [] });
     expect(client.rest.issues.updateLabel).toHaveBeenCalledWith({
       owner: "hivemoot",
       repo: "colony",
@@ -266,7 +294,7 @@ describe("RepositoryLabelService", () => {
 
     const result = await service.ensureRequiredLabels("hivemoot", "colony", [votingLabel]);
 
-    expect(result).toEqual({ created: 0, renamed: 0, updated: 1, skipped: 0 });
+    expect(result).toEqual({ created: 0, renamed: 0, updated: 1, skipped: 0, renamedLabels: [] });
     expect(client.rest.issues.updateLabel).toHaveBeenCalledWith({
       owner: "hivemoot",
       repo: "colony",
@@ -286,7 +314,7 @@ describe("RepositoryLabelService", () => {
 
     const result = await service.ensureRequiredLabels("hivemoot", "colony", [votingLabel]);
 
-    expect(result).toEqual({ created: 0, renamed: 0, updated: 0, skipped: 1 });
+    expect(result).toEqual({ created: 0, renamed: 0, updated: 0, skipped: 1, renamedLabels: [] });
     expect(client.rest.issues.updateLabel).not.toHaveBeenCalled();
   });
 
@@ -301,7 +329,7 @@ describe("RepositoryLabelService", () => {
 
     const result = await service.ensureRequiredLabels("hivemoot", "colony", [votingLabel]);
 
-    expect(result).toEqual({ created: 0, renamed: 0, updated: 0, skipped: 1 });
+    expect(result).toEqual({ created: 0, renamed: 0, updated: 0, skipped: 1, renamedLabels: [] });
     expect(client.rest.issues.updateLabel).not.toHaveBeenCalled();
   });
 });

@@ -16,7 +16,7 @@ import type { LanguageModelV1 } from "ai";
 import type { Logger } from "../logger.js";
 import { logger as defaultLogger } from "../logger.js";
 import { repairMalformedJsonText } from "./json-repair.js";
-import { createModelFromEnv } from "./provider.js";
+import { createModelFromEnv, type ModelResolutionOptions } from "./provider.js";
 import { withLLMRetry } from "./retry.js";
 import type { ImplementationPlan, IssueContext, LLMConfig } from "./types.js";
 import { ImplementationPlanSchema, LLM_DEFAULTS, countUniqueParticipants } from "./types.js";
@@ -230,7 +230,8 @@ export class BlueprintGenerator {
    */
   async generate(
     context: IssueContext,
-    preCreatedModel?: { model: LanguageModelV1; config: LLMConfig }
+    preCreatedModel?: { model: LanguageModelV1; config: LLMConfig },
+    modelOptions?: ModelResolutionOptions
   ): Promise<BlueprintResult> {
     // Minimal discussions: no LLM needed
     const hasDiscussion = context.comments.some((c) => c.author !== context.author);
@@ -243,7 +244,7 @@ export class BlueprintGenerator {
     }
 
     try {
-      const modelResult = preCreatedModel ?? createModelFromEnv();
+      const modelResult = preCreatedModel ?? await createModelFromEnv(modelOptions);
       if (!modelResult) {
         this.logger.debug("LLM not configured, skipping blueprint generation");
         return { success: false, reason: "LLM not configured" };

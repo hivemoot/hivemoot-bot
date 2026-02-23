@@ -11,7 +11,7 @@ vi.mock("./logger.js", () => ({
   },
 }));
 
-import { IssueOperations, createIssueOperations } from "./github-client.js";
+import { IssueOperations, createIssueOperations, getErrorStatus } from "./github-client.js";
 import { logger as mockLogger } from "./logger.js";
 import type { GitHubClient } from "./github-client.js";
 import type { IssueRef } from "./types.js";
@@ -243,6 +243,7 @@ describe("IssueOperations", () => {
           },
         }),
       },
+      request: vi.fn().mockResolvedValue({}),
     } as unknown as GitHubClient;
 
     issueOps = new IssueOperations(mockClient, TEST_APP_ID);
@@ -325,6 +326,22 @@ describe("IssueOperations", () => {
 
       await expect(issueOps.removeLabel(testRef, "hivemoot:voting")).resolves.toBeUndefined();
     });
+
+    it("should rethrow non-404 errors from alias fallback", async () => {
+      const notFound = new Error("Not Found") as Error & { status: number };
+      notFound.status = 404;
+      const serverError = new Error("Gateway Timeout") as Error & { status: number };
+      serverError.status = 504;
+
+      // Canonical call → 404 triggers alias loop; alias call → 504 should propagate
+      vi.mocked(mockClient.rest.issues.removeLabel)
+        .mockRejectedValueOnce(notFound)
+        .mockRejectedValueOnce(serverError);
+
+      await expect(issueOps.removeLabel(testRef, "hivemoot:voting")).rejects.toThrow(
+        "Gateway Timeout"
+      );
+    });
   });
 
   describe("comment", () => {
@@ -337,6 +354,17 @@ describe("IssueOperations", () => {
         issue_number: 42,
         body: "Hello world!",
       });
+    });
+  });
+
+  describe("pinComment", () => {
+    it("should call request with correct route and parameters", async () => {
+      await issueOps.pinComment(testRef, 99);
+
+      expect(mockClient.request).toHaveBeenCalledWith(
+        "PUT /repos/{owner}/{repo}/issues/comments/{comment_id}/pin",
+        { owner: "test-org", repo: "test-repo", comment_id: 99 }
+      );
     });
   });
 
@@ -1636,46 +1664,30 @@ describe("IssueOperations", () => {
       expect(comments).toHaveLength(2);
     });
 
-    it("should include reactions when present in API response", async () => {
+    it("should include thumbsUp/thumbsDown reactions from inline comment data", async () => {
       mockClient.paginate.iterator = vi.fn().mockReturnValue({
         async *[Symbol.asyncIterator]() {
           yield {
             data: [
               {
                 id: 1,
-                body: "Great idea!",
-                user: { login: "alice", type: "User" },
+                body: "Strong support",
+                user: { login: "alice" },
                 created_at: "2024-01-15T10:00:00Z",
-                reactions: { "+1": 3, "-1": 1 },
-              },
-            ],
-          };
-        },
-      });
-
-      const comments = await issueOps.getDiscussionComments(testRef);
-
-      expect(comments).toHaveLength(1);
-      expect(comments[0].reactions).toEqual({ thumbsUp: 3, thumbsDown: 1 });
-    });
-
-    it("should omit reactions when counts are zero", async () => {
-      mockClient.paginate.iterator = vi.fn().mockReturnValue({
-        async *[Symbol.asyncIterator]() {
-          yield {
-            data: [
-              {
-                id: 1,
-                body: "Normal comment",
-                user: { login: "alice", type: "User" },
-                created_at: "2024-01-15T10:00:00Z",
-                reactions: { "+1": 0, "-1": 0 },
+                reactions: { "+1": 5, "-1": 1 },
               },
               {
                 id: 2,
-                body: "No reactions field",
-                user: { login: "bob", type: "User" },
+                body: "No reactions here",
+                user: { login: "bob" },
                 created_at: "2024-01-15T11:00:00Z",
+                reactions: { "+1": 0, "-1": 0 },
+              },
+              {
+                id: 3,
+                body: "No reactions field",
+                user: { login: "carol" },
+                created_at: "2024-01-15T12:00:00Z",
               },
             ],
           };
@@ -1684,10 +1696,12 @@ describe("IssueOperations", () => {
 
       const comments = await issueOps.getDiscussionComments(testRef);
 
-      expect(comments).toHaveLength(2);
-      expect(comments[0].reactions).toBeUndefined();
+      expect(comments).toHaveLength(3);
+      expect(comments[0].reactions).toEqual({ thumbsUp: 5, thumbsDown: 1 });
       expect(comments[1].reactions).toBeUndefined();
+      expect(comments[2].reactions).toBeUndefined();
     });
+
   });
 
   describe("getIssueContext", () => {
@@ -1877,5 +1891,35 @@ describe("IssueOperations", () => {
       await issueOps.getDiscussionReadiness(testRef);
       expect(mockLogger.info).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("getErrorStatus", () => {
+  it("returns null for non-object values", () => {
+    expect(getErrorStatus("string error")).toBeNull();
+    expect(getErrorStatus(42)).toBeNull();
+    expect(getErrorStatus(undefined)).toBeNull();
+    expect(getErrorStatus(true)).toBeNull();
+  });
+
+  it("returns null for null", () => {
+    expect(getErrorStatus(null)).toBeNull();
+  });
+
+  it("returns null when error has no status field", () => {
+    expect(getErrorStatus({ message: "not found" })).toBeNull();
+    expect(getErrorStatus({})).toBeNull();
+  });
+
+  it("returns null when status is not a number", () => {
+    expect(getErrorStatus({ status: "404" })).toBeNull();
+    expect(getErrorStatus({ status: null })).toBeNull();
+    expect(getErrorStatus({ status: undefined })).toBeNull();
+  });
+
+  it("returns the numeric status code", () => {
+    expect(getErrorStatus({ status: 404 })).toBe(404);
+    expect(getErrorStatus({ status: 422 })).toBe(422);
+    expect(getErrorStatus({ status: 500 })).toBe(500);
   });
 });

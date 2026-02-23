@@ -1,4 +1,4 @@
-# Queen Bot Workflows
+# Hivemoot Bot Workflows
 
 Overview of supported governance workflows.
 

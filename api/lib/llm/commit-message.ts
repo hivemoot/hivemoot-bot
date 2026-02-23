@@ -11,7 +11,7 @@ import type { LanguageModelV1 } from "ai";
 import type { Logger } from "../logger.js";
 import { logger as defaultLogger } from "../logger.js";
 import { repairMalformedJsonText } from "./json-repair.js";
-import { createModelFromEnv } from "./provider.js";
+import { createModelFromEnv, type ModelResolutionOptions } from "./provider.js";
 import { withLLMRetry } from "./retry.js";
 import type { CommitMessage, LLMConfig, PRContext } from "./types.js";
 import { CommitMessageSchema, LLM_DEFAULTS } from "./types.js";
@@ -115,10 +115,11 @@ export class CommitMessageGenerator {
 
   async generate(
     context: PRContext,
-    preCreatedModel?: { model: LanguageModelV1; config: LLMConfig }
+    preCreatedModel?: { model: LanguageModelV1; config: LLMConfig },
+    modelOptions?: ModelResolutionOptions
   ): Promise<CommitMessageResult> {
     try {
-      const modelResult = preCreatedModel ?? createModelFromEnv();
+      const modelResult = preCreatedModel ?? await createModelFromEnv(modelOptions);
       if (!modelResult) {
         return {
           success: false,

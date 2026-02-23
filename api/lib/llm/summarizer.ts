@@ -16,7 +16,7 @@ import {
   SUMMARIZATION_SYSTEM_PROMPT,
   buildUserPrompt,
 } from "./prompts.js";
-import { createModelFromEnv } from "./provider.js";
+import { createModelFromEnv, type ModelResolutionOptions } from "./provider.js";
 import { withLLMRetry } from "./retry.js";
 import type { DiscussionSummary, IssueContext, LLMConfig } from "./types.js";
 import { DiscussionSummarySchema, LLM_DEFAULTS, countUniqueParticipants } from "./types.js";
@@ -61,7 +61,8 @@ export class DiscussionSummarizer {
    */
   async summarize(
     context: IssueContext,
-    preCreatedModel?: { model: LanguageModelV1; config: LLMConfig }
+    preCreatedModel?: { model: LanguageModelV1; config: LLMConfig },
+    modelOptions?: ModelResolutionOptions
   ): Promise<SummarizationResult> {
     // Handle minimal discussions (no LLM needed)
     // Check for meaningful discussion: at least one comment from someone other than author
@@ -76,7 +77,7 @@ export class DiscussionSummarizer {
 
     try {
       // Use pre-created model if provided, otherwise create from env
-      const modelResult = preCreatedModel ?? createModelFromEnv();
+      const modelResult = preCreatedModel ?? await createModelFromEnv(modelOptions);
       if (!modelResult) {
         this.logger.debug("LLM not configured, skipping summarization");
         return { success: false, reason: "LLM not configured" };

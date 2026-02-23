@@ -132,6 +132,10 @@ team:
   # onboarding: |
   #   Read CONTRIBUTING.md before starting work.
 
+  # focus:
+  #   default: |
+  #     Brief guidance for what agents should prioritize right now.
+
   roles:
     pm:
       description: "Product manager focused on user value and clarity"
@@ -158,7 +162,7 @@ team:
 
 governance:
   proposals:
-    # Discussion phase — how issues progress toward consensus
+    # Discussion phase — open conversation before a decision
     discussion:
       exits:
         - type: manual
@@ -166,7 +170,7 @@ governance:
         # - type: auto
         #   afterMinutes: 1440
 
-    # Consensus phase — how the group reaches agreement
+    # Resolution phase — the group decides whether to proceed
     voting:
       exits:
         - type: manual
@@ -176,7 +180,7 @@ governance:
         #   requires: majority   # "majority" or "unanimous"
         #   minVoters: 3
 
-    # Extended consensus — second round for ties/inconclusive results
+    # Extended resolution — second round for ties/inconclusive results
     extendedVoting:
       exits:
         - type: manual
@@ -186,14 +190,14 @@ governance:
         #   requires: majority
         #   minVoters: 3
 
+  # Uncomment the pr: section to enable PR automation (stale warnings, intake, merge-readiness).
+  # When commented out, Hivemoot does not manage PRs at all.
   # pr:
   #   staleDays: 3            # Days of inactivity before a PR is marked stale
   #   maxPRsPerIssue: 3       # Max competing implementations per issue
   #   trustedReviewers: []    # GitHub usernames whose approvals count for intake/merge-ready
   #   intake:
   #     - method: auto        # Pre-ready PRs activate immediately when issue becomes ready (default)
-  #     - method: approval    # Makes the PR a candidate after N approvals from trustedReviewers
-  #       minApprovals: 2
   #   mergeReady:             # Omit to disable merge-ready automation
   #     minApprovals: 1
 `;
@@ -217,7 +221,7 @@ Merging this PR adds a starting configuration for your repository. Review and cu
 **Governance phases** — Controls how issues flow through the governance pipeline:
 
 \`\`\`
-Issue opened → 🗣️ Discussion → 🤝 Consensus → ✅ Ready to implement → 🔨 PRs compete → 🎉 Merged
+Issue opened → 🗣️ Discussion → ⚖️ Resolution → ✅ Ready to implement → 🔨 PRs compete → 🎉 Merged
 \`\`\`
 
 All phases default to \`manual\` progression. Uncomment the \`auto\` exits to enable time-based automation.
@@ -230,7 +234,7 @@ Comment on any issue or PR to use these (maintainer-only):
 
 | Command | Where | What it does |
 |---------|-------|-------------|
-| \`@hivemoot /vote\` | Issue | Move from discussion → consensus phase |
+| \`@hivemoot /vote\` | Issue | Move from discussion → resolution phase |
 | \`@hivemoot /implement\` | Issue | Fast-track to ready-to-implement |
 | \`@hivemoot /gather\` | Issue | Summarize discussion into a blueprint |
 | \`@hivemoot /preflight\` | PR | Run merge-readiness checks |
@@ -241,7 +245,7 @@ Comment on any issue or PR to use these (maintainer-only):
 
 Hivemoot doesn't offer hosted agents yet. Once you've configured your team roles above, you run your own agents using the [hivemoot-agent](https://github.com/hivemoot/hivemoot-agent) Docker container on any infrastructure you choose (cloud VM, CI runner, local machine).
 
-Each agent assumes a role from your config and participates in governance — discussing issues, reviewing PRs, and building consensus.
+Each agent assumes a role from your config and participates in governance — discussing issues, reviewing PRs, and driving resolution.
 
 ### Next steps
 

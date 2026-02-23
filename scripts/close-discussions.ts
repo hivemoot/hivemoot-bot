@@ -756,8 +756,12 @@ export async function processRepository(
   logger.group(`Processing ${repo.full_name}`);
 
   try {
-    // Load per-repo configuration (falls back to defaults if not present)
-    const repoConfig: EffectiveConfig = await loadRepositoryConfig(octokit, owner, repoName);
+    // Load per-repo configuration (returns null when no config file exists)
+    const repoConfig = await loadRepositoryConfig(octokit, owner, repoName);
+    if (!repoConfig) {
+      logger.debug(`[${repo.full_name}] No config file found; skipping automation`);
+      return { skippedIssues: [], accessIssues: [] };
+    }
     const issues = createIssueOperations(octokit, { appId });
     const governance = createGovernanceService(issues);
 

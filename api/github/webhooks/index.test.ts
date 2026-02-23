@@ -1133,6 +1133,32 @@ describe("Queen Bot", () => {
       const commentBody = octokit.rest.issues.createComment.mock.calls[0][0].body;
       expect(commentBody).toContain("Ready to vote?");
     });
+
+    it("should skip all automation when config is null (no .github/hivemoot.yml)", async () => {
+      vi.mocked(loadRepositoryConfig).mockResolvedValueOnce(null);
+
+      const { handlers } = createWebhookHarness();
+      const handler = handlers.get("issues.opened")!;
+      const octokit = createIssuesOpenedOctokit("manual");
+      const log = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() };
+
+      await handler({
+        octokit,
+        log,
+        payload: {
+          issue: { number: 43 },
+          repository: {
+            name: "test-repo",
+            full_name: "hivemoot/test-repo",
+            owner: { login: "hivemoot" },
+          },
+        },
+      });
+
+      // No comment should be posted, no label added
+      expect(octokit.rest.issues.createComment).not.toHaveBeenCalled();
+      expect(octokit.rest.issues.addLabels).not.toHaveBeenCalled();
+    });
   });
 
   describe("pull_request_review handlers", () => {
@@ -2101,6 +2127,204 @@ describe("Queen Bot", () => {
         // but we verify the env validation happened
         expect(validateEnv).toHaveBeenCalledWith(true);
       });
+    });
+  });
+
+  describe("null-config no-op guards", () => {
+    // Minimal Octokit stub that passes createIssueOperations + createPROperations validation.
+    // None of these methods are reached — every handler returns early when loadRepositoryConfig → null.
+    const createNullConfigOctokit = () => ({
+      rest: {
+        issues: {
+          get: vi.fn(),
+          addLabels: vi.fn(),
+          removeLabel: vi.fn(),
+          createComment: vi.fn(),
+          update: vi.fn(),
+          lock: vi.fn(),
+          unlock: vi.fn(),
+          listForRepo: vi.fn(),
+          listComments: vi.fn(),
+          listEventsForTimeline: vi.fn(),
+        },
+        reactions: {
+          listForIssueComment: vi.fn(),
+          listForIssue: vi.fn(),
+        },
+        pulls: {
+          get: vi.fn(),
+          update: vi.fn(),
+          listReviews: vi.fn(),
+          listCommits: vi.fn(),
+          listReviewComments: vi.fn(),
+          list: vi.fn(),
+        },
+        checks: { listForRef: vi.fn() },
+        repos: { getCombinedStatusForRef: vi.fn() },
+      },
+      paginate: {
+        iterator: vi.fn().mockImplementation(() => ({
+          async *[Symbol.asyncIterator]() {
+            yield { data: [] };
+          },
+        })),
+      },
+    });
+
+    const log = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() };
+    const baseRepo = {
+      name: "no-config-repo",
+      full_name: "hivemoot/no-config-repo",
+      owner: { login: "hivemoot" },
+      default_branch: "main",
+    };
+    const basePR = { number: 10, base: { ref: "main" }, body: "", labels: [] };
+
+    beforeEach(() => {
+      vi.mocked(loadRepositoryConfig).mockReset().mockResolvedValue(null);
+      vi.mocked(getLinkedIssues).mockReset().mockResolvedValue([]);
+      vi.mocked(recalculateLeaderboardForPR).mockReset().mockResolvedValue(undefined);
+      vi.mocked(processImplementationIntake).mockReset().mockResolvedValue(undefined);
+      vi.mocked(evaluateMergeReadiness).mockReset().mockResolvedValue(undefined);
+    });
+
+    it("pull_request.opened: skips automation when config is null", async () => {
+      const { handlers } = createWebhookHarness();
+      const octokit = createNullConfigOctokit();
+      await handlers.get("pull_request.opened")!({
+        octokit,
+        log,
+        payload: { pull_request: basePR, repository: baseRepo },
+      });
+      expect(processImplementationIntake).not.toHaveBeenCalled();
+    });
+
+    it("pull_request.synchronize: skips automation when config is null", async () => {
+      const { handlers } = createWebhookHarness();
+      const octokit = createNullConfigOctokit();
+      await handlers.get("pull_request.synchronize")!({
+        octokit,
+        log,
+        payload: { pull_request: basePR, repository: baseRepo },
+      });
+      expect(processImplementationIntake).not.toHaveBeenCalled();
+    });
+
+    it("pull_request.edited: skips automation when config is null", async () => {
+      const { handlers } = createWebhookHarness();
+      const octokit = createNullConfigOctokit();
+      await handlers.get("pull_request.edited")!({
+        octokit,
+        log,
+        payload: {
+          pull_request: basePR,
+          repository: baseRepo,
+          changes: { body: { from: "old body" } },
+        },
+      });
+      expect(processImplementationIntake).not.toHaveBeenCalled();
+    });
+
+    it("issue_comment.created (PR intake path): skips automation when config is null", async () => {
+      const { handlers } = createWebhookHarness();
+      const octokit = createNullConfigOctokit();
+      await handlers.get("issue_comment.created")!({
+        octokit,
+        log,
+        payload: {
+          issue: { number: 55, pull_request: { url: "https://github.com/hivemoot/no-config-repo/pull/55" }, labels: [] },
+          comment: { id: 1, body: "looks good", performed_via_github_app: null, user: { login: "user" } },
+          repository: baseRepo,
+        },
+      });
+      expect(processImplementationIntake).not.toHaveBeenCalled();
+    });
+
+    it("pull_request_review.submitted: skips automation when config is null", async () => {
+      const { handlers } = createWebhookHarness();
+      const octokit = createNullConfigOctokit();
+      await handlers.get("pull_request_review.submitted")!({
+        octokit,
+        log,
+        payload: {
+          review: { state: "approved" },
+          pull_request: { number: 10 },
+          repository: baseRepo,
+        },
+      });
+      expect(recalculateLeaderboardForPR).not.toHaveBeenCalled();
+      expect(processImplementationIntake).not.toHaveBeenCalled();
+      expect(evaluateMergeReadiness).not.toHaveBeenCalled();
+    });
+
+    it("pull_request_review.dismissed: skips automation when config is null", async () => {
+      const { handlers } = createWebhookHarness();
+      const octokit = createNullConfigOctokit();
+      await handlers.get("pull_request_review.dismissed")!({
+        octokit,
+        log,
+        payload: {
+          review: { state: "dismissed" },
+          pull_request: { number: 10 },
+          repository: baseRepo,
+        },
+      });
+      expect(recalculateLeaderboardForPR).not.toHaveBeenCalled();
+      expect(evaluateMergeReadiness).not.toHaveBeenCalled();
+    });
+
+    it("pull_request.labeled: skips automation when config is null", async () => {
+      const { handlers } = createWebhookHarness();
+      const octokit = createNullConfigOctokit();
+      await handlers.get("pull_request.labeled")!({
+        octokit,
+        log,
+        payload: {
+          label: { name: LABELS.IMPLEMENTATION },
+          pull_request: { number: 10, labels: [] },
+          repository: baseRepo,
+        },
+      });
+      expect(evaluateMergeReadiness).not.toHaveBeenCalled();
+    });
+
+    it("check_suite.completed: skips automation when config is null", async () => {
+      const { handlers } = createWebhookHarness();
+      const octokit = createNullConfigOctokit();
+      await handlers.get("check_suite.completed")!({
+        octokit,
+        log,
+        payload: {
+          check_suite: { pull_requests: [{ number: 1 }], head_sha: "abc123" },
+          repository: baseRepo,
+        },
+      });
+      expect(evaluateMergeReadiness).not.toHaveBeenCalled();
+    });
+
+    it("check_run.completed: skips automation when config is null", async () => {
+      const { handlers } = createWebhookHarness();
+      const octokit = createNullConfigOctokit();
+      await handlers.get("check_run.completed")!({
+        octokit,
+        log,
+        payload: {
+          check_run: { pull_requests: [{ number: 1 }], head_sha: "abc123" },
+          repository: baseRepo,
+        },
+      });
+      expect(evaluateMergeReadiness).not.toHaveBeenCalled();
+    });
+
+    it("status: skips automation when config is null", async () => {
+      const { handlers } = createWebhookHarness();
+      const octokit = createNullConfigOctokit();
+      await handlers.get("status")!({
+        octokit,
+        log,
+        payload: { sha: "abc123", repository: baseRepo },
+      });
+      expect(evaluateMergeReadiness).not.toHaveBeenCalled();
     });
   });
 });

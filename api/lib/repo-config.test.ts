@@ -1345,14 +1345,14 @@ governance:
     });
 
     describe("missing file handling", () => {
-      it("should return defaults when config file not found (404)", async () => {
+      it("should return null when config file not found (404)", async () => {
         const octokit = createMockOctokit({
           error: { status: 404, message: "Not Found" },
         });
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
-        expect(config).toEqual(getDefaultConfig());
+        expect(config).toBeNull();
       });
 
       it("should return defaults for empty file", async () => {
@@ -1500,16 +1500,6 @@ governance:
         expect(config.governance.pr!.staleDays).toBe(PR_STALE_THRESHOLD_DAYS);
         expect(config.governance.pr!.maxPRsPerIssue).toBe(MAX_PRS_PER_ISSUE);
         expect(config.governance.pr!.intake).toEqual([{ method: "auto" }]);
-      });
-
-      it("should return pr: null when config file is not found (404)", async () => {
-        const octokit = createMockOctokit({
-          error: { status: 404, message: "Not Found" },
-        });
-
-        const config = await loadRepositoryConfig(octokit, "owner", "repo");
-
-        expect(config.governance.pr).toBeNull();
       });
 
       it("should use default when staleDays is an object", async () => {

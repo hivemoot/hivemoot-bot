@@ -171,8 +171,6 @@ governance:
     trustedReviewers: *wellKnownAgents
     intake:
       - method: auto
-      - method: approval
-        minApprovals: 2
     mergeReady:
       minApprovals: 2
 

@@ -108,6 +108,12 @@ export async function processRepository(
     // Load per-repo configuration (falls back to defaults if not present)
     const repoConfig: EffectiveConfig = await loadRepositoryConfig(octokit, owner, repoName);
 
+    // PR workflows disabled for this repo — skip stale cleanup
+    if (!repoConfig.governance.pr) {
+      logger.debug("PR workflows disabled (no pr: section in config). Skipping.");
+      return;
+    }
+
     const prs = createPROperations(octokit, { appId });
 
     // Find all open PRs with 'implementation' label

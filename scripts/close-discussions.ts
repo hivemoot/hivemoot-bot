@@ -465,7 +465,10 @@ export async function processIssuePhase(
  *
  * The activation date guard (isActivationAfterReady) in the webhook
  * handler enforces this: PR activity must occur after the ready label
- * was added. See processImplementationIntake in api/github/webhooks/index.ts.
+ * was added. See processImplementationIntake in api/lib/implementation-intake.ts.
+ *
+ * This behavior is configurable via the `intake` config. With `method: "auto"`,
+ * pre-ready PRs are unconditionally activated (bypassing the timing guard).
  */
 export async function notifyPendingPRs(
   octokit: InstanceType<typeof Octokit>,
@@ -817,8 +820,13 @@ export async function processRepository(
     };
 
     const { discussion, voting, extendedVoting } = repoConfig.governance.proposals;
-    const { trustedReviewers, intake, maxPRsPerIssue } = repoConfig.governance.pr;
-    const prIntakeConfig = { maxPRsPerIssue, trustedReviewers, intake };
+    const prIntakeConfig = repoConfig.governance.pr
+      ? {
+          maxPRsPerIssue: repoConfig.governance.pr.maxPRsPerIssue,
+          trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+          intake: repoConfig.governance.pr.intake,
+        }
+      : undefined;
 
     // Voting/inconclusive phases share a transition pattern: end voting, track
     // outcome, and notify pending PRs if the proposal passed.

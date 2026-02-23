@@ -42,6 +42,7 @@ import type {
 import type { IssueOperations } from "../api/lib/github-client.js";
 import type { GovernanceService } from "../api/lib/governance.js";
 import type { InstallationContext } from "./shared/run-installations.js";
+import { TRANSIENT_NETWORK_CODES } from "../api/lib/transient-error.js";
 
 /**
  * Represents an issue that was skipped due to missing voting comment.
@@ -102,19 +103,27 @@ interface RetryableError {
 }
 
 /**
- * Check if an error is retryable (transient network/API issues)
+ * Check if an error is retryable (transient network/API issues).
+ *
+ * Covers: known transient network codes (via shared TRANSIENT_NETWORK_CODES),
+ * HTTP 502/503/504, and rate-limited responses.
+ *
+ * Note: bare HTTP 429 (no rate-limit headers or message) is intentionally
+ * excluded — those are caught and handled by the outer processIssuePhase
+ * error handler rather than being retried transparently.
  */
 export function isRetryableError(error: unknown): boolean {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    typeof (error as { code: unknown }).code === "string" &&
+    TRANSIENT_NETWORK_CODES.has((error as { code: string }).code)
+  ) {
+    return true;
+  }
   const err = error as RetryableError;
-  // Retry on server errors, rate limits, and network timeouts
-  return (
-    err.status === 502 ||
-    err.status === 503 ||
-    err.status === 504 ||
-    isRateLimitError(error) ||
-    err.code === "ETIMEDOUT" ||
-    err.code === "ECONNRESET"
-  );
+  return err.status === 502 || err.status === 503 || err.status === 504 || isRateLimitError(error);
 }
 
 function getHeaderValue(

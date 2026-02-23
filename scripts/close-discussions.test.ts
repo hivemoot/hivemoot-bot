@@ -972,6 +972,22 @@ describe("close-discussions script", () => {
       expect(isRetryableError({ code: "ECONNRESET" })).toBe(true);
     });
 
+    it("should return true for ECONNREFUSED network errors", () => {
+      expect(isRetryableError({ code: "ECONNREFUSED" })).toBe(true);
+    });
+
+    it("should return true for ENOTFOUND network errors", () => {
+      expect(isRetryableError({ code: "ENOTFOUND" })).toBe(true);
+    });
+
+    it("should return true for EAI_AGAIN network errors", () => {
+      expect(isRetryableError({ code: "EAI_AGAIN" })).toBe(true);
+    });
+
+    it("should return true for EPIPE network errors", () => {
+      expect(isRetryableError({ code: "EPIPE" })).toBe(true);
+    });
+
     it("should return true for 429 with retry-after header", () => {
       expect(isRetryableError({
         status: 429,

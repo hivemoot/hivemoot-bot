@@ -204,12 +204,12 @@ describe("Implementation Intake", () => {
   });
 
   it.each([
-    { label: LABELS.REJECTED, reason: "rejected" },
-    { label: LABELS.INCONCLUSIVE, reason: "inconclusive" },
-    { label: LABELS.IMPLEMENTED, reason: "implemented" },
-  ] as const)(
-    "should post issue-closed message (not 'not ready yet') for $reason issue on opened trigger",
-    async ({ label, reason }) => {
+    { label: LABELS.REJECTED },
+    { label: LABELS.INCONCLUSIVE },
+    { label: LABELS.IMPLEMENTED },
+  ])(
+    "should post issue-closed message (not 'not ready yet') for $label issue on opened trigger",
+    async ({ label }) => {
       const mockOctokit = createMockOctokit();
 
       const closedIssue: LinkedIssue = {

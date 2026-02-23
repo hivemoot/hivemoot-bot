@@ -309,15 +309,12 @@ export async function processImplementationIntake(params: {
   for (const linkedIssue of linkedIssues) {
     if (!hasLabel(linkedIssue, LABELS.READY_TO_IMPLEMENT)) {
       if (trigger === "opened") {
-        const terminalReason = hasLabel(linkedIssue, LABELS.REJECTED)
-          ? "rejected"
-          : hasLabel(linkedIssue, LABELS.INCONCLUSIVE)
-            ? "inconclusive"
-            : hasLabel(linkedIssue, LABELS.IMPLEMENTED)
-              ? "implemented"
-              : null;
-        const message = terminalReason
-          ? PR_MESSAGES.issueClosedNoTracking(linkedIssue.number, terminalReason)
+        const isTerminal =
+          hasLabel(linkedIssue, LABELS.REJECTED) ||
+          hasLabel(linkedIssue, LABELS.INCONCLUSIVE) ||
+          hasLabel(linkedIssue, LABELS.IMPLEMENTED);
+        const message = isTerminal
+          ? PR_MESSAGES.issueClosedNoTracking(linkedIssue.number)
           : PR_MESSAGES.issueNotReadyToImplement(linkedIssue.number);
         await prs.comment(prRef, message);
       }

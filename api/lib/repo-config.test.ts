@@ -1499,7 +1499,7 @@ governance:
         expect(config.governance.pr).not.toBeNull();
         expect(config.governance.pr!.staleDays).toBe(PR_STALE_THRESHOLD_DAYS);
         expect(config.governance.pr!.maxPRsPerIssue).toBe(MAX_PRS_PER_ISSUE);
-        expect(config.governance.pr!.intake).toEqual([{ method: "update" }]);
+        expect(config.governance.pr!.intake).toEqual([{ method: "auto" }]);
       });
 
       it("should return pr: null when config file is not found (404)", async () => {

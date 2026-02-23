@@ -2,7 +2,7 @@ name: reconcile-repository-labels
 
 on:
   schedule:
-    - cron: "15,45 * * * *"  # Every 30 minutes (staggered +15)
+    - cron: "15 3 * * *"  # Daily at 03:15 UTC
   workflow_dispatch:
     # Manual trigger for testing
 

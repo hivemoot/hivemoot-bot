@@ -11,7 +11,7 @@ vi.mock("./logger.js", () => ({
   },
 }));
 
-import { IssueOperations, createIssueOperations } from "./github-client.js";
+import { IssueOperations, createIssueOperations, getErrorStatus } from "./github-client.js";
 import { logger as mockLogger } from "./logger.js";
 import type { GitHubClient } from "./github-client.js";
 import type { IssueRef } from "./types.js";
@@ -325,6 +325,22 @@ describe("IssueOperations", () => {
       vi.mocked(mockClient.rest.issues.removeLabel).mockRejectedValue(notFound);
 
       await expect(issueOps.removeLabel(testRef, "hivemoot:voting")).resolves.toBeUndefined();
+    });
+
+    it("should rethrow non-404 errors from alias fallback", async () => {
+      const notFound = new Error("Not Found") as Error & { status: number };
+      notFound.status = 404;
+      const serverError = new Error("Gateway Timeout") as Error & { status: number };
+      serverError.status = 504;
+
+      // Canonical call → 404 triggers alias loop; alias call → 504 should propagate
+      vi.mocked(mockClient.rest.issues.removeLabel)
+        .mockRejectedValueOnce(notFound)
+        .mockRejectedValueOnce(serverError);
+
+      await expect(issueOps.removeLabel(testRef, "hivemoot:voting")).rejects.toThrow(
+        "Gateway Timeout"
+      );
     });
   });
 
@@ -1875,5 +1891,35 @@ describe("IssueOperations", () => {
       await issueOps.getDiscussionReadiness(testRef);
       expect(mockLogger.info).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("getErrorStatus", () => {
+  it("returns null for non-object values", () => {
+    expect(getErrorStatus("string error")).toBeNull();
+    expect(getErrorStatus(42)).toBeNull();
+    expect(getErrorStatus(undefined)).toBeNull();
+    expect(getErrorStatus(true)).toBeNull();
+  });
+
+  it("returns null for null", () => {
+    expect(getErrorStatus(null)).toBeNull();
+  });
+
+  it("returns null when error has no status field", () => {
+    expect(getErrorStatus({ message: "not found" })).toBeNull();
+    expect(getErrorStatus({})).toBeNull();
+  });
+
+  it("returns null when status is not a number", () => {
+    expect(getErrorStatus({ status: "404" })).toBeNull();
+    expect(getErrorStatus({ status: null })).toBeNull();
+    expect(getErrorStatus({ status: undefined })).toBeNull();
+  });
+
+  it("returns the numeric status code", () => {
+    expect(getErrorStatus({ status: 404 })).toBe(404);
+    expect(getErrorStatus({ status: 422 })).toBe(422);
+    expect(getErrorStatus({ status: 500 })).toBe(500);
   });
 });

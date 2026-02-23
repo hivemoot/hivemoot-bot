@@ -26,6 +26,7 @@ import { CommitMessageGenerator, formatCommitMessage } from "../llm/commit-messa
 import type { PRContext } from "../llm/types.js";
 import type { IssueRef, PRRef } from "../types.js";
 import type { EffectiveConfig } from "../repo-config.js";
+import { getErrorStatus } from "../github-client.js";
 
 /**
  * Minimal interface for the octokit client needed by command handlers.
@@ -229,14 +230,6 @@ function isTransientError(error: unknown): boolean {
   }
 
   return false;
-}
-
-function getErrorStatus(error: unknown): number | null {
-  if (typeof error !== "object" || error === null || !("status" in error)) {
-    return null;
-  }
-  const status = (error as { status?: unknown }).status;
-  return typeof status === "number" ? status : null;
 }
 
 function classifyCommandFailure(error: unknown): CommandFailureClassification {
@@ -1267,7 +1260,7 @@ async function runConfigDoctorCheck(
       detail: `Loaded \`${configPath}\` (${intakeDetail})`,
     };
   } catch (err) {
-    const status = (err as { status?: number }).status;
+    const status = getErrorStatus(err);
     if (status === 404) {
       return {
         name: "Config",

@@ -1460,6 +1460,51 @@ governance:
         expect(config.governance.proposals.discussion.durationMs).toBe(0);
       });
 
+      it("should return pr: null when governance is a string scalar", async () => {
+        const configYaml = `governance: "not-an-object"`;
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(configYaml),
+            encoding: "base64",
+          },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
+        expect(config.governance.pr).toBeNull();
+      });
+
+      it("should return pr: null when governance is a number scalar", async () => {
+        const configYaml = `governance: 42`;
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(configYaml),
+            encoding: "base64",
+          },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
+        expect(config.governance.pr).toBeNull();
+      });
+
+      it("should return pr: null when governance is a boolean scalar", async () => {
+        const configYaml = `governance: true`;
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(configYaml),
+            encoding: "base64",
+          },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
+        expect(config.governance.pr).toBeNull();
+      });
+
       it("should return pr: null when governance exists but pr: section is absent", async () => {
         const configYaml = `
 governance:

@@ -40,10 +40,14 @@ vi.mock("../../lib/implementation-intake.js", () => ({
   recalculateLeaderboardForPR: vi.fn().mockResolvedValue(undefined),
 }));
 
+const mockCreateOnboardingPR = vi.fn();
 vi.mock("../../lib/index.js", async () => {
   const actual = await vi.importActual<typeof import("../../lib/index.js")>("../../lib/index.js");
   return {
     ...actual,
+    createOnboardingService: vi.fn(() => ({
+      createOnboardingPR: mockCreateOnboardingPR,
+    })),
     loadRepositoryConfig: vi.fn().mockResolvedValue({
       governance: {
         proposals: {
@@ -436,6 +440,104 @@ describe("Queen Bot", () => {
       expect(log.error).toHaveBeenCalledTimes(1);
       expect(log.info).toHaveBeenCalledWith(
         `[installation.created] Label bootstrap summary: reposProcessed=2, reposFailed=1, labelsCreated=${REQUIRED_REPOSITORY_LABELS.length}, labelsRenamed=0, labelsUpdated=0, labelsSkipped=0`
+      );
+    });
+  });
+
+  describe("Onboarding PR creation during installation", () => {
+    beforeEach(() => {
+      mockCreateOnboardingPR.mockReset();
+    });
+
+    it("should create onboarding PRs for each repository on installation.created", async () => {
+      mockCreateOnboardingPR.mockResolvedValue({ status: "created", prNumber: 1, prUrl: "https://github.com/test/repo/pull/1" });
+
+      const { handlers } = createWebhookHarness();
+      const handler = handlers.get("installation.created")!;
+      const octokit = createInstallationOctokit();
+      const log = { info: vi.fn(), error: vi.fn() };
+
+      await handler({
+        octokit,
+        log,
+        payload: {
+          installation: { id: 1, app_id: 1 },
+          repositories: [{ name: "my-repo", full_name: "acme/my-repo" }],
+        },
+      });
+
+      expect(mockCreateOnboardingPR).toHaveBeenCalledWith("acme", "my-repo");
+      expect(log.info).toHaveBeenCalledWith(
+        expect.stringContaining("Created onboarding PR #1")
+      );
+    });
+
+    it("should log skip reason when onboarding is skipped", async () => {
+      mockCreateOnboardingPR.mockResolvedValue({ status: "skipped", reason: "config-exists" });
+
+      const { handlers } = createWebhookHarness();
+      const handler = handlers.get("installation.created")!;
+      const octokit = createInstallationOctokit();
+      const log = { info: vi.fn(), error: vi.fn() };
+
+      await handler({
+        octokit,
+        log,
+        payload: {
+          installation: { id: 1, app_id: 1 },
+          repositories: [{ name: "my-repo", full_name: "acme/my-repo" }],
+        },
+      });
+
+      expect(log.info).toHaveBeenCalledWith(
+        expect.stringContaining("Onboarding skipped for acme/my-repo: config-exists")
+      );
+    });
+
+    it("should log error but not throw when onboarding fails", async () => {
+      mockCreateOnboardingPR.mockRejectedValue(new Error("API rate limited"));
+
+      const { handlers } = createWebhookHarness();
+      const handler = handlers.get("installation.created")!;
+      const octokit = createInstallationOctokit();
+      const log = { info: vi.fn(), error: vi.fn() };
+
+      // Should not throw — onboarding failures are non-fatal
+      await handler({
+        octokit,
+        log,
+        payload: {
+          installation: { id: 1, app_id: 1 },
+          repositories: [{ name: "my-repo", full_name: "acme/my-repo" }],
+        },
+      });
+
+      expect(log.error).toHaveBeenCalledWith(
+        expect.objectContaining({ repo: "acme/my-repo" }),
+        expect.stringContaining("Failed to create onboarding PR")
+      );
+    });
+
+    it("should create onboarding PRs on installation_repositories.added", async () => {
+      mockCreateOnboardingPR.mockResolvedValue({ status: "created", prNumber: 5, prUrl: "https://github.com/acme/new-repo/pull/5" });
+
+      const { handlers } = createWebhookHarness();
+      const handler = handlers.get("installation_repositories.added")!;
+      const octokit = createInstallationOctokit();
+      const log = { info: vi.fn(), error: vi.fn() };
+
+      await handler({
+        octokit,
+        log,
+        payload: {
+          installation: { id: 1, app_id: 1 },
+          repositories_added: [{ name: "new-repo", full_name: "acme/new-repo" }],
+        },
+      });
+
+      expect(mockCreateOnboardingPR).toHaveBeenCalledWith("acme", "new-repo");
+      expect(log.info).toHaveBeenCalledWith(
+        expect.stringContaining("Created onboarding PR #5")
       );
     });
   });

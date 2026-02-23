@@ -748,7 +748,7 @@ function parseTrustedReviewers(
  *
  * Each entry must have a known `method` field. Method-specific options
  * are validated per method. Invalid entries are filtered with warnings.
- * If the result is empty, falls back to default [{ method: "update" }].
+ * If the result is empty, falls back to default [{ method: "auto" }].
  */
 function parseIntakeMethods(
   value: unknown,

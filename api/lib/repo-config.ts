@@ -40,7 +40,11 @@ interface IntakeMethodApproval {
   minApprovals: number;
 }
 
-export type IntakeMethod = IntakeMethodUpdate | IntakeMethodApproval;
+interface IntakeMethodAuto {
+  method: "auto";
+}
+
+export type IntakeMethod = IntakeMethodUpdate | IntakeMethodApproval | IntakeMethodAuto;
 
 // ── Merge-Ready Config ──────────────────────────────────────────────────
 
@@ -732,8 +736,8 @@ function parseDiscussionExits(
   return autoExits;
 }
 
-const DEFAULT_INTAKE: IntakeMethod[] = [{ method: "update" }];
-const VALID_INTAKE_METHODS = new Set(["update", "approval"]);
+const DEFAULT_INTAKE: IntakeMethod[] = [{ method: "auto" }];
+const VALID_INTAKE_METHODS = new Set(["update", "approval", "auto"]);
 
 /**
  * Parse and validate trustedReviewers from config.
@@ -751,7 +755,7 @@ function parseTrustedReviewers(
  *
  * Each entry must have a known `method` field. Method-specific options
  * are validated per method. Invalid entries are filtered with warnings.
- * If the result is empty, falls back to default [{ method: "update" }].
+ * If the result is empty, falls back to default [{ method: "auto" }].
  */
 function parseIntakeMethods(
   value: unknown,
@@ -796,6 +800,11 @@ function parseIntakeMethods(
 
     if (method === "update") {
       methods.push({ method: "update" });
+      continue;
+    }
+
+    if (method === "auto") {
+      methods.push({ method: "auto" });
       continue;
     }
 

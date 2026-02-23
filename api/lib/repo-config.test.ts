@@ -1863,7 +1863,7 @@ governance:
         ]);
       });
 
-      it("should default intake to [update] when missing", async () => {
+      it("should default intake to [auto] when missing", async () => {
         const configYaml = `
 governance:
   pr:
@@ -1874,7 +1874,7 @@ governance:
         });
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
-        expect(config.governance.pr.intake).toEqual([{ method: "update" }]);
+        expect(config.governance.pr.intake).toEqual([{ method: "auto" }]);
       });
 
       it("should filter out invalid entries with warning", async () => {
@@ -1907,7 +1907,7 @@ governance:
         });
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
-        expect(config.governance.pr.intake).toEqual([{ method: "update" }]);
+        expect(config.governance.pr.intake).toEqual([{ method: "auto" }]);
       });
 
       it("should skip approval method with empty trustedReviewers", async () => {
@@ -1924,7 +1924,7 @@ governance:
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
         // approval method skipped (empty trustedReviewers), falls back to default
-        expect(config.governance.pr.intake).toEqual([{ method: "update" }]);
+        expect(config.governance.pr.intake).toEqual([{ method: "auto" }]);
       });
 
       it("should default minApprovals to 1 when not specified", async () => {
@@ -1957,7 +1957,63 @@ governance:
         });
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
-        expect(config.governance.pr.intake).toEqual([{ method: "update" }]);
+        expect(config.governance.pr.intake).toEqual([{ method: "auto" }]);
+      });
+
+      it("should parse intake with auto method", async () => {
+        const configYaml = `
+governance:
+  pr:
+    intake:
+      - method: auto
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config.governance.pr.intake).toEqual([{ method: "auto" }]);
+      });
+
+      it("should parse intake with auto + update methods", async () => {
+        const configYaml = `
+governance:
+  pr:
+    intake:
+      - method: auto
+      - method: update
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config.governance.pr.intake).toEqual([
+          { method: "auto" },
+          { method: "update" },
+        ]);
+      });
+
+      it("should parse intake with auto + approval methods", async () => {
+        const configYaml = `
+governance:
+  pr:
+    trustedReviewers:
+      - alice
+    intake:
+      - method: auto
+      - method: approval
+        minApprovals: 1
+`;
+        const octokit = createMockOctokit({
+          data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config.governance.pr.intake).toEqual([
+          { method: "auto" },
+          { method: "approval", minApprovals: 1 },
+        ]);
       });
 
       it("should fall back to default on non-array intake", async () => {
@@ -1971,7 +2027,7 @@ governance:
         });
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
-        expect(config.governance.pr.intake).toEqual([{ method: "update" }]);
+        expect(config.governance.pr.intake).toEqual([{ method: "auto" }]);
       });
     });
 

@@ -65,7 +65,7 @@ vi.mock("../../lib/index.js", async () => {
 });
 
 /**
- * Tests for Queen Bot webhook handlers
+ * Tests for Hivemoot Bot webhook handlers
  *
  * These tests verify:
  * 1. GovernanceService integration for issue handling
@@ -157,7 +157,7 @@ function createInstallationOctokit(options?: {
   };
 }
 
-describe("Queen Bot", () => {
+describe("Hivemoot Bot", () => {
   describe("Installation label bootstrap handlers", () => {
     it("should bootstrap labels from installation.created payload repositories", async () => {
       const { handlers } = createWebhookHarness();
@@ -2003,7 +2003,7 @@ describe("Queen Bot", () => {
         expect(res.headers["Content-Type"]).toBe("application/json");
         const body = JSON.parse(res.body);
         expect(body.status).toBe("ok");
-        expect(body.bot).toBe("Queen");
+        expect(body.bot).toBe("hivemoot");
         expect(body.checks.githubApp).toEqual({ ready: true });
         expect(body.checks.llm).toEqual({ ready: true });
         expect(body.missing).toBeUndefined();
@@ -2030,7 +2030,7 @@ describe("Queen Bot", () => {
         expect(res.headers["Content-Type"]).toBe("application/json");
         const body = JSON.parse(res.body);
         expect(body.status).toBe("misconfigured");
-        expect(body.bot).toBe("Queen");
+        expect(body.bot).toBe("hivemoot");
         expect(body.checks.githubApp).toEqual({ ready: false });
         expect(body.checks.llm).toEqual({ ready: false, reason: "not_configured" });
         expect(body.missing).toBeUndefined();

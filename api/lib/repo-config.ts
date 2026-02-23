@@ -988,9 +988,10 @@ function parseRepoConfig(raw: unknown, repoFullName: string): EffectiveConfig {
   // PR workflows: opt-in — absent `pr:` section means all PR workflows disabled.
   // When the key is present (even as empty `pr: {}`), parse with defaults.
   const prConfigRaw = config?.governance?.pr;
-  const hasPrSection = config?.governance !== undefined
-    && config?.governance !== null
-    && "pr" in (config.governance as object);
+  const governance = config?.governance;
+  const hasPrSection = typeof governance === "object"
+    && governance !== null
+    && "pr" in (governance as object);
 
   let pr: PRConfig | null = null;
   if (hasPrSection) {

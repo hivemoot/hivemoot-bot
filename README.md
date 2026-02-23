@@ -149,6 +149,8 @@ standup:
 
 ### PR Config
 
+> PR workflows are disabled by default. Add a `pr:` section to `governance:` to opt in.
+
 | Key                              | Type             | Default             | Description                                                                                                                                                                                                                                                                                             |
 | -------------------------------- | ---------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `governance.pr.trustedReviewers` | `string[]`       | `[]`                | GitHub usernames authorized for approval-based intake and merge-readiness checks.                                                                                                                                                                                                                       |

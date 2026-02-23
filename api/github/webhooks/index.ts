@@ -646,18 +646,19 @@ export function app(probotApp: Probot): void {
       const issues = createIssueOperations(context.octokit, { appId });
       const prs = createPROperations(context.octokit, { appId });
 
-      const [linkedIssues, repoConfig] = await Promise.all([
+      const repoConfig = await loadRepositoryConfig(context.octokit, owner, repo);
+      if (!repoConfig) {
+        context.log.debug(`No config in ${fullName}; skipping review automation`);
+        return;
+      }
+
+      const [linkedIssues] = await Promise.all([
         getLinkedIssues(context.octokit, owner, repo, number),
-        loadRepositoryConfig(context.octokit, owner, repo),
         // Leaderboard recalc only on approvals
         isApproval
           ? recalculateLeaderboardForPR(context.octokit, context.log, owner, repo, number)
           : Promise.resolve(),
       ]);
-      if (!repoConfig) {
-        context.log.debug(`No config in ${fullName}; skipping review automation`);
-        return;
-      }
 
       // Intake processing only on approvals
       if (isApproval) {
@@ -703,14 +704,13 @@ export function app(probotApp: Probot): void {
       const appId = getAppId();
       const prs = createPROperations(context.octokit, { appId });
 
-      const [, repoConfig] = await Promise.all([
-        recalculateLeaderboardForPR(context.octokit, context.log, owner, repo, number),
-        loadRepositoryConfig(context.octokit, owner, repo),
-      ]);
+      const repoConfig = await loadRepositoryConfig(context.octokit, owner, repo);
       if (!repoConfig) {
         context.log.debug(`No config in ${fullName}; skipping dismissed review automation`);
         return;
       }
+
+      await recalculateLeaderboardForPR(context.octokit, context.log, owner, repo, number);
 
       // Dismissed approval may drop below threshold
       await evaluateMergeReadiness({

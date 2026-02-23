@@ -1861,6 +1861,7 @@ describe("Queen Bot", () => {
           repository: baseRepo,
         },
       });
+      expect(recalculateLeaderboardForPR).not.toHaveBeenCalled();
       expect(processImplementationIntake).not.toHaveBeenCalled();
       expect(evaluateMergeReadiness).not.toHaveBeenCalled();
     });
@@ -1877,6 +1878,7 @@ describe("Queen Bot", () => {
           repository: baseRepo,
         },
       });
+      expect(recalculateLeaderboardForPR).not.toHaveBeenCalled();
       expect(evaluateMergeReadiness).not.toHaveBeenCalled();
     });
 

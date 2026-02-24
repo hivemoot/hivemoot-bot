@@ -490,4 +490,20 @@ describe("processRepository", () => {
       expect.any(Error)
     );
   });
+
+  it("should skip processing when no config file exists (null config)", async () => {
+    const { createPROperations, loadRepositoryConfig } = await import("../api/lib/index.js");
+    const mockPRs = {
+      findPRsWithLabel: vi.fn().mockResolvedValue([]),
+    };
+    vi.mocked(createPROperations).mockReturnValue(mockPRs as unknown as ReturnType<typeof createPROperations>);
+    vi.mocked(loadRepositoryConfig).mockResolvedValue(null);
+
+    const mockOctokit = {} as Parameters<typeof processRepository>[0];
+    const repo = { owner: { login: "test-org" }, name: "test-repo", full_name: "test-org/test-repo" };
+
+    await processRepository(mockOctokit, repo, testAppId);
+
+    expect(mockPRs.findPRsWithLabel).not.toHaveBeenCalled();
+  });
 });

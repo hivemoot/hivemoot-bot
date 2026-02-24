@@ -203,6 +203,92 @@ describe("Implementation Intake", () => {
     expect(prs.comment).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { label: LABELS.REJECTED },
+    { label: LABELS.INCONCLUSIVE },
+    { label: LABELS.IMPLEMENTED },
+  ])(
+    "should post issue-closed message (not 'not ready yet') for $label issue on opened trigger",
+    async ({ label }) => {
+      const mockOctokit = createMockOctokit();
+
+      const closedIssue: LinkedIssue = {
+        number: 42,
+        title: "Closed issue",
+        state: "CLOSED",
+        labels: { nodes: [{ name: label }] },
+      };
+
+      const prs = {
+        get: vi.fn().mockResolvedValue({ createdAt: new Date("2026-02-01T00:00:00Z") }),
+        getLabels: vi.fn().mockResolvedValue([]),
+        getLatestAuthorActivityDate: vi.fn(),
+        findPRsWithLabel: vi.fn().mockResolvedValue([]),
+        addLabels: vi.fn().mockResolvedValue(undefined),
+        comment: vi.fn().mockResolvedValue(undefined),
+      };
+
+      await processImplementationIntake({
+        octokit: mockOctokit,
+        issues: { getLabelAddedTime: vi.fn(), comment: vi.fn() },
+        prs,
+        log: { info: vi.fn(), warn: vi.fn() },
+        owner: "hivemoot",
+        repo: "colony",
+        prNumber: 101,
+        linkedIssues: [closedIssue],
+        trigger: "opened",
+        maxPRsPerIssue: 3,
+      });
+
+      expect(prs.comment).toHaveBeenCalledOnce();
+      const postedMessage = prs.comment.mock.calls[0][1] as string;
+      expect(postedMessage).toContain("Issue Closed");
+      expect(postedMessage).toContain(`Issue #42`);
+      expect(postedMessage).not.toContain("Not Ready Yet");
+      expect(postedMessage).not.toContain("hasn't passed voting");
+    }
+  );
+
+  it("should post 'not ready yet' (not closed message) for discussion-phase issue on opened trigger", async () => {
+    const mockOctokit = createMockOctokit();
+
+    const discussionIssue: LinkedIssue = {
+      number: 7,
+      title: "Discussion issue",
+      state: "OPEN",
+      labels: { nodes: [{ name: LABELS.DISCUSSION }] },
+    };
+
+    const prs = {
+      get: vi.fn().mockResolvedValue({ createdAt: new Date("2026-02-01T00:00:00Z") }),
+      getLabels: vi.fn().mockResolvedValue([]),
+      getLatestAuthorActivityDate: vi.fn(),
+      findPRsWithLabel: vi.fn().mockResolvedValue([]),
+      addLabels: vi.fn().mockResolvedValue(undefined),
+      comment: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await processImplementationIntake({
+      octokit: mockOctokit,
+      issues: { getLabelAddedTime: vi.fn(), comment: vi.fn() },
+      prs,
+      log: { info: vi.fn(), warn: vi.fn() },
+      owner: "hivemoot",
+      repo: "colony",
+      prNumber: 101,
+      linkedIssues: [discussionIssue],
+      trigger: "opened",
+      maxPRsPerIssue: 3,
+    });
+
+    expect(prs.comment).toHaveBeenCalledOnce();
+    const postedMessage = prs.comment.mock.calls[0][1] as string;
+    expect(postedMessage).toContain("Not Ready Yet");
+    expect(postedMessage).toContain("hasn't passed voting");
+    expect(postedMessage).not.toContain("Issue Closed");
+  });
+
   it("should silently skip when activation is before ready date on edited trigger without editedAt", async () => {
     const mockOctokit = createMockOctokit();
 

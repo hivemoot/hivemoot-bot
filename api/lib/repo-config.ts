@@ -1073,16 +1073,24 @@ export function getDefaultConfig(): EffectiveConfig {
  * Fetches the config file from the repository using GitHub Contents API,
  * parses YAML, validates values, and clamps to safe boundaries.
  *
+ * Returns `null` when no config file exists (HTTP 404). Callers must treat
+ * `null` as "skip all automation" — the bot should not act on repos that
+ * have not opted in via a config file.
+ *
+ * Returns `EffectiveConfig` (with defaults for omitted fields) when the file
+ * exists but is empty, invalid YAML, or has an unexpected shape — this
+ * preserves automation for repos that have a file but made a config mistake.
+ *
  * @param octokit - GitHub client (Octokit or Probot context.octokit)
  * @param owner - Repository owner
  * @param repo - Repository name
- * @returns EffectiveConfig with validated settings
+ * @returns EffectiveConfig with validated settings, or null if no config file
  */
 export async function loadRepositoryConfig(
   octokit: RepoConfigClient,
   owner: string,
   repo: string
-): Promise<EffectiveConfig> {
+): Promise<EffectiveConfig | null> {
   const repoFullName = `${owner}/${repo}`;
 
   try {
@@ -1139,13 +1147,14 @@ export async function loadRepositoryConfig(
   } catch (error) {
     const status = getErrorStatus(error);
 
-    // 404 is expected when repo doesn't have a config file
+    // 404 means no config file — return null so callers skip all automation.
     if (status === 404) {
-      logger.debug(`[${repoFullName}] No ${CONFIG_PATH} found. Using defaults.`);
-      return getDefaultConfig();
+      logger.debug(`[${repoFullName}] No ${CONFIG_PATH} found. Skipping automation.`);
+      return null;
     }
 
-    // Policy: config load errors should not block processing; log and use defaults.
+    // For other errors (network, permissions, etc.) fall back to defaults so
+    // a transient API failure does not permanently silence the bot.
     const errorMessage = error instanceof Error ? error.message : String(error);
     const statusSuffix = status ? ` (status ${status})` : "";
     logger.warn(

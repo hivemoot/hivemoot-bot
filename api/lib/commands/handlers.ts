@@ -15,6 +15,7 @@ import {
   createPROperations,
   createRepositoryLabelService,
   loadRepositoryConfig,
+  getDefaultConfig,
 } from "../index.js";
 import { getRepoDiscussionInfo } from "../discussions.js";
 import { getLLMReadiness } from "../llm/provider.js";
@@ -681,7 +682,7 @@ async function handlePreflight(ctx: CommandContext): Promise<CommandResult> {
   // Probot client has all required methods — only the declared type is narrow.
   const octokit = ctx.octokit as any; // Full Probot client at runtime
   const prs = createPROperations(octokit, { appId: ctx.appId });
-  const repoConfig = await loadRepositoryConfig(octokit, ctx.owner, ctx.repo);
+  const repoConfig = (await loadRepositoryConfig(octokit, ctx.owner, ctx.repo)) ?? getDefaultConfig();
 
   const ref: PRRef = {
     owner: ctx.owner,
@@ -798,7 +799,7 @@ async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
 
   const octokit = ctx.octokit as any; // Full Probot client at runtime
   const prs = createPROperations(octokit, { appId: ctx.appId });
-  const repoConfig = await loadRepositoryConfig(octokit, ctx.owner, ctx.repo);
+  const repoConfig = (await loadRepositoryConfig(octokit, ctx.owner, ctx.repo)) ?? getDefaultConfig();
   const ref: PRRef = {
     owner: ctx.owner,
     repo: ctx.repo,
@@ -1421,7 +1422,7 @@ function runLLMDoctorCheck(): DoctorCheckResult {
  */
 async function handleDoctor(ctx: CommandContext): Promise<CommandResult> {
   const octokit = ctx.octokit as unknown as DoctorRepoOctokit;
-  const repoConfig = await loadRepositoryConfig(octokit, ctx.owner, ctx.repo);
+  const repoConfig = (await loadRepositoryConfig(octokit, ctx.owner, ctx.repo)) ?? getDefaultConfig();
 
   const checks: DoctorCheckResult[] = [];
   checks.push(await runDoctorCheck("Labels", async () => runLabelDoctorCheck(ctx)));

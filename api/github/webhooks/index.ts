@@ -108,6 +108,10 @@ export function app(probotApp: Probot): void {
       const issues = createIssueOperations(context.octokit, { appId });
       const governance = createGovernanceService(issues);
       const repoConfig = await loadRepositoryConfig(context.octokit, owner, repo);
+      if (!repoConfig) {
+        context.log.debug(`No config in ${fullName}; skipping issue automation`);
+        return;
+      }
       const hasAutomaticDiscussion = repoConfig.governance.proposals.discussion.exits.some(
         (exit) => exit.type === "auto"
       );
@@ -147,6 +151,10 @@ export function app(probotApp: Probot): void {
         getLinkedIssues(context.octokit, owner, repo, number),
         loadRepositoryConfig(context.octokit, owner, repo),
       ]);
+      if (!repoConfig) {
+        context.log.debug(`No config in ${fullName}; skipping PR automation`);
+        return;
+      }
       let linkedIssues = initialLinkedIssues;
       const hasBodyClosingKeyword = linkedIssues.length === 0
         ? hasSameRepoClosingKeywordRef(context.payload.pull_request.body, { owner, repo })
@@ -237,6 +245,10 @@ export function app(probotApp: Probot): void {
         getLinkedIssues(context.octokit, owner, repo, number),
         loadRepositoryConfig(context.octokit, owner, repo),
       ]);
+      if (!repoConfig) {
+        context.log.debug(`No config in ${fullName}; skipping PR update automation`);
+        return;
+      }
 
       // New commits invalidate CI — optimistically remove merge-ready label
       const prRef = { owner, repo, prNumber: number };
@@ -289,6 +301,10 @@ export function app(probotApp: Probot): void {
         getLinkedIssues(context.octokit, owner, repo, number),
         loadRepositoryConfig(context.octokit, owner, repo),
       ]);
+      if (!repoConfig) {
+        context.log.debug(`No config in ${fullName}; skipping PR edit automation`);
+        return;
+      }
 
       if (repoConfig.governance.pr) {
         await processImplementationIntake({
@@ -368,6 +384,10 @@ export function app(probotApp: Probot): void {
         getLinkedIssues(context.octokit, owner, repo, prNumber),
         loadRepositoryConfig(context.octokit, owner, repo),
       ]);
+      if (!repoConfig) {
+        context.log.debug(`No config in ${fullName}; skipping PR comment intake`);
+        return;
+      }
 
       if (repoConfig.governance.pr) {
         await processImplementationIntake({
@@ -469,9 +489,14 @@ export function app(probotApp: Probot): void {
       const issues = createIssueOperations(context.octokit, { appId });
       const prs = createPROperations(context.octokit, { appId });
 
-      const [linkedIssues, repoConfig] = await Promise.all([
+      const repoConfig = await loadRepositoryConfig(context.octokit, owner, repo);
+      if (!repoConfig) {
+        context.log.debug(`No config in ${fullName}; skipping review automation`);
+        return;
+      }
+
+      const [linkedIssues] = await Promise.all([
         getLinkedIssues(context.octokit, owner, repo, number),
-        loadRepositoryConfig(context.octokit, owner, repo),
         // Leaderboard recalc only on approvals
         isApproval
           ? recalculateLeaderboardForPR(context.octokit, context.log, owner, repo, number)
@@ -524,10 +549,13 @@ export function app(probotApp: Probot): void {
       const appId = getAppId();
       const prs = createPROperations(context.octokit, { appId });
 
-      const [, repoConfig] = await Promise.all([
-        recalculateLeaderboardForPR(context.octokit, context.log, owner, repo, number),
-        loadRepositoryConfig(context.octokit, owner, repo),
-      ]);
+      const repoConfig = await loadRepositoryConfig(context.octokit, owner, repo);
+      if (!repoConfig) {
+        context.log.debug(`No config in ${fullName}; skipping dismissed review automation`);
+        return;
+      }
+
+      await recalculateLeaderboardForPR(context.octokit, context.log, owner, repo, number);
 
       // Dismissed approval may drop below threshold
       if (repoConfig.governance.pr) {
@@ -559,6 +587,10 @@ export function app(probotApp: Probot): void {
       const appId = getAppId();
       const prs = createPROperations(context.octokit, { appId });
       const repoConfig = await loadRepositoryConfig(context.octokit, owner, repo);
+      if (!repoConfig) {
+        context.log.debug(`No config in ${fullName}; skipping label change automation`);
+        return;
+      }
 
       if (repoConfig.governance.pr) {
         const currentLabels = context.payload.pull_request.labels?.map(
@@ -595,6 +627,10 @@ export function app(probotApp: Probot): void {
       const appId = getAppId();
       const prs = createPROperations(context.octokit, { appId });
       const repoConfig = await loadRepositoryConfig(context.octokit, owner, repo);
+      if (!repoConfig) {
+        context.log.debug(`No config in ${fullName}; skipping check_suite automation`);
+        return;
+      }
 
       if (!repoConfig.governance.pr) return;
 
@@ -642,6 +678,10 @@ export function app(probotApp: Probot): void {
       const appId = getAppId();
       const prs = createPROperations(context.octokit, { appId });
       const repoConfig = await loadRepositoryConfig(context.octokit, owner, repo);
+      if (!repoConfig) {
+        context.log.debug(`No config in ${fullName}; skipping check_run automation`);
+        return;
+      }
 
       if (!repoConfig.governance.pr) return;
 
@@ -687,6 +727,10 @@ export function app(probotApp: Probot): void {
       const prs = createPROperations(context.octokit, { appId });
       const repoConfig = await loadRepositoryConfig(context.octokit, owner, repo);
 
+      if (!repoConfig) {
+        context.log.debug(`No config in ${fullName}; skipping status automation`);
+        return;
+      }
       if (!repoConfig.governance.pr?.mergeReady) return;
 
       // Find open PRs with this commit SHA via search

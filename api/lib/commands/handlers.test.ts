@@ -302,9 +302,34 @@ describe("executeCommand", () => {
   });
 
   describe("unknown commands", () => {
-    it("should ignore unknown command verbs", async () => {
-      const result = await executeCommand(createCtx({ verb: "unknown" }));
+    it("should reply to authorized users with a list of available commands", async () => {
+      const ctx = createCtx({ verb: "invalid", octokit: createMockOctokit("admin") });
+      const result = await executeCommand(ctx);
+
+      expect(result).toEqual({ status: "rejected", reason: "Unknown command: /invalid" });
+      // Should react with confused and post a reply
+      expect(ctx.octokit.rest.reactions.createForIssueComment).toHaveBeenCalledWith(
+        expect.objectContaining({ content: "confused" })
+      );
+      expect(ctx.octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.stringContaining("`/invalid` is not a recognized command."),
+        })
+      );
+      expect(ctx.octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.stringContaining("Available commands:"),
+        })
+      );
+    });
+
+    it("should silently ignore unknown commands from unauthorized users", async () => {
+      const ctx = createCtx({ verb: "invalid", octokit: createMockOctokit("read") });
+      const result = await executeCommand(ctx);
+
       expect(result).toEqual({ status: "ignored" });
+      expect(ctx.octokit.rest.reactions.createForIssueComment).not.toHaveBeenCalled();
+      expect(ctx.octokit.rest.issues.createComment).not.toHaveBeenCalled();
     });
   });
 

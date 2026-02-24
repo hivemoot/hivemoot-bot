@@ -1504,10 +1504,27 @@ const COMMAND_HANDLERS: Record<string, (ctx: CommandContext) => Promise<CommandR
 };
 
 /**
+ * Build a reply for an unrecognized command verb.
+ * Lists the available commands so authorized users know what's valid.
+ */
+function buildUnknownCommandReply(ctx: CommandContext): string {
+  const available = Object.keys(COMMAND_HANDLERS)
+    .map((v) => `\`/${v}\``)
+    .join(", ");
+  return [
+    `\`/${ctx.verb}\` is not a recognized command.`,
+    "",
+    `Available commands: ${available}`,
+  ].join("\n");
+}
+
+/**
  * Execute a parsed command.
  *
  * Authorization flow:
- * 1. Check if the verb is recognized → ignore if not
+ * 1. Check if the verb is recognized
+ *    - If not recognized and authorized → react with 😕 and reply with available commands
+ *    - If not recognized and unauthorized → silent ignore (per issue #81)
  * 2. Check sender permissions → silent ignore if not authorized
  * 3. React with 👀 to acknowledge receipt
  * 4. Execute the handler
@@ -1516,7 +1533,15 @@ const COMMAND_HANDLERS: Record<string, (ctx: CommandContext) => Promise<CommandR
 export async function executeCommand(ctx: CommandContext): Promise<CommandResult> {
   const handler = COMMAND_HANDLERS[ctx.verb];
   if (!handler) {
-    // Unknown command — silent ignore (not a command we handle)
+    // Unknown command — check authorization before replying.
+    // Unauthorized users get silent ignore (per issue #81); authorized users
+    // get a list of available commands so they know what went wrong.
+    const authorization = await isAuthorized(ctx);
+    if (authorization.authorized) {
+      await react(ctx, "confused");
+      await reply(ctx, buildUnknownCommandReply(ctx));
+      return { status: "rejected", reason: `Unknown command: /${ctx.verb}` };
+    }
     return { status: "ignored" };
   }
 

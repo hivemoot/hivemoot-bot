@@ -307,7 +307,11 @@ describe("executeCommand", () => {
       const result = await executeCommand(ctx);
 
       expect(result).toEqual({ status: "rejected", reason: "Unknown command: /invalid" });
-      // Should react with confused and post a reply
+      // Should set idempotency marker (eyes), then react with confused and post a reply.
+      expect(ctx.octokit.rest.reactions.createForIssueComment).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ content: "eyes" })
+      );
       expect(ctx.octokit.rest.reactions.createForIssueComment).toHaveBeenCalledWith(
         expect.objectContaining({ content: "confused" })
       );
@@ -330,6 +334,28 @@ describe("executeCommand", () => {
       expect(result).toEqual({ status: "ignored" });
       expect(ctx.octokit.rest.reactions.createForIssueComment).not.toHaveBeenCalled();
       expect(ctx.octokit.rest.issues.createComment).not.toHaveBeenCalled();
+    });
+
+    it("should skip unknown-command retries when eyes marker already exists", async () => {
+      const octokit = createMockOctokit("admin");
+      octokit.rest.issues.listComments.mockResolvedValue({
+        data: [
+          {
+            user: { login: "hivemoot[bot]" },
+            performed_via_github_app: { id: 12345, name: "Hivemoot" },
+          },
+        ],
+      });
+      octokit.rest.reactions.listForIssueComment.mockResolvedValue({
+        data: [{ user: { login: "hivemoot[bot]" } }],
+      });
+
+      const ctx = createCtx({ verb: "invalid", octokit });
+      const result = await executeCommand(ctx);
+
+      expect(result).toEqual({ status: "ignored" });
+      expect(octokit.rest.reactions.createForIssueComment).not.toHaveBeenCalled();
+      expect(octokit.rest.issues.createComment).not.toHaveBeenCalled();
     });
   });
 

@@ -1523,7 +1523,7 @@ function buildUnknownCommandReply(ctx: CommandContext): string {
  *
  * Authorization flow:
  * 1. Check if the verb is recognized
- *    - If not recognized and authorized → react with 😕 and reply with available commands
+ *    - If not recognized and authorized → idempotency check, react with 👀 + 😕, and reply with available commands
  *    - If not recognized and unauthorized → silent ignore (per issue #81)
  * 2. Check sender permissions → silent ignore if not authorized
  * 3. React with 👀 to acknowledge receipt
@@ -1533,11 +1533,18 @@ function buildUnknownCommandReply(ctx: CommandContext): string {
 export async function executeCommand(ctx: CommandContext): Promise<CommandResult> {
   const handler = COMMAND_HANDLERS[ctx.verb];
   if (!handler) {
-    // Unknown command — check authorization before replying.
-    // Unauthorized users get silent ignore (per issue #81); authorized users
-    // get a list of available commands so they know what went wrong.
+    // Unknown command — preserve auth boundary (#81), but keep this path
+    // idempotent under webhook retries by reusing the standard eyes marker.
     const authorization = await isAuthorized(ctx);
     if (authorization.authorized) {
+      if (await alreadyProcessed(ctx)) {
+        ctx.log.info(
+          `Unknown command /${ctx.verb} on comment ${ctx.commentId} already processed (eyes reaction found) — skipping retry`,
+        );
+        return { status: "ignored" };
+      }
+
+      await react(ctx, "eyes");
       await react(ctx, "confused");
       await reply(ctx, buildUnknownCommandReply(ctx));
       return { status: "rejected", reason: `Unknown command: /${ctx.verb}` };

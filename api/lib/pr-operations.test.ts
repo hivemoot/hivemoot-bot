@@ -28,6 +28,7 @@ describe("createPROperations", () => {
         listReviews: vi.fn(),
         listCommits: vi.fn(),
         listReviewComments: vi.fn(),
+        listFiles: vi.fn(),
       },
       issues: {
         get: vi.fn(),
@@ -235,6 +236,7 @@ describe("PROperations", () => {
           listReviews: vi.fn().mockResolvedValue({ data: [] }),
           listCommits: vi.fn().mockResolvedValue({ data: [] }),
           listReviewComments: vi.fn().mockResolvedValue({ data: [] }),
+          listFiles: vi.fn().mockResolvedValue({ data: [] }),
         },
         issues: {
           get: vi.fn().mockResolvedValue({ data: { labels: [] } }),
@@ -386,10 +388,10 @@ describe("PROperations", () => {
   });
 
   describe("removeGovernanceLabels", () => {
-    it("should remove both implementation and merge-ready labels", async () => {
+    it("should remove implementation, merge-ready, and automerge labels", async () => {
       await prOps.removeGovernanceLabels(testRef);
 
-      expect(mockClient.rest.issues.removeLabel).toHaveBeenCalledTimes(2);
+      expect(mockClient.rest.issues.removeLabel).toHaveBeenCalledTimes(3);
       expect(mockClient.rest.issues.removeLabel).toHaveBeenCalledWith({
         owner: "test-org",
         repo: "test-repo",
@@ -401,6 +403,12 @@ describe("PROperations", () => {
         repo: "test-repo",
         issue_number: 42,
         name: LABELS.MERGE_READY,
+      });
+      expect(mockClient.rest.issues.removeLabel).toHaveBeenCalledWith({
+        owner: "test-org",
+        repo: "test-repo",
+        issue_number: 42,
+        name: LABELS.AUTOMERGE,
       });
     });
 

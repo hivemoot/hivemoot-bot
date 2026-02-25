@@ -47,6 +47,7 @@ describe("Implementation Intake", () => {
         listReviews: vi.fn().mockResolvedValue({ data: [] }),
         listCommits: vi.fn().mockResolvedValue({ data: [] }),
         listReviewComments: vi.fn().mockResolvedValue({ data: [] }),
+        listFiles: vi.fn().mockResolvedValue({ data: [] }),
       },
       reactions: {
         listForIssueComment: vi.fn().mockResolvedValue({ data: [] }),
@@ -715,6 +716,7 @@ describe("Intake Methods", () => {
         listReviews: vi.fn().mockResolvedValue({ data: [] }),
         listCommits: vi.fn().mockResolvedValue({ data: [] }),
         listReviewComments: vi.fn().mockResolvedValue({ data: [] }),
+        listFiles: vi.fn().mockResolvedValue({ data: [] }),
       },
       reactions: {
         listForIssueComment: vi.fn().mockResolvedValue({ data: [] }),
@@ -1311,6 +1313,7 @@ describe("Leaderboard race condition fix", () => {
         listReviews: vi.fn().mockResolvedValue({ data: [] }),
         listCommits: vi.fn().mockResolvedValue({ data: [] }),
         listReviewComments: vi.fn().mockResolvedValue({ data: [] }),
+        listFiles: vi.fn().mockResolvedValue({ data: [] }),
       },
       reactions: {
         listForIssueComment: vi.fn().mockResolvedValue({ data: [] }),

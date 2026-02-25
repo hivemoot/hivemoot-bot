@@ -1533,7 +1533,9 @@ export const KNOWN_COMMANDS = Object.keys(COMMAND_HANDLERS);
  * 6. React with ✅ on success, post error comment on rejection
  */
 export async function executeCommand(ctx: CommandContext): Promise<CommandResult> {
-  const handler = COMMAND_HANDLERS[ctx.verb];
+  const handler = Object.prototype.hasOwnProperty.call(COMMAND_HANDLERS, ctx.verb)
+    ? COMMAND_HANDLERS[ctx.verb]
+    : undefined;
 
   // Authorization: only maintainers can use commands
   const authorization = await isAuthorized(ctx);

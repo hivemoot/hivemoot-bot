@@ -358,6 +358,22 @@ describe("executeCommand", () => {
       expect(ctx.octokit.rest.reactions.createForIssueComment).not.toHaveBeenCalled();
       expect(ctx.octokit.rest.issues.createComment).not.toHaveBeenCalled();
     });
+
+    it("should treat inherited verbs as unknown commands", async () => {
+      const ctx = createCtx({ verb: "constructor" });
+      const result = await executeCommand(ctx);
+
+      expect(result.status).toBe("rejected");
+      expect(result).toHaveProperty("reason", "Unknown command: /constructor");
+
+      const reactionCalls = ctx.octokit.rest.reactions.createForIssueComment.mock.calls;
+      expect(reactionCalls).toHaveLength(1);
+      expect(reactionCalls[0][0].content).toBe("confused");
+
+      const replyCall = ctx.octokit.rest.issues.createComment.mock.calls[0];
+      expect(replyCall[0].body).toContain("Unknown command `/constructor`");
+      expect(replyCall[0].body).toContain("Available commands:");
+    });
   });
 
   describe("/vote command", () => {

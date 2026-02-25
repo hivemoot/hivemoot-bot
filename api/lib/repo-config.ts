@@ -53,6 +53,18 @@ export interface MergeReadyConfig {
   minApprovals: number;
 }
 
+// ── Automerge Config ────────────────────────────────────────────────────
+
+export interface AutomergeConfig {
+  dryRun: boolean;
+  allowedPaths: string[];
+  denyPaths: string[];
+  maxFiles: number;
+  maxChangedLines: number;
+  minApprovals: number;
+  requireChecks: boolean;
+}
+
 // ── Standup Config ──────────────────────────────────────────────────────
 
 export interface StandupConfig {
@@ -123,6 +135,7 @@ export interface RepoConfigFile {
       trustedReviewers?: unknown;
       intake?: unknown;
       mergeReady?: unknown;
+      automerge?: unknown;
     };
   };
   standup?: {
@@ -141,6 +154,7 @@ export interface PRConfig {
   trustedReviewers: string[];
   intake: IntakeMethod[];
   mergeReady: MergeReadyConfig | null;
+  automerge: AutomergeConfig | null;
 }
 
 /**
@@ -906,6 +920,189 @@ function parseMergeReadyConfig(
   return { minApprovals };
 }
 
+const DEFAULT_ALLOWED_PATHS = ["**/*.md", "**/*.txt", "docs/**"];
+const DEFAULT_DENY_PATHS = [
+  ".github/**",
+  "package.json",
+  "package-lock.json",
+  "*.lock",
+  "pnpm-lock.yaml",
+  "go.sum",
+  "bun.lockb",
+  "go.work.sum",
+];
+
+/**
+ * Validate and sanitize a path patterns array from config.
+ * Returns a string array clamped to maxPathPatterns entries.
+ * Non-string and empty entries are filtered with warnings.
+ */
+function parsePathPatterns(
+  value: unknown,
+  defaultPatterns: string[],
+  fieldName: string,
+  repoFullName: string
+): string[] {
+  if (value === undefined || value === null) {
+    return defaultPatterns;
+  }
+
+  if (!Array.isArray(value)) {
+    logger.warn(
+      `[${repoFullName}] Invalid ${fieldName}: expected array. Using defaults.`
+    );
+    return defaultPatterns;
+  }
+
+  const maxPatterns = CONFIG_BOUNDS.automerge.maxPathPatterns;
+  const result: string[] = [];
+
+  for (const entry of value) {
+    if (result.length >= maxPatterns) {
+      logger.info(
+        `[${repoFullName}] ${fieldName} truncated to ${maxPatterns} entries`
+      );
+      break;
+    }
+
+    if (typeof entry !== "string" || entry.trim().length === 0) {
+      logger.warn(
+        `[${repoFullName}] Invalid ${fieldName} entry: expected non-empty string. Skipping.`
+      );
+      continue;
+    }
+
+    result.push(entry.trim());
+  }
+
+  return result;
+}
+
+/**
+ * Parse and validate automerge config from the pr section.
+ *
+ * Returns null (feature disabled) when:
+ * - automerge is absent, null, or undefined
+ * - enabled is explicitly false
+ * - trustedReviewers is empty (can't satisfy approval requirement)
+ * - automerge is not a valid object
+ *
+ * dryRun defaults to true (label only, no merge).
+ * requireChecks defaults to true.
+ */
+function parseAutomergeConfig(
+  value: unknown,
+  trustedReviewers: string[],
+  repoFullName: string
+): AutomergeConfig | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+
+  if (typeof value !== "object" || Array.isArray(value)) {
+    logger.warn(
+      `[${repoFullName}] Invalid automerge: expected object. Disabling feature.`
+    );
+    return null;
+  }
+
+  const obj = value as {
+    enabled?: unknown;
+    dryRun?: unknown;
+    allowedPaths?: unknown;
+    denyPaths?: unknown;
+    maxFiles?: unknown;
+    maxChangedLines?: unknown;
+    minApprovals?: unknown;
+    requireChecks?: unknown;
+  };
+
+  // Check enabled flag — absent defaults to true (presence of section = opt-in)
+  if (obj.enabled !== undefined && obj.enabled !== null) {
+    if (typeof obj.enabled !== "boolean") {
+      logger.warn(
+        `[${repoFullName}] Invalid automerge.enabled: expected boolean. Disabling feature.`
+      );
+      return null;
+    }
+    if (!obj.enabled) {
+      return null;
+    }
+  }
+
+  if (trustedReviewers.length === 0) {
+    logger.warn(
+      `[${repoFullName}] automerge configured but trustedReviewers is empty. ` +
+      `Cannot satisfy approval requirement. Disabling feature.`
+    );
+    return null;
+  }
+
+  // Parse dryRun (default true for safe phased rollout)
+  let dryRun = true;
+  if (obj.dryRun !== undefined && obj.dryRun !== null) {
+    if (typeof obj.dryRun === "boolean") {
+      dryRun = obj.dryRun;
+    } else {
+      logger.warn(
+        `[${repoFullName}] Invalid automerge.dryRun: expected boolean. Using default (true).`
+      );
+    }
+  }
+
+  // Parse requireChecks (default true)
+  let requireChecks = true;
+  if (obj.requireChecks !== undefined && obj.requireChecks !== null) {
+    if (typeof obj.requireChecks === "boolean") {
+      requireChecks = obj.requireChecks;
+    } else {
+      logger.warn(
+        `[${repoFullName}] Invalid automerge.requireChecks: expected boolean. Using default (true).`
+      );
+    }
+  }
+
+  const allowedPaths = parsePathPatterns(obj.allowedPaths, DEFAULT_ALLOWED_PATHS, "automerge.allowedPaths", repoFullName);
+  const denyPaths = parsePathPatterns(obj.denyPaths, DEFAULT_DENY_PATHS, "automerge.denyPaths", repoFullName);
+
+  const maxFiles = parseIntValue(
+    obj.maxFiles,
+    CONFIG_BOUNDS.automerge.maxFiles,
+    "automerge.maxFiles",
+    repoFullName
+  );
+
+  const maxChangedLines = parseIntValue(
+    obj.maxChangedLines,
+    CONFIG_BOUNDS.automerge.maxChangedLines,
+    "automerge.maxChangedLines",
+    repoFullName
+  );
+
+  let minApprovals = parseIntValue(
+    obj.minApprovals,
+    CONFIG_BOUNDS.automerge.minApprovals,
+    "automerge.minApprovals",
+    repoFullName
+  );
+  // Clamp to trustedReviewers.length (can't require more than available)
+  minApprovals = clamp(
+    minApprovals,
+    CONFIG_BOUNDS.automerge.minApprovals.min,
+    Math.min(CONFIG_BOUNDS.automerge.minApprovals.max, trustedReviewers.length)
+  );
+
+  return {
+    dryRun,
+    allowedPaths,
+    denyPaths,
+    maxFiles,
+    maxChangedLines,
+    minApprovals,
+    requireChecks,
+  };
+}
+
 /**
  * Parse and validate standup config.
  * Opt-in feature — disabled by default.
@@ -998,12 +1195,14 @@ function parseRepoConfig(raw: unknown, repoFullName: string): EffectiveConfig {
     const trustedReviewers = parseTrustedReviewers(prConfigRaw?.trustedReviewers, repoFullName);
     const intake = parseIntakeMethods(prConfigRaw?.intake, trustedReviewers, repoFullName);
     const mergeReady = parseMergeReadyConfig(prConfigRaw?.mergeReady, trustedReviewers, repoFullName);
+    const automerge = parseAutomergeConfig(prConfigRaw?.automerge, trustedReviewers, repoFullName);
     pr = {
       staleDays: parseIntValue(prConfigRaw?.staleDays, PR_STALE_DAYS_BOUNDS, "pr.staleDays", repoFullName),
       maxPRsPerIssue: parseIntValue(prConfigRaw?.maxPRsPerIssue, MAX_PRS_PER_ISSUE_BOUNDS, "pr.maxPRsPerIssue", repoFullName),
       trustedReviewers,
       intake,
       mergeReady,
+      automerge,
     };
   }
 

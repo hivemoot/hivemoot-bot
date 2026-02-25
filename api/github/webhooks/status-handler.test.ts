@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => {
     createPROperations: vi.fn(),
     loadRepositoryConfig: vi.fn(),
     evaluateMergeReadiness: vi.fn(),
+    evaluateAutomerge: vi.fn(),
   };
 });
 
@@ -26,6 +27,7 @@ vi.mock("../../lib/index.js", () => ({
   loadRepositoryConfig: mocks.loadRepositoryConfig,
   getOpenPRsForIssue: vi.fn(),
   evaluateMergeReadiness: mocks.evaluateMergeReadiness,
+  evaluateAutomerge: mocks.evaluateAutomerge,
 }));
 
 vi.mock("../../lib/graphql-queries.js", () => ({

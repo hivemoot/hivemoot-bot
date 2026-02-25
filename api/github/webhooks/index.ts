@@ -13,6 +13,7 @@ import {
   loadRepositoryConfig,
   getOpenPRsForIssue,
   evaluateMergeReadiness,
+  evaluateAutomerge,
 } from "../../lib/index.js";
 import {
   getLinkedIssues,
@@ -213,6 +214,14 @@ export function app(probotApp: Probot): void {
           trustedReviewers: repoConfig.governance.pr.trustedReviewers,
           intake: repoConfig.governance.pr.intake,
         });
+
+        await evaluateAutomerge({
+          prs,
+          ref: { owner, repo, prNumber: number },
+          config: repoConfig.governance.pr.automerge,
+          trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+          log: context.log,
+        });
       }
     } catch (error) {
       context.log.error({ err: error, pr: number, repo: fullName }, "Failed to process PR");
@@ -250,9 +259,10 @@ export function app(probotApp: Probot): void {
         return;
       }
 
-      // New commits invalidate CI — optimistically remove merge-ready label
+      // New commits invalidate CI — optimistically remove merge-ready and automerge labels
       const prRef = { owner, repo, prNumber: number };
       await prs.removeLabel(prRef, LABELS.MERGE_READY);
+      await prs.removeLabel(prRef, LABELS.AUTOMERGE);
 
       if (repoConfig.governance.pr) {
         await processImplementationIntake({
@@ -268,6 +278,14 @@ export function app(probotApp: Probot): void {
           maxPRsPerIssue: repoConfig.governance.pr.maxPRsPerIssue,
           trustedReviewers: repoConfig.governance.pr.trustedReviewers,
           intake: repoConfig.governance.pr.intake,
+        });
+
+        await evaluateAutomerge({
+          prs,
+          ref: prRef,
+          config: repoConfig.governance.pr.automerge,
+          trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+          log: context.log,
         });
       }
     } catch (error) {
@@ -531,6 +549,14 @@ export function app(probotApp: Probot): void {
           trustedReviewers: repoConfig.governance.pr.trustedReviewers,
           log: context.log,
         });
+
+        await evaluateAutomerge({
+          prs,
+          ref: { owner, repo, prNumber: number },
+          config: repoConfig.governance.pr.automerge,
+          trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+          log: context.log,
+        });
       }
     } catch (error) {
       context.log.error({ err: error, pr: number, repo: fullName }, "Failed to process PR review");
@@ -563,6 +589,14 @@ export function app(probotApp: Probot): void {
           prs,
           ref: { owner, repo, prNumber: number },
           config: repoConfig.governance.pr.mergeReady,
+          trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+          log: context.log,
+        });
+
+        await evaluateAutomerge({
+          prs,
+          ref: { owner, repo, prNumber: number },
+          config: repoConfig.governance.pr.automerge,
           trustedReviewers: repoConfig.governance.pr.trustedReviewers,
           log: context.log,
         });
@@ -646,6 +680,14 @@ export function app(probotApp: Probot): void {
             headSha,
             log: context.log,
           });
+          await evaluateAutomerge({
+            prs,
+            ref: { owner, repo, prNumber: pr.number },
+            config: repoConfig.governance.pr.automerge,
+            trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+            headSha,
+            log: context.log,
+          });
         } catch (error) {
           context.log.error({ err: error, pr: pr.number, repo: fullName }, "Failed to evaluate merge-readiness after check_suite");
           errors.push(error as Error);
@@ -697,6 +739,14 @@ export function app(probotApp: Probot): void {
             headSha,
             log: context.log,
           });
+          await evaluateAutomerge({
+            prs,
+            ref: { owner, repo, prNumber: pr.number },
+            config: repoConfig.governance.pr.automerge,
+            trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+            headSha,
+            log: context.log,
+          });
         } catch (error) {
           context.log.error({ err: error, pr: pr.number, repo: fullName }, "Failed to evaluate merge-readiness after check_run");
           errors.push(error as Error);
@@ -731,7 +781,7 @@ export function app(probotApp: Probot): void {
         context.log.debug(`No config in ${fullName}; skipping status automation`);
         return;
       }
-      if (!repoConfig.governance.pr?.mergeReady) return;
+      if (!repoConfig.governance.pr?.mergeReady && !repoConfig.governance.pr?.automerge) return;
 
       // Find open PRs with this commit SHA via search
       const { data } = await context.octokit.rest.pulls.list({
@@ -754,6 +804,14 @@ export function app(probotApp: Probot): void {
             prs,
             ref: { owner, repo, prNumber: pr.number },
             config: repoConfig.governance.pr.mergeReady,
+            trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+            headSha: sha,
+            log: context.log,
+          });
+          await evaluateAutomerge({
+            prs,
+            ref: { owner, repo, prNumber: pr.number },
+            config: repoConfig.governance.pr.automerge,
             trustedReviewers: repoConfig.governance.pr.trustedReviewers,
             headSha: sha,
             log: context.log,

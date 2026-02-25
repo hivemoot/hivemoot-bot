@@ -142,6 +142,14 @@ governance:
       - method: auto # Pre-ready PRs activate immediately when issue becomes ready (default)
     mergeReady:
       minApprovals: 2
+    automerge:
+      enabled: true
+      dryRun: true
+      allowedPaths: ["**/*.md", "**/*.txt", "docs/**"]
+      maxFiles: 5
+      maxChangedLines: 80
+      minApprovals: 2
+      requireChecks: true
 standup:
   enabled: true
   category: "Hivemoot Reports"
@@ -154,6 +162,7 @@ standup:
 | `governance.pr.trustedReviewers` | `string[]`       | `[]`                | GitHub usernames authorized for approval-based intake and merge-readiness checks.                                                                                                                                                                                                                       |
 | `governance.pr.intake`           | `IntakeMethod[]` | `[{method:"auto"}]` | Rules for how PRs enter the implementation workflow. Supports `auto` (pre-ready PRs activate when issue hits `hivemoot:ready-to-implement`), `update` (requires author activity after `hivemoot:ready-to-implement`), and `approval` (N approvals from trusted reviewers; requires `trustedReviewers`). |
 | `governance.pr.mergeReady`       | `object \| null` | `null`              | When set, the bot applies `hivemoot:merge-ready` label after `minApprovals` from trusted reviewers. Omit to disable.                                                                                                                                                                                    |
+| `governance.pr.automerge`        | `object \| null` | `null`              | When set, classifies PRs for automatic merge based on file paths, file count, changed lines, approvals, and CI. Labels qualifying PRs with `hivemoot:automerge`. `dryRun: true` (default) labels only; `dryRun: false` will also trigger merge (Phase 2). Requires `trustedReviewers`. |
 | `standup.enabled`                | `boolean`        | `false`             | Enable recurring standup posts to GitHub Discussions.                                                                                                                                                                                                                                                   |
 | `standup.category`               | `string`         | `""`                | GitHub Discussions category for standup posts. Required when enabled.                                                                                                                                                                                                                                   |
 

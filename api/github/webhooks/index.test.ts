@@ -3,7 +3,7 @@ import { GovernanceService } from "../../lib/governance.js";
 import { createIssueOperations } from "../../lib/github-client.js";
 import { getLinkedIssues, getOpenPRsForIssue } from "../../lib/graphql-queries.js";
 import { processImplementationIntake, recalculateLeaderboardForPR } from "../../lib/implementation-intake.js";
-import { evaluateMergeReadiness, loadRepositoryConfig } from "../../lib/index.js";
+import { evaluateMergeReadiness, evaluateAutomerge, loadRepositoryConfig } from "../../lib/index.js";
 import { LABELS, MESSAGES, REQUIRED_REPOSITORY_LABELS } from "../../config.js";
 import type { IssueRef } from "../../lib/types.js";
 import type { IncomingMessage, ServerResponse } from "http";
@@ -57,10 +57,12 @@ vi.mock("../../lib/index.js", async () => {
           trustedReviewers: [],
           intake: {},
           mergeReady: {},
+          automerge: null,
         },
       },
     }),
     evaluateMergeReadiness: vi.fn().mockResolvedValue(undefined),
+    evaluateAutomerge: vi.fn().mockResolvedValue(undefined),
   };
 });
 
@@ -756,6 +758,7 @@ describe("Queen Bot", () => {
           listReviews: vi.fn().mockResolvedValue({ data: [] }),
           listCommits: vi.fn().mockResolvedValue({ data: [] }),
           listReviewComments: vi.fn().mockResolvedValue({ data: [] }),
+          listFiles: vi.fn().mockResolvedValue({ data: [] }),
         },
         checks: {
           listForRef: vi.fn().mockResolvedValue({
@@ -1181,6 +1184,7 @@ describe("Queen Bot", () => {
           listReviews: vi.fn().mockResolvedValue({ data: [] }),
           listCommits: vi.fn().mockResolvedValue({ data: [] }),
           listReviewComments: vi.fn().mockResolvedValue({ data: [] }),
+          listFiles: vi.fn().mockResolvedValue({ data: [] }),
         },
         issues: {
           get: vi.fn().mockResolvedValue({ data: { reactions: { "+1": 0, "-1": 0, confused: 0 } } }),
@@ -1409,6 +1413,7 @@ describe("Queen Bot", () => {
           listReviews: vi.fn().mockResolvedValue({ data: [] }),
           listCommits: vi.fn().mockResolvedValue({ data: [] }),
           listReviewComments: vi.fn().mockResolvedValue({ data: [] }),
+          listFiles: vi.fn().mockResolvedValue({ data: [] }),
         },
         issues: {
           get: vi.fn().mockResolvedValue({ data: { labels: [] } }),
@@ -1567,6 +1572,7 @@ describe("Queen Bot", () => {
           listReviews: vi.fn().mockResolvedValue({ data: [] }),
           listCommits: vi.fn().mockResolvedValue({ data: [] }),
           listReviewComments: vi.fn().mockResolvedValue({ data: [] }),
+          listFiles: vi.fn().mockResolvedValue({ data: [] }),
           list: vi.fn().mockResolvedValue({ data: [] }),
         },
         issues: {
@@ -1812,6 +1818,7 @@ describe("Queen Bot", () => {
           listReviews: vi.fn().mockResolvedValue({ data: [] }),
           listCommits: vi.fn().mockResolvedValue({ data: [] }),
           listReviewComments: vi.fn().mockResolvedValue({ data: [] }),
+          listFiles: vi.fn().mockResolvedValue({ data: [] }),
           list: vi.fn().mockResolvedValue({ data: [] }),
         },
         issues: {
@@ -2157,6 +2164,7 @@ describe("Queen Bot", () => {
           listReviews: vi.fn(),
           listCommits: vi.fn(),
           listReviewComments: vi.fn(),
+          listFiles: vi.fn(),
           list: vi.fn(),
         },
         checks: { listForRef: vi.fn() },

@@ -42,6 +42,12 @@ export const CONFIG_BOUNDS = {
   mergeReady: {
     minApprovals: { min: 1, max: 20, default: 1 },
   },
+  automerge: {
+    maxFiles: { min: 1, max: 50, default: 5 },
+    maxChangedLines: { min: 1, max: 1000, default: 80 },
+    maxPathPatterns: 50,
+    minApprovals: { min: 1, max: 20, default: 2 },
+  },
   llmMaxTokens: {
     min: 500,
     max: 32_768,
@@ -334,6 +340,7 @@ export const LABELS = {
   IMPLEMENTED: "hivemoot:implemented",
   NEEDS_HUMAN: "hivemoot:needs-human",
   MERGE_READY: "hivemoot:merge-ready",
+  AUTOMERGE: "hivemoot:automerge",
 } as const;
 
 export const PRIORITY_LABELS = {
@@ -454,6 +461,11 @@ export const REQUIRED_REPOSITORY_LABELS: readonly RepositoryLabelDefinition[] = 
     name: LABELS.MERGE_READY,
     color: "2ea043",
     description: "Implementation PR meets merge-readiness checks.",
+  },
+  {
+    name: LABELS.AUTOMERGE,
+    color: "7057ff",
+    description: "PR qualifies for automatic merge.",
   },
   {
     name: PRIORITY_LABELS.HIGH,
@@ -588,6 +600,13 @@ This PR isn't tracked yet. Try again after a slot opens.${SIGNATURE}`,
     `# 🐝 Not Ready Yet ⚠️
 
 Issue #${issueNumber} hasn't passed voting. This PR won't be tracked until it does.${SIGNATURE}`,
+
+  /**
+   * Posted to a PR when it links to an issue in a terminal closed state
+   * (rejected, inconclusive, or already implemented).
+   */
+  issueClosedNoTracking: (issueNumber: number) =>
+    `# 🐝 Issue Closed ❌\n\nIssue #${issueNumber} is closed — this PR won't be tracked.${SIGNATURE}`,
 
   /**
    * Posted to a PR when the issue is ready but the PR needs a post-approval update.

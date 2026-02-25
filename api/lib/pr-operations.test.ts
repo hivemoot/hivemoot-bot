@@ -28,6 +28,7 @@ describe("createPROperations", () => {
         listReviews: vi.fn(),
         listCommits: vi.fn(),
         listReviewComments: vi.fn(),
+        listFiles: vi.fn(),
       },
       issues: {
         get: vi.fn(),
@@ -235,6 +236,7 @@ describe("PROperations", () => {
           listReviews: vi.fn().mockResolvedValue({ data: [] }),
           listCommits: vi.fn().mockResolvedValue({ data: [] }),
           listReviewComments: vi.fn().mockResolvedValue({ data: [] }),
+          listFiles: vi.fn().mockResolvedValue({ data: [] }),
         },
         issues: {
           get: vi.fn().mockResolvedValue({ data: { labels: [] } }),
@@ -386,10 +388,10 @@ describe("PROperations", () => {
   });
 
   describe("removeGovernanceLabels", () => {
-    it("should remove both implementation and merge-ready labels", async () => {
+    it("should remove implementation, merge-ready, and automerge labels", async () => {
       await prOps.removeGovernanceLabels(testRef);
 
-      expect(mockClient.rest.issues.removeLabel).toHaveBeenCalledTimes(2);
+      expect(mockClient.rest.issues.removeLabel).toHaveBeenCalledTimes(3);
       expect(mockClient.rest.issues.removeLabel).toHaveBeenCalledWith({
         owner: "test-org",
         repo: "test-repo",
@@ -401,6 +403,12 @@ describe("PROperations", () => {
         repo: "test-repo",
         issue_number: 42,
         name: LABELS.MERGE_READY,
+      });
+      expect(mockClient.rest.issues.removeLabel).toHaveBeenCalledWith({
+        owner: "test-org",
+        repo: "test-repo",
+        issue_number: 42,
+        name: LABELS.AUTOMERGE,
       });
     });
 
@@ -1224,6 +1232,93 @@ describe("PROperations", () => {
       );
 
       expect(result).toBe(false);
+    });
+  });
+
+  describe("listFiles", () => {
+    it("should return files from a single page", async () => {
+      const files = [
+        { filename: "README.md", additions: 5, deletions: 0, changes: 5, status: "modified" },
+        { filename: "docs/guide.md", additions: 10, deletions: 2, changes: 12, status: "modified" },
+      ];
+      vi.mocked(mockClient.rest.pulls.listFiles).mockResolvedValue({ data: files });
+
+      const result = await prOps.listFiles(testRef);
+
+      expect(result).toEqual(files);
+      expect(mockClient.rest.pulls.listFiles).toHaveBeenCalledWith({
+        owner: "test-org",
+        repo: "test-repo",
+        pull_number: 42,
+        per_page: 100,
+        page: 1,
+      });
+    });
+
+    it("should paginate across multiple pages", async () => {
+      const page1 = Array.from({ length: 100 }, (_, i) => ({
+        filename: `file-${i}.md`,
+        additions: 1,
+        deletions: 0,
+        changes: 1,
+        status: "added",
+      }));
+      const page2 = [
+        { filename: "file-100.md", additions: 1, deletions: 0, changes: 1, status: "added" },
+      ];
+
+      vi.mocked(mockClient.rest.pulls.listFiles)
+        .mockResolvedValueOnce({ data: page1 })
+        .mockResolvedValueOnce({ data: page2 });
+
+      const result = await prOps.listFiles(testRef);
+
+      expect(result).toHaveLength(101);
+      expect(mockClient.rest.pulls.listFiles).toHaveBeenCalledTimes(2);
+    });
+
+    it("should stop at maxPages", async () => {
+      const fullPage = Array.from({ length: 100 }, (_, i) => ({
+        filename: `file-${i}.md`,
+        additions: 1,
+        deletions: 0,
+        changes: 1,
+        status: "added",
+      }));
+
+      vi.mocked(mockClient.rest.pulls.listFiles).mockResolvedValue({ data: fullPage });
+
+      const result = await prOps.listFiles(testRef, { maxPages: 2 });
+
+      expect(result).toHaveLength(200);
+      expect(mockClient.rest.pulls.listFiles).toHaveBeenCalledTimes(2);
+    });
+
+    it("should early-exit when file count exceeds threshold", async () => {
+      const files = Array.from({ length: 10 }, (_, i) => ({
+        filename: `file-${i}.md`,
+        additions: 1,
+        deletions: 0,
+        changes: 1,
+        status: "added",
+      }));
+
+      vi.mocked(mockClient.rest.pulls.listFiles).mockResolvedValue({ data: files });
+
+      const result = await prOps.listFiles(testRef, { earlyExitThreshold: 5 });
+
+      expect(result).toHaveLength(10);
+      // Only one page fetched — early exit after exceeding threshold
+      expect(mockClient.rest.pulls.listFiles).toHaveBeenCalledTimes(1);
+    });
+
+    it("should return empty array when PR has no files", async () => {
+      vi.mocked(mockClient.rest.pulls.listFiles).mockResolvedValue({ data: [] });
+
+      const result = await prOps.listFiles(testRef);
+
+      expect(result).toEqual([]);
+      expect(mockClient.rest.pulls.listFiles).toHaveBeenCalledTimes(1);
     });
   });
 });

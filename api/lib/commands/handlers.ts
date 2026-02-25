@@ -15,6 +15,7 @@ import {
   createPROperations,
   createRepositoryLabelService,
   loadRepositoryConfig,
+  getDefaultConfig,
 } from "../index.js";
 import { getRepoDiscussionInfo } from "../discussions.js";
 import { getLLMReadiness } from "../llm/provider.js";
@@ -26,6 +27,8 @@ import { CommitMessageGenerator, formatCommitMessage } from "../llm/commit-messa
 import type { PRContext } from "../llm/types.js";
 import type { IssueRef, PRRef } from "../types.js";
 import type { EffectiveConfig } from "../repo-config.js";
+import { getErrorStatus } from "../github-client.js";
+import { isTransientError } from "../transient-error.js";
 
 /**
  * Minimal interface for the octokit client needed by command handlers.
@@ -53,6 +56,7 @@ export interface CommandOctokit {
         comment_id: number;
         content: "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
         per_page?: number;
+        page?: number;
       }) => Promise<{ data: Array<{ user: { login: string } | null }> }>;
     };
     issues: {
@@ -68,6 +72,18 @@ export interface CommandOctokit {
         comment_id: number;
         body: string;
       }) => Promise<unknown>;
+      listComments: (params: {
+        owner: string;
+        repo: string;
+        issue_number: number;
+        per_page?: number;
+        page?: number;
+      }) => Promise<{
+        data: Array<{
+          user: { login: string } | null;
+          performed_via_github_app?: { id: number; name: string } | null;
+        }>;
+      }>;
     };
   };
 }
@@ -128,6 +144,8 @@ type CommandFailureClassification = "permission" | "validation" | "transient" | 
 interface AuthorizationResult {
   authorized: boolean;
   permission: string | null;
+  /** Set when the auth check itself failed due to a transient error. */
+  transientError?: unknown;
 }
 
 interface CommandLogContext {
@@ -144,6 +162,10 @@ interface CommandLogContext {
 /**
  * Check if the sender has sufficient repo permissions to run commands.
  * Returns authorization status and the sender's resolved permission (when known).
+ *
+ * Transient errors (ECONNRESET, 429, 5xx) are surfaced via `transientError`
+ * so executeCommand() can post user-visible feedback instead of silently
+ * denying the command.
  */
 async function isAuthorized(ctx: CommandContext): Promise<AuthorizationResult> {
   try {
@@ -157,8 +179,17 @@ async function isAuthorized(ctx: CommandContext): Promise<AuthorizationResult> {
       permission: data.permission,
     };
   } catch (error) {
-    // If we can't check permissions (e.g., user is not a collaborator), deny.
-    // Log so persistent failures (expired token, rate limit) are visible.
+    // Surface transient errors so executeCommand() can post feedback
+    // instead of silently dropping the command.
+    if (isTransientError(error)) {
+      ctx.log.error(
+        { err: error, user: ctx.senderLogin, issue: ctx.issueNumber },
+        `Permission check hit transient error for ${ctx.senderLogin} — surfacing to user`,
+      );
+      return { authorized: false, permission: null, transientError: error };
+    }
+
+    // Non-transient failures (e.g., 404 = user is not a collaborator) → deny.
     ctx.log.error(
       { err: error, user: ctx.senderLogin, issue: ctx.issueNumber },
       `Permission check failed for ${ctx.senderLogin} — denying command`,
@@ -167,24 +198,19 @@ async function isAuthorized(ctx: CommandContext): Promise<AuthorizationResult> {
   }
 }
 
-function getErrorStatus(error: unknown): number | null {
-  if (typeof error !== "object" || error === null || !("status" in error)) {
-    return null;
-  }
-  const status = (error as { status?: unknown }).status;
-  return typeof status === "number" ? status : null;
-}
 
 function classifyCommandFailure(error: unknown): CommandFailureClassification {
+  // Delegate to isTransientError() so network-level codes (ECONNRESET, etc.)
+  // are classified as "transient" — not just HTTP 429/5xx.
+  if (isTransientError(error)) {
+    return "transient";
+  }
   const status = getErrorStatus(error);
   if (status === 401 || status === 403) {
     return "permission";
   }
   if (status === 400 || status === 404 || status === 409 || status === 422) {
     return "validation";
-  }
-  if (status === 429 || (status !== null && status >= 500)) {
-    return "transient";
   }
   return "unexpected";
 }
@@ -286,23 +312,101 @@ async function reply(ctx: CommandContext, body: string): Promise<void> {
  * Check if the bot has already reacted with 👀 to this comment.
  * Used as an idempotency guard against webhook retries — if we already
  * processed a command (indicated by our eyes reaction), skip re-execution.
+ *
+ * Security: Only trust reactions from THIS app's bot identity, not any [bot].
+ * This prevents unrelated bots from suppressing command execution.
  */
 async function alreadyProcessed(ctx: CommandContext): Promise<boolean> {
   try {
-    const { data: reactions } = await ctx.octokit.rest.reactions.listForIssueComment({
-      owner: ctx.owner,
-      repo: ctx.repo,
-      comment_id: ctx.commentId,
-      content: "eyes",
-      per_page: 100,
-    });
-    // Check if any eyes reaction was created by our app's bot account.
+    // Resolve this app's bot login from comments authored via this app.
     // GitHub App bot usernames follow the pattern "<app-slug>[bot]".
-    return reactions.some((r) => r.user?.login.endsWith("[bot]"));
-  } catch {
+    const botLogin = await resolveAppBotLogin(ctx);
+    if (!botLogin) {
+      // Can't resolve bot identity — proceed to avoid silently dropping commands
+      ctx.log.info("Could not resolve app bot login for idempotency check — proceeding");
+      return false;
+    }
+
+    const perPage = 100;
+    let page = 1;
+
+    while (true) {
+      const { data: reactions } = await ctx.octokit.rest.reactions.listForIssueComment({
+        owner: ctx.owner,
+        repo: ctx.repo,
+        comment_id: ctx.commentId,
+        content: "eyes",
+        per_page: perPage,
+        page,
+      });
+
+      // Only skip if THIS app's bot left the eyes reaction.
+      const processedByUs = reactions.some((r) => r.user?.login === botLogin);
+      if (processedByUs) {
+        ctx.log.info({ botLogin, reactionCount: reactions.length, page }, "Found our own eyes reaction — already processed");
+        return true;
+      }
+
+      // Last page reached.
+      if (reactions.length < perPage) {
+        return false;
+      }
+
+      page += 1;
+    }
+  } catch (error) {
     // If we can't check reactions, proceed with execution to avoid
     // silently dropping commands due to transient API failures.
+    ctx.log.error(
+      { err: error, commentId: ctx.commentId },
+      "Idempotency check failed — proceeding to avoid silent command drop",
+    );
     return false;
+  }
+}
+
+/**
+ * Resolve this GitHub App's bot login by finding a comment authored via this app.
+ * Returns the bot username (e.g., "hivemoot[bot]") or undefined if not found.
+ */
+async function resolveAppBotLogin(ctx: CommandContext): Promise<string | undefined> {
+  try {
+    const perPage = 100;
+    let page = 1;
+
+    while (true) {
+      const { data: comments } = await ctx.octokit.rest.issues.listComments({
+        owner: ctx.owner,
+        repo: ctx.repo,
+        issue_number: ctx.issueNumber,
+        per_page: perPage,
+        page,
+      });
+
+      // Find a comment authored by this GitHub App (via performed_via_github_app)
+      // The API response includes performed_via_github_app.id when the app authored the comment
+      for (const comment of comments) {
+        const app = comment.performed_via_github_app;
+        if (app && typeof app === "object" && "id" in app && app.id === ctx.appId) {
+          // The author field contains the bot user
+          if (comment.user) {
+            return comment.user.login;
+          }
+        }
+      }
+
+      if (comments.length < perPage) {
+        return undefined;
+      }
+
+      page += 1;
+    }
+  } catch (error) {
+    ctx.log.error(
+      { err: error, issue: ctx.issueNumber },
+      "Failed to resolve app bot login for idempotency check",
+    );
+    return undefined;
   }
 }
 
@@ -518,7 +622,13 @@ async function handleGather(ctx: CommandContext): Promise<CommandResult> {
   try {
     const context = await issues.getIssueContext(ref);
     const generator = new BlueprintGenerator();
-    const result = await generator.generate(context);
+    const result = await generator.generate(
+      context,
+      undefined,
+      ctx.installationId !== undefined
+        ? { installationId: ctx.installationId }
+        : undefined
+    );
 
     if (result.success) {
       blueprintContent = buildBlueprintContent(result.plan, ctx.senderLogin);
@@ -528,10 +638,10 @@ async function handleGather(ctx: CommandContext): Promise<CommandResult> {
     }
   } catch (error) {
     if (existingAlignmentCommentId) {
-      const reason = error instanceof Error ? error.message : String(error);
+      ctx.log.error({ err: error, issue: ctx.issueNumber }, "Blueprint refresh failed in handleGather");
       await reply(
         ctx,
-        `I couldn't refresh the blueprint just now (${reason}). Keeping the previous blueprint comment unchanged.\n\nPlease retry \`/gather\` shortly.`,
+        `I couldn't refresh the blueprint just now. Please retry \`/gather\` shortly, or contact your administrator if the problem persists.`,
       );
       return { status: "executed", message: "Blueprint refresh failed; previous comment preserved." };
     }
@@ -572,7 +682,7 @@ async function handlePreflight(ctx: CommandContext): Promise<CommandResult> {
   // Probot client has all required methods — only the declared type is narrow.
   const octokit = ctx.octokit as any; // Full Probot client at runtime
   const prs = createPROperations(octokit, { appId: ctx.appId });
-  const repoConfig = await loadRepositoryConfig(octokit, ctx.owner, ctx.repo);
+  const repoConfig = (await loadRepositoryConfig(octokit, ctx.owner, ctx.repo)) ?? getDefaultConfig();
 
   const ref: PRRef = {
     owner: ctx.owner,
@@ -586,8 +696,8 @@ async function handlePreflight(ctx: CommandContext): Promise<CommandResult> {
   const preflight = await evaluatePreflightChecks({
     prs,
     ref,
-    config: repoConfig.governance.pr.mergeReady,
-    trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+    config: repoConfig.governance.pr?.mergeReady ?? null,
+    trustedReviewers: repoConfig.governance.pr?.trustedReviewers ?? [],
     currentLabels,
   });
 
@@ -619,7 +729,13 @@ async function handlePreflight(ctx: CommandContext): Promise<CommandResult> {
           groupEnd: noop,
         },
       });
-      const result = await generator.generate(prContext);
+      const result = await generator.generate(
+        prContext,
+        undefined,
+        ctx.installationId !== undefined
+          ? { installationId: ctx.installationId }
+          : undefined
+      );
 
       if (result.success) {
         const formatted = formatCommitMessage(result.message, ctx.issueNumber);
@@ -683,7 +799,7 @@ async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
 
   const octokit = ctx.octokit as any; // Full Probot client at runtime
   const prs = createPROperations(octokit, { appId: ctx.appId });
-  const repoConfig = await loadRepositoryConfig(octokit, ctx.owner, ctx.repo);
+  const repoConfig = (await loadRepositoryConfig(octokit, ctx.owner, ctx.repo)) ?? getDefaultConfig();
   const ref: PRRef = {
     owner: ctx.owner,
     repo: ctx.repo,
@@ -706,8 +822,8 @@ async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
   const preflight = await evaluatePreflightChecks({
     prs,
     ref,
-    config: repoConfig.governance.pr.mergeReady,
-    trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+    config: repoConfig.governance.pr?.mergeReady ?? null,
+    trustedReviewers: repoConfig.governance.pr?.trustedReviewers ?? [],
     currentLabels,
   });
 
@@ -739,7 +855,13 @@ async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
         groupEnd: noop,
       },
     });
-    const result = await generator.generate(prContext);
+    const result = await generator.generate(
+      prContext,
+      undefined,
+      ctx.installationId !== undefined
+        ? { installationId: ctx.installationId }
+        : undefined
+    );
 
     if (!result.success) {
       body += "### Commit Message\n\n";
@@ -782,8 +904,8 @@ async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
   const freshPreflight = await evaluatePreflightChecks({
     prs,
     ref,
-    config: repoConfig.governance.pr.mergeReady,
-    trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+    config: repoConfig.governance.pr?.mergeReady ?? null,
+    trustedReviewers: repoConfig.governance.pr?.trustedReviewers ?? [],
     currentLabels,
   });
   if (!freshPreflight.allHardChecksPassed) {
@@ -1134,14 +1256,16 @@ async function runConfigDoctorCheck(
       };
     }
 
-    const intakeMethods = repoConfig.governance.pr.intake.map((entry) => entry.method).join(", ");
+    const intakeDetail = repoConfig.governance.pr
+      ? `intake: ${repoConfig.governance.pr.intake.map((entry) => entry.method).join(", ") || "none"}`
+      : "PR workflows: disabled";
     return {
       name: "Config",
       status: "pass",
-      detail: `Loaded \`${configPath}\` (intake: ${intakeMethods || "none"})`,
+      detail: `Loaded \`${configPath}\` (${intakeDetail})`,
     };
   } catch (err) {
-    const status = (err as { status?: number }).status;
+    const status = getErrorStatus(err);
     if (status === 404) {
       return {
         name: "Config",
@@ -1167,6 +1291,14 @@ async function runConfigDoctorCheck(
 }
 
 function runPRWorkflowDoctorCheck(repoConfig: EffectiveConfig): DoctorCheckResult {
+  if (!repoConfig.governance.pr) {
+    return {
+      name: "PR Workflow",
+      status: "pass",
+      detail: "Disabled (no `pr:` section in config)",
+    };
+  }
+
   const intake = repoConfig.governance.pr.intake;
   const trustedReviewers = repoConfig.governance.pr.trustedReviewers;
   const usesApprovalIntake = intake.some((method) => method.method === "approval");
@@ -1333,7 +1465,7 @@ async function handleDoctor(ctx: CommandContext): Promise<CommandResult> {
   }
   const mode = modeOrError.mode;
   const octokit = ctx.octokit as unknown as DoctorRepoOctokit;
-  const repoConfig = await loadRepositoryConfig(octokit, ctx.owner, ctx.repo);
+  const repoConfig = (await loadRepositoryConfig(octokit, ctx.owner, ctx.repo)) ?? getDefaultConfig();
 
   const checks: DoctorCheckResult[] = [];
   checks.push(await runDoctorCheck("Labels", async () => runLabelDoctorCheck(ctx, mode)));
@@ -1404,6 +1536,17 @@ export async function executeCommand(ctx: CommandContext): Promise<CommandResult
   // Authorization: only maintainers can use commands
   const authorization = await isAuthorized(ctx);
   if (!authorization.authorized) {
+    // Transient auth failures get user-visible feedback so the command
+    // isn't silently swallowed by ECONNRESET or rate-limit errors.
+    if (authorization.transientError) {
+      const classification = classifyCommandFailure(authorization.transientError);
+      const failureCode = buildFailureCode(ctx.verb, classification);
+      const correlationId = buildCommandCorrelationId(ctx);
+      await react(ctx, "confused");
+      await reply(ctx, buildCommandFailureReply(ctx, failureCode, correlationId, classification));
+      return { status: "rejected", reason: `Auth check failed: ${failureCode}` };
+    }
+
     // Per issue #81: "for everyone else this should be ignored"
     ctx.log.info(
       `Command /${ctx.verb} from unauthorized user ${ctx.senderLogin} on #${ctx.issueNumber} — ignoring`,

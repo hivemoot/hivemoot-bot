@@ -51,7 +51,7 @@ describe("BlueprintGenerator", () => {
   describe("when LLM is not configured", () => {
     it("should return failure with reason", async () => {
       const { createModelFromEnv } = await import("./provider.js");
-      vi.mocked(createModelFromEnv).mockReturnValue(null);
+      vi.mocked(createModelFromEnv).mockResolvedValue(null);
 
       const generator = new BlueprintGenerator({ logger: mockLogger });
       const context: IssueContext = {
@@ -142,7 +142,7 @@ describe("BlueprintGenerator", () => {
       const { createModelFromEnv } = await import("./provider.js");
       const { generateObject } = await import("ai");
 
-      vi.mocked(createModelFromEnv).mockReturnValue({
+      vi.mocked(createModelFromEnv).mockResolvedValue({
         model: {} as never,
         config: { provider: "anthropic", model: "test", maxTokens: 2000 },
       });
@@ -200,7 +200,7 @@ describe("BlueprintGenerator", () => {
       const { createModelFromEnv } = await import("./provider.js");
       const { generateObject } = await import("ai");
 
-      vi.mocked(createModelFromEnv).mockReturnValue({
+      vi.mocked(createModelFromEnv).mockResolvedValue({
         model: {} as never,
         config: { provider: "anthropic", model: "test", maxTokens: 2000 },
       });
@@ -258,7 +258,7 @@ describe("BlueprintGenerator", () => {
       const { createModelFromEnv } = await import("./provider.js");
       const { generateObject } = await import("ai");
 
-      vi.mocked(createModelFromEnv).mockReturnValue({
+      vi.mocked(createModelFromEnv).mockResolvedValue({
         model: {} as never,
         config: { provider: "openai", model: "test", maxTokens: 2000 },
       });
@@ -302,7 +302,7 @@ describe("BlueprintGenerator", () => {
       const { createModelFromEnv } = await import("./provider.js");
       const { generateObject } = await import("ai");
 
-      vi.mocked(createModelFromEnv).mockReturnValue({
+      vi.mocked(createModelFromEnv).mockResolvedValue({
         model: {} as never,
         config: { provider: "anthropic", model: "test", maxTokens: 2000 },
       });
@@ -336,7 +336,7 @@ describe("BlueprintGenerator", () => {
       const { generateObject } = await import("ai");
       const { repairMalformedJsonText } = await import("./json-repair.js");
 
-      vi.mocked(createModelFromEnv).mockReturnValue({
+      vi.mocked(createModelFromEnv).mockResolvedValue({
         model: {} as never,
         config: { provider: "anthropic", model: "test", maxTokens: 2000 },
       });
@@ -383,7 +383,7 @@ describe("BlueprintGenerator", () => {
       const { generateObject } = await import("ai");
       const { repairMalformedJsonText } = await import("./json-repair.js");
 
-      vi.mocked(createModelFromEnv).mockReturnValue({
+      vi.mocked(createModelFromEnv).mockResolvedValue({
         model: {} as never,
         config: { provider: "anthropic", model: "test", maxTokens: 2000 },
       });

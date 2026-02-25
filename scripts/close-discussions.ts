@@ -113,14 +113,11 @@ interface RetryableError {
  * error handler rather than being retried transparently.
  */
 export function isRetryableError(error: unknown): boolean {
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    typeof (error as { code: unknown }).code === "string" &&
-    TRANSIENT_NETWORK_CODES.has((error as { code: string }).code)
-  ) {
-    return true;
+  if (typeof error === "object" && error !== null && "code" in error) {
+    const { code } = error as { code?: unknown };
+    if (typeof code === "string" && TRANSIENT_NETWORK_CODES.has(code)) {
+      return true;
+    }
   }
   const err = error as RetryableError;
   return err.status === 502 || err.status === 503 || err.status === 504 || isRateLimitError(error);

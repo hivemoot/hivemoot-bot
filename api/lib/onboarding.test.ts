@@ -31,7 +31,7 @@ function makeClient(): { client: OnboardingClient; mocks: ReturnType<typeof buil
 function buildMocks() {
   return {
     reposGet: vi.fn().mockResolvedValue({
-      data: { default_branch: "main", archived: false },
+      data: { default_branch: "main", archived: false, disabled: false },
     }),
     reposGetContent: vi.fn().mockRejectedValue({ status: 404 }),
     reposCreateOrUpdateFileContents: vi.fn().mockResolvedValue({}),
@@ -78,11 +78,20 @@ describe("OnboardingService.createOnboardingPR", () => {
   });
 
   it("should skip archived repos", async () => {
-    mocks.reposGet.mockResolvedValue({ data: { default_branch: "main", archived: true } });
+    mocks.reposGet.mockResolvedValue({ data: { default_branch: "main", archived: true, disabled: false } });
 
     const result = await service.createOnboardingPR("owner", "repo");
 
     expect(result).toEqual({ skipped: true, reason: "archived" });
+    expect(mocks.pullsCreate).not.toHaveBeenCalled();
+  });
+
+  it("should skip disabled repos", async () => {
+    mocks.reposGet.mockResolvedValue({ data: { default_branch: "main", archived: false, disabled: true } });
+
+    const result = await service.createOnboardingPR("owner", "repo");
+
+    expect(result).toEqual({ skipped: true, reason: "disabled" });
     expect(mocks.pullsCreate).not.toHaveBeenCalled();
   });
 
@@ -193,7 +202,7 @@ describe("OnboardingService.createOnboardingPR", () => {
   });
 
   it("should use the repo's actual default branch (not hardcoded main)", async () => {
-    mocks.reposGet.mockResolvedValue({ data: { default_branch: "master", archived: false } });
+    mocks.reposGet.mockResolvedValue({ data: { default_branch: "master", archived: false, disabled: false } });
 
     await service.createOnboardingPR("owner", "repo");
 

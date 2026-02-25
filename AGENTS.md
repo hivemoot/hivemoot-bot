@@ -78,7 +78,7 @@ PR checks are expected to include:
 - Direct bot comment creation can duplicate content; use helper patterns in `api/lib/bot-comments.ts`.
 - Raw label string comparisons can miss legacy compatibility; use `isLabelMatch()` from `api/config.ts`.
 - Environment variables may include quotes/whitespace in hosted setups; use normalization helpers in `api/lib/env-validation.ts` and `api/lib/llm/env.ts` (`normalizeEnvString`).
-- Vercel functions have execution-time limits based on deployment settings; no `maxDuration` is configured in this repo.
+- Vercel functions are capped at `maxDuration: 120` seconds (set in `vercel.json`). LLM retry sequences budget 105s (`maxTotalElapsedMs` in `retry.ts`), individual LLM calls budget 90s (`perCallTimeoutMs` in `types.ts`). Keep these three values aligned when changing any of them.
 - If `gh` commands fail with `projectCards` GraphQL errors, use explicit `--json` fields or REST fallback commands from `CONTRIBUTING.md`.
 
 ## Security boundaries

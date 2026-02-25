@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { loadRepositoryConfig, getDefaultConfig } from "./repo-config.js";
+import { logger } from "./logger.js";
 import {
   CONFIG_BOUNDS,
   MAX_PRS_PER_ISSUE,
@@ -1461,6 +1462,7 @@ governance:
       });
 
       it("should return pr: null when governance is a string scalar", async () => {
+        const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
         const configYaml = `governance: "not-an-object"`;
         const octokit = createMockOctokit({
           data: {
@@ -1473,9 +1475,12 @@ governance:
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
         expect(config.governance.pr).toBeNull();
+        expect(warnSpy).not.toHaveBeenCalled();
+        warnSpy.mockRestore();
       });
 
       it("should return pr: null when governance is a number scalar", async () => {
+        const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
         const configYaml = `governance: 42`;
         const octokit = createMockOctokit({
           data: {
@@ -1488,9 +1493,12 @@ governance:
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
         expect(config.governance.pr).toBeNull();
+        expect(warnSpy).not.toHaveBeenCalled();
+        warnSpy.mockRestore();
       });
 
       it("should return pr: null when governance is a boolean scalar", async () => {
+        const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
         const configYaml = `governance: true`;
         const octokit = createMockOctokit({
           data: {
@@ -1503,6 +1511,8 @@ governance:
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
         expect(config.governance.pr).toBeNull();
+        expect(warnSpy).not.toHaveBeenCalled();
+        warnSpy.mockRestore();
       });
 
       it("should return pr: null when governance exists but pr: section is absent", async () => {

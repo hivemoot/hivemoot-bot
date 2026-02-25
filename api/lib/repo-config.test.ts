@@ -5,6 +5,7 @@ import {
   MAX_PRS_PER_ISSUE,
   PR_STALE_THRESHOLD_DAYS,
 } from "../config.js";
+import { logger } from "./logger.js";
 
 /**
  * Tests for repo-config.ts
@@ -1479,6 +1480,69 @@ governance:
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
         expect(config.governance.pr).toBeNull();
+      });
+
+      it("should return pr: null without warnings when governance is a string scalar", async () => {
+        const configYaml = `
+governance: "not-an-object"
+`;
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(configYaml),
+            encoding: "base64",
+          },
+        });
+        const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
+        expect(config).not.toBeNull();
+        expect(config?.governance.pr).toBeNull();
+        expect(warnSpy).not.toHaveBeenCalled();
+        warnSpy.mockRestore();
+      });
+
+      it("should return pr: null without warnings when governance is a numeric scalar", async () => {
+        const configYaml = `
+governance: 42
+`;
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(configYaml),
+            encoding: "base64",
+          },
+        });
+        const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
+        expect(config).not.toBeNull();
+        expect(config?.governance.pr).toBeNull();
+        expect(warnSpy).not.toHaveBeenCalled();
+        warnSpy.mockRestore();
+      });
+
+      it("should return pr: null without warnings when governance is a boolean scalar", async () => {
+        const configYaml = `
+governance: true
+`;
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(configYaml),
+            encoding: "base64",
+          },
+        });
+        const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
+        expect(config).not.toBeNull();
+        expect(config?.governance.pr).toBeNull();
+        expect(warnSpy).not.toHaveBeenCalled();
+        warnSpy.mockRestore();
       });
 
       it("should return pr with defaults when pr: section is present but empty", async () => {

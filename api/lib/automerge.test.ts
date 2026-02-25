@@ -15,7 +15,7 @@ function makeConfig(overrides?: Partial<AutomergeConfig>): AutomergeConfig {
     maxFiles: 5,
     maxChangedLines: 80,
     minApprovals: 2,
-    requireCI: true,
+    requireChecks: true,
     ...overrides,
   };
 }
@@ -379,8 +379,8 @@ describe("evaluateAutomerge", () => {
     expect(result).toEqual({ action: "noop", labeled: false });
   });
 
-  it("skips CI check when requireCI is false", async () => {
-    const config = makeConfig({ requireCI: false });
+  it("skips CI check when requireChecks is false", async () => {
+    const config = makeConfig({ requireChecks: false });
     const prs = createMockPROperations({
       listFiles: vi.fn().mockResolvedValue([makeFile("README.md", 5)]),
       getApproverLogins: vi.fn().mockResolvedValue(new Set(["alice", "bob"])),
@@ -428,7 +428,7 @@ describe("evaluateAutomerge", () => {
   });
 
   it("uses pre-fetched currentLabels when provided", async () => {
-    const config = makeConfig({ requireCI: false });
+    const config = makeConfig({ requireChecks: false });
     const prs = createMockPROperations({
       listFiles: vi.fn().mockResolvedValue([makeFile("README.md", 5)]),
       getApproverLogins: vi.fn().mockResolvedValue(new Set(["alice", "bob"])),

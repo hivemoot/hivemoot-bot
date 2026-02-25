@@ -62,7 +62,7 @@ export interface AutomergeConfig {
   maxFiles: number;
   maxChangedLines: number;
   minApprovals: number;
-  requireCI: boolean;
+  requireChecks: boolean;
 }
 
 // ── Standup Config ──────────────────────────────────────────────────────
@@ -988,7 +988,7 @@ function parsePathPatterns(
  * - automerge is not a valid object
  *
  * dryRun defaults to true (label only, no merge).
- * requireCI defaults to true.
+ * requireChecks defaults to true.
  */
 function parseAutomergeConfig(
   value: unknown,
@@ -1014,7 +1014,7 @@ function parseAutomergeConfig(
     maxFiles?: unknown;
     maxChangedLines?: unknown;
     minApprovals?: unknown;
-    requireCI?: unknown;
+    requireChecks?: unknown;
   };
 
   // Check enabled flag — absent defaults to true (presence of section = opt-in)
@@ -1050,14 +1050,14 @@ function parseAutomergeConfig(
     }
   }
 
-  // Parse requireCI (default true)
-  let requireCI = true;
-  if (obj.requireCI !== undefined && obj.requireCI !== null) {
-    if (typeof obj.requireCI === "boolean") {
-      requireCI = obj.requireCI;
+  // Parse requireChecks (default true)
+  let requireChecks = true;
+  if (obj.requireChecks !== undefined && obj.requireChecks !== null) {
+    if (typeof obj.requireChecks === "boolean") {
+      requireChecks = obj.requireChecks;
     } else {
       logger.warn(
-        `[${repoFullName}] Invalid automerge.requireCI: expected boolean. Using default (true).`
+        `[${repoFullName}] Invalid automerge.requireChecks: expected boolean. Using default (true).`
       );
     }
   }
@@ -1099,7 +1099,7 @@ function parseAutomergeConfig(
     maxFiles,
     maxChangedLines,
     minApprovals,
-    requireCI,
+    requireChecks,
   };
 }
 

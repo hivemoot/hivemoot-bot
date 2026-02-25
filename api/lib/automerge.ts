@@ -6,7 +6,7 @@
  * 2. File count within maxFiles threshold
  * 3. Total changed lines within maxChangedLines threshold
  * 4. Minimum approvals from trusted reviewers
- * 5. CI checks passing (when requireCI is true)
+ * 5. CI checks passing (when requireChecks is true)
  *
  * All conditions must pass before the `hivemoot:automerge` label is applied.
  * Phase 1 (dryRun: true) = label only, no merge action.
@@ -149,7 +149,7 @@ export function classifyFiles(
  * 1. Config null → skip
  * 2. Fetch files → classify (file count, changed lines, path rules)
  * 3. Count trusted approvals → check ≥ minApprovals
- * 4. If requireCI → check CI via isCIPassing()
+ * 4. If requireChecks → check CI via isCIPassing()
  * 5. All pass → add label; any fail → remove label if present
  *
  * Idempotent: safe to call multiple times for the same PR.
@@ -197,7 +197,7 @@ export async function evaluateAutomerge(
   }
 
   // 4. Check CI if required
-  if (config.requireCI) {
+  if (config.requireChecks) {
     let headSha = params.headSha;
     if (!headSha) {
       const pr = await prs.get(ref);

@@ -2248,7 +2248,7 @@ governance:
         const automerge = config!.governance.pr!.automerge;
         expect(automerge).not.toBeNull();
         expect(automerge!.dryRun).toBe(true);
-        expect(automerge!.requireCI).toBe(true);
+        expect(automerge!.requireChecks).toBe(true);
         expect(automerge!.maxFiles).toBe(5);
         expect(automerge!.maxChangedLines).toBe(80);
         expect(automerge!.minApprovals).toBe(2);
@@ -2296,7 +2296,7 @@ governance:
         expect(config!.governance.pr!.automerge!.dryRun).toBe(false);
       });
 
-      it("should parse requireCI as false", async () => {
+      it("should parse requireChecks as false", async () => {
         const octokit = createMockOctokit({
           data: {
             type: "file",
@@ -2305,13 +2305,13 @@ governance:
   pr:
     trustedReviewers: ["alice"]
     automerge:
-      requireCI: false
+      requireChecks: false
 `),
           },
         });
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
-        expect(config!.governance.pr!.automerge!.requireCI).toBe(false);
+        expect(config!.governance.pr!.automerge!.requireChecks).toBe(false);
       });
 
       it("should clamp maxFiles to bounds", async () => {

@@ -135,6 +135,11 @@ governance:
       exits:
         - type: auto
           afterMinutes: 1440
+  alignment:
+    autoGather:
+      enabled: true
+      minNewComments: 5   # 1-100; default 5
+      cooldownMinutes: 60 # 5-10080; default 60
   pr:
     staleDays: 3
     maxPRsPerIssue: 3
@@ -168,6 +173,9 @@ standup:
 | `governance.pr.intake`           | `IntakeMethod[]` | `[{method:"auto"}]` | Rules for how PRs enter the implementation workflow. Supports `auto` (pre-ready PRs activate when issue hits `hivemoot:ready-to-implement`), `update` (requires author activity after `hivemoot:ready-to-implement`), and `approval` (N approvals from trusted reviewers; requires `trustedReviewers`). |
 | `governance.pr.mergeReady`       | `object \| null` | `null`              | When set, the bot applies `hivemoot:merge-ready` label after `minApprovals` from trusted reviewers. Omit to disable.                                                                                                                                                                                    |
 | `governance.pr.automerge`        | `object \| null` | `null`              | When set, classifies PRs for automatic merge based on file paths, file count, changed lines, approvals, and CI. Labels qualifying PRs with `hivemoot:automerge`. `dryRun: true` (default) labels only; `dryRun: false` will also trigger merge (Phase 2). Requires `trustedReviewers`. |
+| `governance.alignment.autoGather.enabled`          | `boolean` | `false` | Enable automatic `/gather` on discussion issues after N new comments.                                       |
+| `governance.alignment.autoGather.minNewComments`   | `number`  | `5`     | Minimum non-bot comments since last gather before triggering. Range: 1–100.                                 |
+| `governance.alignment.autoGather.cooldownMinutes`  | `number`  | `60`    | Minimum minutes between auto-gather runs per issue. Range: 5–10080 (7 days).                               |
 | `standup.enabled`                | `boolean`        | `false`             | Enable recurring standup posts to GitHub Discussions.                                                                                                                                                                                                                                                   |
 | `standup.category`               | `string`         | `""`                | GitHub Discussions category for standup posts. Required when enabled.                                                                                                                                                                                                                                   |
 

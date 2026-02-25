@@ -82,6 +82,7 @@ export interface OnboardingClient {
         data: {
           default_branch: string;
           archived: boolean;
+          disabled: boolean;
         };
       }>;
       getContent: (params: {
@@ -170,6 +171,9 @@ export class OnboardingService {
     const { data: repoData } = await this.client.rest.repos.get({ owner, repo });
     if (repoData.archived) {
       return { skipped: true, reason: "archived" };
+    }
+    if (repoData.disabled) {
+      return { skipped: true, reason: "disabled" };
     }
 
     const defaultBranch = repoData.default_branch;

@@ -15,6 +15,7 @@ import {
   createPROperations,
   createRepositoryLabelService,
   loadRepositoryConfig,
+  getDefaultConfig,
 } from "../index.js";
 import { getRepoDiscussionInfo } from "../discussions.js";
 import { getLLMReadiness } from "../llm/provider.js";
@@ -27,6 +28,7 @@ import type { PRContext } from "../llm/types.js";
 import { isTransientError } from "../transient-error.js";
 import type { IssueRef, PRRef } from "../types.js";
 import type { EffectiveConfig } from "../repo-config.js";
+import { getErrorStatus } from "../github-client.js";
 
 /**
  * Minimal interface for the octokit client needed by command handlers.
@@ -196,14 +198,6 @@ async function isAuthorized(ctx: CommandContext): Promise<AuthorizationResult> {
   }
 }
 
-
-function getErrorStatus(error: unknown): number | null {
-  if (typeof error !== "object" || error === null || !("status" in error)) {
-    return null;
-  }
-  const status = (error as { status?: unknown }).status;
-  return typeof status === "number" ? status : null;
-}
 
 function classifyCommandFailure(error: unknown): CommandFailureClassification {
   // Delegate to isTransientError() so network-level codes (ECONNRESET, etc.)
@@ -688,7 +682,7 @@ async function handlePreflight(ctx: CommandContext): Promise<CommandResult> {
   // Probot client has all required methods — only the declared type is narrow.
   const octokit = ctx.octokit as any; // Full Probot client at runtime
   const prs = createPROperations(octokit, { appId: ctx.appId });
-  const repoConfig = await loadRepositoryConfig(octokit, ctx.owner, ctx.repo);
+  const repoConfig = (await loadRepositoryConfig(octokit, ctx.owner, ctx.repo)) ?? getDefaultConfig();
 
   const ref: PRRef = {
     owner: ctx.owner,
@@ -702,8 +696,8 @@ async function handlePreflight(ctx: CommandContext): Promise<CommandResult> {
   const preflight = await evaluatePreflightChecks({
     prs,
     ref,
-    config: repoConfig.governance.pr.mergeReady,
-    trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+    config: repoConfig.governance.pr?.mergeReady ?? null,
+    trustedReviewers: repoConfig.governance.pr?.trustedReviewers ?? [],
     currentLabels,
   });
 
@@ -805,7 +799,7 @@ async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
 
   const octokit = ctx.octokit as any; // Full Probot client at runtime
   const prs = createPROperations(octokit, { appId: ctx.appId });
-  const repoConfig = await loadRepositoryConfig(octokit, ctx.owner, ctx.repo);
+  const repoConfig = (await loadRepositoryConfig(octokit, ctx.owner, ctx.repo)) ?? getDefaultConfig();
   const ref: PRRef = {
     owner: ctx.owner,
     repo: ctx.repo,
@@ -828,8 +822,8 @@ async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
   const preflight = await evaluatePreflightChecks({
     prs,
     ref,
-    config: repoConfig.governance.pr.mergeReady,
-    trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+    config: repoConfig.governance.pr?.mergeReady ?? null,
+    trustedReviewers: repoConfig.governance.pr?.trustedReviewers ?? [],
     currentLabels,
   });
 
@@ -910,8 +904,8 @@ async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
   const freshPreflight = await evaluatePreflightChecks({
     prs,
     ref,
-    config: repoConfig.governance.pr.mergeReady,
-    trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+    config: repoConfig.governance.pr?.mergeReady ?? null,
+    trustedReviewers: repoConfig.governance.pr?.trustedReviewers ?? [],
     currentLabels,
   });
   if (!freshPreflight.allHardChecksPassed) {
@@ -1224,14 +1218,16 @@ async function runConfigDoctorCheck(
       };
     }
 
-    const intakeMethods = repoConfig.governance.pr.intake.map((entry) => entry.method).join(", ");
+    const intakeDetail = repoConfig.governance.pr
+      ? `intake: ${repoConfig.governance.pr.intake.map((entry) => entry.method).join(", ") || "none"}`
+      : "PR workflows: disabled";
     return {
       name: "Config",
       status: "pass",
-      detail: `Loaded \`${configPath}\` (intake: ${intakeMethods || "none"})`,
+      detail: `Loaded \`${configPath}\` (${intakeDetail})`,
     };
   } catch (err) {
-    const status = (err as { status?: number }).status;
+    const status = getErrorStatus(err);
     if (status === 404) {
       return {
         name: "Config",
@@ -1257,6 +1253,14 @@ async function runConfigDoctorCheck(
 }
 
 function runPRWorkflowDoctorCheck(repoConfig: EffectiveConfig): DoctorCheckResult {
+  if (!repoConfig.governance.pr) {
+    return {
+      name: "PR Workflow",
+      status: "pass",
+      detail: "Disabled (no `pr:` section in config)",
+    };
+  }
+
   const intake = repoConfig.governance.pr.intake;
   const trustedReviewers = repoConfig.governance.pr.trustedReviewers;
   const usesApprovalIntake = intake.some((method) => method.method === "approval");
@@ -1418,7 +1422,7 @@ function runLLMDoctorCheck(): DoctorCheckResult {
  */
 async function handleDoctor(ctx: CommandContext): Promise<CommandResult> {
   const octokit = ctx.octokit as unknown as DoctorRepoOctokit;
-  const repoConfig = await loadRepositoryConfig(octokit, ctx.owner, ctx.repo);
+  const repoConfig = (await loadRepositoryConfig(octokit, ctx.owner, ctx.repo)) ?? getDefaultConfig();
 
   const checks: DoctorCheckResult[] = [];
   checks.push(await runDoctorCheck("Labels", async () => runLabelDoctorCheck(ctx)));

@@ -585,10 +585,10 @@ export class PROperations {
   async listFiles(
     ref: PRRef,
     opts?: { maxPages?: number; earlyExitThreshold?: number }
-  ): Promise<Array<{ filename: string; additions: number; deletions: number; changes: number; status: string }>> {
+  ): Promise<Array<{ filename: string; additions: number; deletions: number; changes: number; status: string; previous_filename?: string }>> {
     const maxPages = opts?.maxPages ?? 3;
     const threshold = opts?.earlyExitThreshold;
-    const allFiles: Array<{ filename: string; additions: number; deletions: number; changes: number; status: string }> = [];
+    const allFiles: Array<{ filename: string; additions: number; deletions: number; changes: number; status: string; previous_filename?: string }> = [];
     const perPage = 100;
 
     for (let page = 1; page <= maxPages; page++) {

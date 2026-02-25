@@ -56,6 +56,8 @@ interface PRFile {
   deletions: number;
   changes: number;
   status: string;
+  /** Source path for renamed files. Must also pass path checks. */
+  previous_filename?: string;
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -125,12 +127,20 @@ export function classifyFiles(
     };
   }
 
-  // Path rules check — every file must be allowed
+  // Path rules check — every file must be allowed.
+  // For renames, both source and destination paths must pass.
   for (const file of files) {
     if (!isFileAllowed(file.filename, config.allowedPaths, config.denyPaths)) {
       return {
         eligible: false,
         reason: `file not allowed: ${file.filename}`,
+      };
+    }
+
+    if (file.previous_filename && !isFileAllowed(file.previous_filename, config.allowedPaths, config.denyPaths)) {
+      return {
+        eligible: false,
+        reason: `file not allowed: ${file.previous_filename} (renamed to ${file.filename})`,
       };
     }
   }

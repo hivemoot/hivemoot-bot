@@ -196,6 +196,38 @@ describe("classifyFiles", () => {
     expect(result.eligible).toBe(true);
     expect(result.reason).toContain("passed");
   });
+
+  it("rejects renamed file when source path is denied", () => {
+    const files = [
+      {
+        filename: "docs/ci-config.md",
+        additions: 5,
+        deletions: 0,
+        changes: 5,
+        status: "renamed",
+        previous_filename: ".github/ci.yml",
+      },
+    ];
+    const result = classifyFiles(files, config);
+    expect(result.eligible).toBe(false);
+    expect(result.reason).toContain(".github/ci.yml");
+    expect(result.reason).toContain("renamed");
+  });
+
+  it("allows renamed file when both source and destination pass", () => {
+    const files = [
+      {
+        filename: "docs/new-guide.md",
+        additions: 2,
+        deletions: 0,
+        changes: 2,
+        status: "renamed",
+        previous_filename: "docs/old-guide.md",
+      },
+    ];
+    const result = classifyFiles(files, config);
+    expect(result.eligible).toBe(true);
+  });
 });
 
 // ───────────────────────────────────────────────────────────────────────────────

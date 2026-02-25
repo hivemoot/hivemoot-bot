@@ -2388,6 +2388,96 @@ governance:
         expect(config!.governance.pr!.automerge!.maxFiles).toBe(10);
       });
 
+      it("should return null when enabled is non-boolean", async () => {
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(`
+governance:
+  pr:
+    trustedReviewers: ["alice"]
+    automerge:
+      enabled: "yes"
+`),
+          },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config!.governance.pr!.automerge).toBeNull();
+      });
+
+      it("should use default when dryRun is non-boolean", async () => {
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(`
+governance:
+  pr:
+    trustedReviewers: ["alice"]
+    automerge:
+      dryRun: "yes"
+`),
+          },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config!.governance.pr!.automerge!.dryRun).toBe(true);
+      });
+
+      it("should use default when requireChecks is non-boolean", async () => {
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(`
+governance:
+  pr:
+    trustedReviewers: ["alice"]
+    automerge:
+      requireChecks: "always"
+`),
+          },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config!.governance.pr!.automerge!.requireChecks).toBe(true);
+      });
+
+      it("should use defaults when allowedPaths is not an array", async () => {
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(`
+governance:
+  pr:
+    trustedReviewers: ["alice"]
+    automerge:
+      allowedPaths: "**/*.md"
+`),
+          },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config!.governance.pr!.automerge!.allowedPaths).toEqual(["**/*.md", "**/*.txt", "docs/**"]);
+      });
+
+      it("should filter out non-string entries from path patterns", async () => {
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(`
+governance:
+  pr:
+    trustedReviewers: ["alice"]
+    automerge:
+      allowedPaths: ["**/*.md", 42, "", "docs/**"]
+`),
+          },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config!.governance.pr!.automerge!.allowedPaths).toEqual(["**/*.md", "docs/**"]);
+      });
+
       it("should return null for non-object automerge value", async () => {
         const octokit = createMockOctokit({
           data: {

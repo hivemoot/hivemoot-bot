@@ -158,13 +158,16 @@ governance:
   proposals:
     discussion:
       exits:
-        - type: manual
+        - type: auto
+          afterMinutes: 2880
     voting:
       exits:
-        - type: manual
+        - type: auto
+          afterMinutes: 1440
     extendedVoting:
       exits:
-        - type: manual
+        - type: auto
+          afterMinutes: 2880
   pr:
     staleDays: 3
     maxPRsPerIssue: 3

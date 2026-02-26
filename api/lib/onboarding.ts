@@ -232,16 +232,26 @@ export class OnboardingService {
       }
     }
 
-    const { data: pr } = await this.client.rest.pulls.create({
-      owner,
-      repo,
-      title: ONBOARDING_PR_TITLE,
-      body: ONBOARDING_PR_BODY,
-      head: ONBOARDING_BRANCH,
-      base: defaultBranch,
-    });
-
-    return { skipped: false, prNumber: pr.number, prUrl: pr.html_url };
+    try {
+      const { data: pr } = await this.client.rest.pulls.create({
+        owner,
+        repo,
+        title: ONBOARDING_PR_TITLE,
+        body: ONBOARDING_PR_BODY,
+        head: ONBOARDING_BRANCH,
+        base: defaultBranch,
+      });
+      return { skipped: false, prNumber: pr.number, prUrl: pr.html_url };
+    } catch (error) {
+      if (getErrorStatus(error) !== 422) {
+        throw error;
+      }
+      const existingPR = await this.findOpenOnboardingPR(owner, repo, owner);
+      if (existingPR) {
+        return { skipped: true, reason: "pr-exists", prNumber: existingPR.number, prUrl: existingPR.html_url };
+      }
+      throw error;
+    }
   }
 
   private async checkConfigExists(owner: string, repo: string): Promise<boolean> {

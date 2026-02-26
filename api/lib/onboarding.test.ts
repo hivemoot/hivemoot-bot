@@ -223,4 +223,25 @@ describe("OnboardingService.createOnboardingPR", () => {
       per_page: 1,
     });
   });
+
+  it("should handle PR-already-exists (422 on pulls.create) and return skipped", async () => {
+    mocks.pullsList
+      .mockResolvedValueOnce({ data: [] })
+      .mockResolvedValueOnce({
+        data: [{ number: 99, html_url: "https://github.com/owner/repo/pull/99" }],
+      });
+    mocks.pullsCreate.mockRejectedValue({ status: 422 });
+
+    const result = await service.createOnboardingPR("owner", "repo");
+
+    expect(result).toEqual({ skipped: true, reason: "pr-exists", prNumber: 99, prUrl: "https://github.com/owner/repo/pull/99" });
+    expect(mocks.pullsList).toHaveBeenCalledTimes(2);
+  });
+
+  it("should rethrow 422 from pulls.create if re-query finds no PR", async () => {
+    mocks.pullsList.mockResolvedValue({ data: [] });
+    mocks.pullsCreate.mockRejectedValue({ status: 422 });
+
+    await expect(service.createOnboardingPR("owner", "repo")).rejects.toEqual({ status: 422 });
+  });
 });

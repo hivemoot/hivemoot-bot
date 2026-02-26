@@ -10,6 +10,8 @@
  * production (e.g., a quoted ANTHROPIC_API_KEY in a .env file).
  */
 
+import { logger } from "../logger.js";
+
 /**
  * Normalize an environment variable value by trimming whitespace and
  * stripping surrounding matching quotes.
@@ -39,7 +41,7 @@ export function normalizeEnvString(value: string | undefined, name?: string): st
   }
 
   if (normalized !== value && name) {
-    console.warn(`[llm] env var ${name} was normalized (whitespace/quotes removed)`);
+    logger.warn(`[llm] env var ${name} was normalized (whitespace/quotes removed)`);
   }
 
   return normalized.length > 0 ? normalized : undefined;

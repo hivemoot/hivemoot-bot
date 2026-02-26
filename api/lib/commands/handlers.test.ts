@@ -302,9 +302,28 @@ describe("executeCommand", () => {
   });
 
   describe("unknown commands", () => {
-    it("should ignore unknown command verbs", async () => {
-      const result = await executeCommand(createCtx({ verb: "unknown" }));
+    it("should reply with available commands for authorized users", async () => {
+      const ctx = createCtx({ verb: "help" });
+      const result = await executeCommand(ctx);
+
+      expect(result).toEqual({
+        status: "executed",
+        message: "Unknown command /help — available commands posted",
+      });
+      expect(ctx.octokit.rest.issues.createComment).toHaveBeenCalledOnce();
+      const body: string = ctx.octokit.rest.issues.createComment.mock.calls[0][0].body as string;
+      expect(body).toContain("Unknown command: `/help`");
+      expect(body).toContain("Available commands:");
+      expect(body).toContain("`/vote`");
+      expect(body).toContain("`/implement`");
+    });
+
+    it("should silently ignore unknown command verbs from unauthorized users", async () => {
+      const ctx = createCtx({ verb: "help", octokit: createMockOctokit("read") });
+      const result = await executeCommand(ctx);
+
       expect(result).toEqual({ status: "ignored" });
+      expect(ctx.octokit.rest.issues.createComment).not.toHaveBeenCalled();
     });
   });
 

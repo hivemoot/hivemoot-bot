@@ -1470,10 +1470,23 @@ const COMMAND_HANDLERS: Record<string, (ctx: CommandContext) => Promise<CommandR
 };
 
 /**
+ * Build a help reply listing available commands.
+ * Sent to authorized users who use an unrecognized verb.
+ */
+function buildUnknownCommandReply(verb: string): string {
+  const available = Object.keys(COMMAND_HANDLERS)
+    .map((v) => `\`/${v}\``)
+    .join(", ");
+  return [`Unknown command: \`/${verb}\``, "", `Available commands: ${available}`].join("\n");
+}
+
+/**
  * Execute a parsed command.
  *
  * Authorization flow:
- * 1. Check if the verb is recognized → ignore if not
+ * 1. Check if the verb is recognized
+ *    - If not: check authorization — authorized users get an available-commands reply,
+ *      unauthorized users get a silent ignore.
  * 2. Check sender permissions → silent ignore if not authorized
  * 3. React with 👀 to acknowledge receipt
  * 4. Execute the handler
@@ -1482,8 +1495,21 @@ const COMMAND_HANDLERS: Record<string, (ctx: CommandContext) => Promise<CommandR
 export async function executeCommand(ctx: CommandContext): Promise<CommandResult> {
   const handler = COMMAND_HANDLERS[ctx.verb];
   if (!handler) {
-    // Unknown command — silent ignore (not a command we handle)
-    return { status: "ignored" };
+    // Unknown command — check authorization before deciding whether to reply.
+    // Authorized users get a help message; unauthorized users get a silent ignore
+    // so the bot doesn't reveal what commands exist to random commenters.
+    const authorization = await isAuthorized(ctx);
+    if (!authorization.authorized) {
+      ctx.log.info(
+        `Unknown command /${ctx.verb} from unauthorized user ${ctx.senderLogin} on #${ctx.issueNumber} — ignoring`,
+      );
+      return { status: "ignored" };
+    }
+    ctx.log.info(
+      `Unknown command /${ctx.verb} from authorized user ${ctx.senderLogin} on #${ctx.issueNumber} — posting available commands`,
+    );
+    await reply(ctx, buildUnknownCommandReply(ctx.verb));
+    return { status: "executed", message: `Unknown command /${ctx.verb} — available commands posted` };
   }
 
   // Authorization: only maintainers can use commands

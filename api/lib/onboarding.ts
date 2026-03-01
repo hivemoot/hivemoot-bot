@@ -17,36 +17,86 @@ export const ONBOARDING_BRANCH = "hivemoot/configure";
 const ONBOARDING_CONFIG_PATH = ".github/hivemoot.yml";
 const ONBOARDING_COMMIT_MESSAGE = "Add Hivemoot configuration";
 
-const ONBOARDING_CONFIG_CONTENT = `# Hivemoot configuration
-# See https://github.com/hivemoot/hivemoot-bot#configuration for all options.
+const ONBOARDING_CONFIG_CONTENT = `# Hivemoot Configuration
+# Docs: https://github.com/hivemoot/hivemoot-bot#configuration
 #
 # Merging this PR activates Hivemoot governance on this repository.
-# Close without merging to opt out — the bot will not automatically re-create this PR.
+# Close without merging to opt out of auto-governance for now.
 
 version: 1
+
+# ── Team ────────────────────────────────────────────────────────────
+# Roles define agent personas — who they are, not what they do.
+# Customize the roles below or add your own.
+
+team:
+  # onboarding: |
+  #   Read CONTRIBUTING.md before starting work.
+
+  roles:
+    pm:
+      description: "Product manager focused on user value and clarity"
+      instructions: |
+        You think from the user's perspective.
+        Evaluate ideas by the problem they solve and who benefits.
+        Push for clear requirements and well-scoped proposals.
+
+    engineer:
+      description: "Software engineer focused on clean implementation"
+      instructions: |
+        You care about code quality, patterns, and maintainability.
+        Favor simple, proven approaches over clever solutions.
+        Write clean code with good test coverage.
+
+    reviewer:
+      description: "Code reviewer focused on correctness and edge cases"
+      instructions: |
+        You think about what can go wrong.
+        Find edge cases, race conditions, and failure modes others miss.
+        Push for thorough error handling and defensive design.
+
+# ── Governance ──────────────────────────────────────────────────────
+
 governance:
   proposals:
+    # Discussion phase — open conversation before a decision
     discussion:
       exits:
-        - type: auto
-          afterMinutes: 1440  # 24 hours
+        - type: manual
+        # Uncomment for automatic progression after 24 hours:
+        # - type: auto
+        #   afterMinutes: 1440
+
+    # Resolution phase — the group decides whether to proceed
     voting:
       exits:
-        - type: auto
-          afterMinutes: 1440  # 24 hours
+        - type: manual
+        # Uncomment for automatic resolution after 24 hours:
+        # - type: auto
+        #   afterMinutes: 1440
+        #   requires: majority   # "majority" or "unanimous"
+        #   minVoters: 3
+
+    # Extended resolution — second round for ties/inconclusive results
     extendedVoting:
       exits:
-        - type: auto
-          afterMinutes: 1440  # 24 hours
-  pr:
-    staleDays: 3
-    maxPRsPerIssue: 3
-    intake:
-      - method: auto
-    # trustedReviewers:
-    #   - your-github-username
-    # mergeReady:
-    #   minApprovals: 2
+        - type: manual
+        # Uncomment for automatic resolution:
+        # - type: auto
+        #   afterMinutes: 1440
+        #   requires: majority
+        #   minVoters: 3
+
+  # Uncomment the pr: section to enable PR automation (stale warnings, intake, merge-readiness).
+  # When commented out, Hivemoot does not manage PRs at all.
+  # pr:
+  #   staleDays: 3            # Days of inactivity before a PR is marked stale
+  #   maxPRsPerIssue: 3       # Max competing implementations per issue
+  #   trustedReviewers: []    # GitHub usernames whose approvals count for intake/merge-ready
+  #   intake:
+  #     - method: auto        # Pre-ready PRs activate immediately when issue becomes ready (default)
+  #   mergeReady:             # Omit to disable merge-ready automation
+  #     minApprovals: 1
 
 # standup:
 #   enabled: true

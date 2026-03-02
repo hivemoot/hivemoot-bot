@@ -302,9 +302,45 @@ describe("executeCommand", () => {
   });
 
   describe("unknown commands", () => {
-    it("should ignore unknown command verbs", async () => {
-      const result = await executeCommand(createCtx({ verb: "unknown" }));
+    it("should reply with available commands for authorized users", async () => {
+      const ctx = createCtx({ verb: "help" });
+      const result = await executeCommand(ctx);
+
+      expect(result).toEqual({ status: "rejected", reason: "Unknown command: /help" });
+      expect(ctx.octokit.rest.reactions.createForIssueComment).toHaveBeenCalledWith(
+        expect.objectContaining({ content: "confused" }),
+      );
+      expect(ctx.octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.stringContaining("Unknown command: `/help`"),
+        }),
+      );
+      expect(ctx.octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.stringContaining("/vote"),
+        }),
+      );
+    });
+
+    it("should silently ignore unknown command verbs from unauthorized users", async () => {
+      const ctx = createCtx({ verb: "help", octokit: createMockOctokit("read") });
+      const result = await executeCommand(ctx);
+
       expect(result).toEqual({ status: "ignored" });
+      expect(ctx.octokit.rest.reactions.createForIssueComment).not.toHaveBeenCalled();
+      expect(ctx.octokit.rest.issues.createComment).not.toHaveBeenCalled();
+    });
+
+    it("should silently ignore unknown command verbs when auth check fails transiently", async () => {
+      const octokit = createMockOctokit();
+      octokit.rest.repos.getCollaboratorPermissionLevel.mockRejectedValue(
+        Object.assign(new Error("Service unavailable"), { status: 503 }),
+      );
+      const ctx = createCtx({ verb: "help", octokit });
+      const result = await executeCommand(ctx);
+
+      expect(result).toEqual({ status: "ignored" });
+      expect(ctx.octokit.rest.reactions.createForIssueComment).not.toHaveBeenCalled();
     });
   });
 

@@ -119,8 +119,8 @@ export interface CommandContext {
  */
 export type CommandResult =
   | { status: "executed"; message: string }
-  | { status: "ignored" }      // unauthorized or unrecognized
-  | { status: "rejected"; reason: string };  // valid command but invalid state
+  | { status: "ignored" }      // unauthorized, unrecognized+unauthorized, or idempotency skip
+  | { status: "rejected"; reason: string };  // recognized command in invalid state, or unrecognized+authorized
 
 /**
  * Permission levels that are allowed to execute commands.
@@ -1475,21 +1475,31 @@ const COMMAND_HANDLERS: Record<string, (ctx: CommandContext) => Promise<CommandR
  * Execute a parsed command.
  *
  * Authorization flow:
- * 1. Check if the verb is recognized → ignore if not
- * 2. Check sender permissions → silent ignore if not authorized
- * 3. React with 👀 to acknowledge receipt
- * 4. Execute the handler
- * 5. React with ✅ on success, post error comment on rejection
+ * 1. Check sender permissions
+ * 2. Unknown verb + authorized → react 😕, reply with available commands
+ * 3. Unknown verb + unauthorized → silent ignore (per issue #81)
+ * 4. React with 👀 to acknowledge receipt of a known command
+ * 5. Execute the handler
+ * 6. React with ✅ on success, post error comment on rejection
  */
 export async function executeCommand(ctx: CommandContext): Promise<CommandResult> {
   const handler = COMMAND_HANDLERS[ctx.verb];
-  if (!handler) {
-    // Unknown command — silent ignore (not a command we handle)
-    return { status: "ignored" };
-  }
 
   // Authorization: only maintainers can use commands
   const authorization = await isAuthorized(ctx);
+
+  if (!handler) {
+    if (!authorization.authorized || authorization.transientError) {
+      // Unauthorized or indeterminate — silent ignore (per issue #81)
+      return { status: "ignored" };
+    }
+    // Authorized user sent an unknown command — give actionable feedback
+    const available = Object.keys(COMMAND_HANDLERS).map((v) => `\`/${v}\``).join(", ");
+    await react(ctx, "confused");
+    await reply(ctx, `Unknown command: \`/${ctx.verb}\`. Available commands: ${available}.`);
+    return { status: "rejected", reason: `Unknown command: /${ctx.verb}` };
+  }
+
   if (!authorization.authorized) {
     // Transient auth failures get user-visible feedback so the command
     // isn't silently swallowed by ECONNRESET or rate-limit errors.

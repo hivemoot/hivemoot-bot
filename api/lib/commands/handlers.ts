@@ -1469,23 +1469,33 @@ const COMMAND_HANDLERS: Record<string, (ctx: CommandContext) => Promise<CommandR
   squash: handleSquash,
 };
 
+function getKnownCommandHandler(verb: string) {
+  if (Object.hasOwn(COMMAND_HANDLERS, verb)) {
+    return COMMAND_HANDLERS[verb as keyof typeof COMMAND_HANDLERS];
+  }
+  return undefined;
+}
+
+function buildUnknownCommandReply(verb: string): string {
+  const availableCommands = Object.keys(COMMAND_HANDLERS)
+    .sort()
+    .map((command) => `\`/${command}\``)
+    .join(", ");
+  return `Unknown command \`/${verb}\`.\n\nAvailable commands: ${availableCommands}.`;
+}
+
 /**
  * Execute a parsed command.
  *
  * Authorization flow:
- * 1. Check if the verb is recognized → ignore if not
- * 2. Check sender permissions → silent ignore if not authorized
+ * 1. Check sender permissions → silent ignore if not authorized
+ * 2. Check idempotency guard (already reacted with 👀)
  * 3. React with 👀 to acknowledge receipt
- * 4. Execute the handler
- * 5. React with ✅ on success, post error comment on rejection
+ * 4. Route known verbs to a command handler
+ * 5. Unknown verbs get actionable feedback for authorized users
+ * 6. React with ✅ on success, post error comment on rejection
  */
 export async function executeCommand(ctx: CommandContext): Promise<CommandResult> {
-  const handler = COMMAND_HANDLERS[ctx.verb];
-  if (!handler) {
-    // Unknown command — silent ignore (not a command we handle)
-    return { status: "ignored" };
-  }
-
   // Authorization: only maintainers can use commands
   const authorization = await isAuthorized(ctx);
   if (!authorization.authorized) {
@@ -1524,6 +1534,14 @@ export async function executeCommand(ctx: CommandContext): Promise<CommandResult
     logContext,
     `Executing command /${ctx.verb} from ${ctx.senderLogin} on #${ctx.issueNumber}`,
   );
+
+  const handler = getKnownCommandHandler(ctx.verb);
+  if (!handler) {
+    const reason = buildUnknownCommandReply(ctx.verb);
+    await react(ctx, "confused");
+    await reply(ctx, reason);
+    return { status: "rejected", reason };
+  }
 
   try {
     const result = await handler(ctx);

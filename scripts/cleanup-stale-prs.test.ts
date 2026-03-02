@@ -339,6 +339,21 @@ describe("processRepository", () => {
     },
   };
 
+  it("should skip processing when PR workflows are disabled (pr: null)", async () => {
+    const { createPROperations, loadRepositoryConfig } = await import("../api/lib/index.js");
+    vi.mocked(loadRepositoryConfig).mockResolvedValue({
+      ...defaultMockConfig,
+      governance: { ...defaultMockConfig.governance, pr: null },
+    });
+
+    const mockOctokit = {} as Parameters<typeof processRepository>[0];
+    const repo = { owner: { login: "test-org" }, name: "test-repo", full_name: "test-org/test-repo" };
+
+    await processRepository(mockOctokit, repo, testAppId);
+
+    expect(createPROperations).not.toHaveBeenCalled();
+  });
+
   it("should handle empty repository (no implementation PRs)", async () => {
     const { createPROperations, loadRepositoryConfig } = await import("../api/lib/index.js");
     const mockPRs = {
@@ -474,5 +489,21 @@ describe("processRepository", () => {
       "Failed to process PR #2",
       expect.any(Error)
     );
+  });
+
+  it("should skip processing when no config file exists (null config)", async () => {
+    const { createPROperations, loadRepositoryConfig } = await import("../api/lib/index.js");
+    const mockPRs = {
+      findPRsWithLabel: vi.fn().mockResolvedValue([]),
+    };
+    vi.mocked(createPROperations).mockReturnValue(mockPRs as unknown as ReturnType<typeof createPROperations>);
+    vi.mocked(loadRepositoryConfig).mockResolvedValue(null);
+
+    const mockOctokit = {} as Parameters<typeof processRepository>[0];
+    const repo = { owner: { login: "test-org" }, name: "test-repo", full_name: "test-org/test-repo" };
+
+    await processRepository(mockOctokit, repo, testAppId);
+
+    expect(mockPRs.findPRsWithLabel).not.toHaveBeenCalled();
   });
 });

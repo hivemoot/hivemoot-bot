@@ -19,7 +19,7 @@ import type { PROperations } from "./pr-operations.js";
 
 function createMockPrs(overrides: Partial<Record<keyof PROperations, unknown>> = {}): PROperations {
   return {
-    getLabels: vi.fn().mockResolvedValue(["implementation"]),
+    getLabels: vi.fn().mockResolvedValue(["hivemoot:candidate"]),
     getApproverLogins: vi.fn().mockResolvedValue(new Set<string>()),
     get: vi.fn().mockResolvedValue({ headSha: "abc123", mergeable: true }),
     getCheckRunsForRef: vi.fn().mockResolvedValue({ totalCount: 0, checkRuns: [] }),
@@ -67,12 +67,12 @@ describe("evaluateMergeReadiness", () => {
 
     it("should remove merge-ready if implementation label is missing but merge-ready is present", async () => {
       const prs = createMockPrs({
-        getLabels: vi.fn().mockResolvedValue(["merge-ready"]),
+        getLabels: vi.fn().mockResolvedValue(["hivemoot:merge-ready"]),
       });
       const result = await evaluateMergeReadiness(buildParams({ prs }));
 
       expect(result).toEqual({ action: "removed" });
-      expect(prs.removeLabel).toHaveBeenCalledWith(defaultRef, "merge-ready");
+      expect(prs.removeLabel).toHaveBeenCalledWith(defaultRef, "hivemoot:merge-ready");
     });
 
     it("should use pre-fetched labels when provided", async () => {
@@ -115,13 +115,13 @@ describe("evaluateMergeReadiness", () => {
 
     it("should remove merge-ready when approvals drop below threshold", async () => {
       const prs = createMockPrs({
-        getLabels: vi.fn().mockResolvedValue(["implementation", "merge-ready"]),
+        getLabels: vi.fn().mockResolvedValue(["hivemoot:candidate", "hivemoot:merge-ready"]),
         getApproverLogins: vi.fn().mockResolvedValue(new Set<string>()),
       });
       const result = await evaluateMergeReadiness(buildParams({ prs }));
 
       expect(result).toEqual({ action: "removed" });
-      expect(prs.removeLabel).toHaveBeenCalledWith(defaultRef, "merge-ready");
+      expect(prs.removeLabel).toHaveBeenCalledWith(defaultRef, "hivemoot:merge-ready");
     });
 
     it("should count only trusted reviewers from the approvers set", async () => {
@@ -152,14 +152,14 @@ describe("evaluateMergeReadiness", () => {
 
     it("should remove merge-ready when PR has conflicts and label is present", async () => {
       const prs = createMockPrs({
-        getLabels: vi.fn().mockResolvedValue(["implementation", "merge-ready"]),
+        getLabels: vi.fn().mockResolvedValue(["hivemoot:candidate", "hivemoot:merge-ready"]),
         getApproverLogins: vi.fn().mockResolvedValue(new Set(["alice"])),
         get: vi.fn().mockResolvedValue({ headSha: "abc123", mergeable: false }),
       });
       const result = await evaluateMergeReadiness(buildParams({ prs }));
 
       expect(result).toEqual({ action: "removed" });
-      expect(prs.removeLabel).toHaveBeenCalledWith(defaultRef, "merge-ready");
+      expect(prs.removeLabel).toHaveBeenCalledWith(defaultRef, "hivemoot:merge-ready");
     });
 
     it("should pass through when mergeable is null (not yet computed)", async () => {
@@ -377,12 +377,12 @@ describe("evaluateMergeReadiness", () => {
         [{ id: 1, status: "completed", conclusion: "failure" }],
         "pending",
         0,
-        { currentLabels: ["implementation", "merge-ready"] }
+        { currentLabels: ["hivemoot:candidate", "hivemoot:merge-ready"] }
       );
       const result = await evaluateMergeReadiness(params);
 
       expect(result).toEqual({ action: "removed" });
-      expect(params.prs.removeLabel).toHaveBeenCalledWith(defaultRef, "merge-ready");
+      expect(params.prs.removeLabel).toHaveBeenCalledWith(defaultRef, "hivemoot:merge-ready");
     });
 
     it("should use pre-fetched headSha when provided", async () => {
@@ -407,7 +407,7 @@ describe("evaluateMergeReadiness", () => {
 
   describe("label management", () => {
     function buildAllPassingParams(
-      labelOverrides: string[] = ["implementation"]
+      labelOverrides: string[] = ["hivemoot:candidate"]
     ): MergeReadinessParams {
       const prs = createMockPrs({
         getLabels: vi.fn().mockResolvedValue(labelOverrides),
@@ -426,11 +426,11 @@ describe("evaluateMergeReadiness", () => {
       const result = await evaluateMergeReadiness(params);
 
       expect(result).toEqual({ action: "added" });
-      expect(params.prs.addLabels).toHaveBeenCalledWith(defaultRef, ["merge-ready"]);
+      expect(params.prs.addLabels).toHaveBeenCalledWith(defaultRef, ["hivemoot:merge-ready"]);
     });
 
     it("should noop when label already present and conditions still met", async () => {
-      const params = buildAllPassingParams(["implementation", "merge-ready"]);
+      const params = buildAllPassingParams(["hivemoot:candidate", "hivemoot:merge-ready"]);
       const result = await evaluateMergeReadiness(params);
 
       expect(result).toEqual({ action: "noop", labeled: true });

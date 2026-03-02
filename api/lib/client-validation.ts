@@ -138,7 +138,7 @@ export const ISSUE_CLIENT_CHECKS: ValidationCheck[] = [
 export const PR_CLIENT_CHECKS: ValidationCheck[] = [
   {
     path: "rest.pulls",
-    requiredMethods: ["get", "update", "listReviews", "listCommits", "listReviewComments"],
+    requiredMethods: ["get", "update", "listReviews", "listCommits", "listReviewComments", "listFiles"],
   },
   {
     path: "rest.issues",

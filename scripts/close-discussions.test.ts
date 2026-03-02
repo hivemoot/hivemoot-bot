@@ -38,6 +38,8 @@ vi.mock("../api/lib/index.js", () => ({
   })),
   createGovernanceService: vi.fn(),
   getOpenPRsForIssue: vi.fn().mockResolvedValue([]),
+  isAutoDiscussionExit: (exit: { type?: string }) => exit.type === "auto",
+  isAutoVotingExit: (exit: { type?: string }) => exit.type === "auto",
   loadRepositoryConfig: vi.fn(),
   logger: {
     info: vi.fn(),
@@ -56,35 +58,71 @@ vi.mock("../api/lib/env-validation.js", () => ({
 }));
 
 // Import after all mocks are in place
-import { notifyPendingPRs, isRetryableError, withRetry, makeEarlyDecisionCheck, makeDiscussionEarlyCheck, processIssuePhase, isVotingAutomationEnabled, processRepository } from "./close-discussions.js";
+import {
+  notifyPendingPRs,
+  isRetryableError,
+  withRetry,
+  makeEarlyDecisionCheck,
+  makeDiscussionEarlyCheck,
+  processIssuePhase,
+  hasAutoExits,
+  hasAutomaticGovernancePhases,
+  processRepository,
+  reconcileMissingVotingComments,
+  reconcileUnlabeledIssues,
+} from "./close-discussions.js";
 import type { EarlyDecisionDeps, DiscussionEarlyCheckDeps } from "./close-discussions.js";
-import { getOpenPRsForIssue, logger, loadRepositoryConfig, createIssueOperations } from "../api/lib/index.js";
+import { getOpenPRsForIssue, logger, loadRepositoryConfig, createIssueOperations, createGovernanceService } from "../api/lib/index.js";
 import { PR_MESSAGES } from "../api/config.js";
-import type { VotingOutcome, IssueRef, ValidatedVoteResult, DiscussionExit } from "../api/lib/index.js";
-import type { VotingExit } from "../api/lib/repo-config.js";
+import type {
+  VotingOutcome,
+  IssueRef,
+  ValidatedVoteResult,
+  DiscussionAutoExit,
+  VotingAutoExit,
+} from "../api/lib/index.js";
 
 const mockGetOpenPRsForIssue = vi.mocked(getOpenPRsForIssue);
 const mockLoadRepositoryConfig = vi.mocked(loadRepositoryConfig);
 const mockCreateIssueOperations = vi.mocked(createIssueOperations);
+const mockCreateGovernanceService = vi.mocked(createGovernanceService);
+
+function buildIterator<T>(pages: T[][]): AsyncIterable<{ data: T[] }> {
+  return {
+    async *[Symbol.asyncIterator]() {
+      for (const page of pages) {
+        yield { data: page };
+      }
+    },
+  };
+}
 
 describe("close-discussions script", () => {
-  function makeRepoConfig(method: "manual" | "hivemoot_vote") {
+  function makeRepoConfig(mode: "manual" | "auto") {
+    const discussionExits =
+      mode === "auto"
+        ? [{ type: "auto", afterMs: 60_000, minReady: 0, requiredReady: { minCount: 0, users: [] } }]
+        : [{ type: "manual" }];
+    const votingExits =
+      mode === "auto"
+        ? [{ type: "auto", afterMs: 60_000, requires: "majority", minVoters: 0, requiredVoters: { minCount: 0, voters: [] } }]
+        : [{ type: "manual" }];
+
     return {
       version: 1,
       governance: {
         proposals: {
-          decision: { method },
           discussion: {
-            durationMs: 60_000,
-            exits: [{ afterMs: 60_000, minReady: 0, requiredReady: { minCount: 0, users: [] } }],
+            durationMs: mode === "auto" ? 60_000 : 0,
+            exits: discussionExits,
           },
           voting: {
-            durationMs: 60_000,
-            exits: [{ afterMs: 60_000, requires: "majority", minVoters: 0, requiredVoters: { minCount: 0, voters: [] } }],
+            durationMs: mode === "auto" ? 60_000 : 0,
+            exits: votingExits,
           },
           extendedVoting: {
-            durationMs: 60_000,
-            exits: [{ afterMs: 60_000, requires: "majority", minVoters: 0, requiredVoters: { minCount: 0, voters: [] } }],
+            durationMs: mode === "auto" ? 60_000 : 0,
+            exits: votingExits,
           },
         },
         pr: {
@@ -99,21 +137,353 @@ describe("close-discussions script", () => {
     } as any;
   }
 
-  describe("isVotingAutomationEnabled", () => {
-    it("should return true for hivemoot_vote method", () => {
-      const config = {
-        governance: { proposals: { decision: { method: "hivemoot_vote" } } },
-      } as any;
-
-      expect(isVotingAutomationEnabled(config)).toBe(true);
+  describe("hasAutoExits", () => {
+    it("should return true when at least one auto exit exists", () => {
+      expect(hasAutoExits([{ type: "manual" }, { type: "auto" }])).toBe(true);
     });
 
-    it("should return false for manual method", () => {
-      const config = {
-        governance: { proposals: { decision: { method: "manual" } } },
+    it("should return false when all exits are manual", () => {
+      expect(hasAutoExits([{ type: "manual" }])).toBe(false);
+    });
+  });
+
+  describe("hasAutomaticGovernancePhases", () => {
+    it("should return false when all phases are manual", () => {
+      expect(hasAutomaticGovernancePhases(makeRepoConfig("manual"))).toBe(false);
+    });
+
+    it("should return true when any phase has auto exits", () => {
+      expect(hasAutomaticGovernancePhases(makeRepoConfig("auto"))).toBe(true);
+    });
+  });
+
+  describe("reconcileMissingVotingComments", () => {
+    const owner = "test-org";
+    const repoName = "test-repo";
+
+    it("should post voting comment for issues missing it", async () => {
+      const mockGovernance = {
+        postVotingComment: vi.fn().mockResolvedValue("posted"),
       } as any;
 
-      expect(isVotingAutomationEnabled(config)).toBe(false);
+      const fakeOctokit = {
+        rest: { issues: { listForRepo: vi.fn() } },
+        paginate: {
+          iterator: vi.fn().mockReturnValue(
+            buildIterator([[{ number: 10 }, { number: 20 }]])
+          ),
+        },
+      } as any;
+
+      const count = await reconcileMissingVotingComments(fakeOctokit, owner, repoName, mockGovernance);
+
+      expect(count).toBe(2);
+      expect(mockGovernance.postVotingComment).toHaveBeenCalledTimes(2);
+      expect(mockGovernance.postVotingComment).toHaveBeenCalledWith({ owner, repo: repoName, issueNumber: 10 });
+      expect(mockGovernance.postVotingComment).toHaveBeenCalledWith({ owner, repo: repoName, issueNumber: 20 });
+    });
+
+    it("should skip issues where voting comment already exists", async () => {
+      const mockGovernance = {
+        postVotingComment: vi.fn().mockResolvedValue("skipped"),
+      } as any;
+
+      const fakeOctokit = {
+        rest: { issues: { listForRepo: vi.fn() } },
+        paginate: {
+          iterator: vi.fn().mockReturnValue(
+            buildIterator([[{ number: 10 }]])
+          ),
+        },
+      } as any;
+
+      const count = await reconcileMissingVotingComments(fakeOctokit, owner, repoName, mockGovernance);
+
+      expect(count).toBe(0);
+      expect(mockGovernance.postVotingComment).toHaveBeenCalledTimes(1);
+    });
+
+    it("should skip pull requests", async () => {
+      const mockGovernance = {
+        postVotingComment: vi.fn().mockResolvedValue("posted"),
+      } as any;
+
+      const fakeOctokit = {
+        rest: { issues: { listForRepo: vi.fn() } },
+        paginate: {
+          iterator: vi.fn().mockReturnValue(
+            buildIterator([[
+              { number: 10 },
+              { number: 11, pull_request: {} },
+              { number: 20 },
+            ]])
+          ),
+        },
+      } as any;
+
+      const count = await reconcileMissingVotingComments(fakeOctokit, owner, repoName, mockGovernance);
+
+      expect(count).toBe(2);
+      expect(mockGovernance.postVotingComment).toHaveBeenCalledTimes(2);
+    });
+
+    it("should survive per-issue errors and continue processing", async () => {
+      const mockGovernance = {
+        postVotingComment: vi.fn()
+          .mockRejectedValueOnce(new Error("API error"))
+          .mockResolvedValueOnce("posted"),
+      } as any;
+
+      const fakeOctokit = {
+        rest: { issues: { listForRepo: vi.fn() } },
+        paginate: {
+          iterator: vi.fn().mockReturnValue(
+            buildIterator([[{ number: 10 }, { number: 20 }]])
+          ),
+        },
+      } as any;
+
+      const count = await reconcileMissingVotingComments(fakeOctokit, owner, repoName, mockGovernance);
+
+      expect(count).toBe(1); // Only #20 succeeded
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining("Failed to reconcile #10"),
+      );
+    });
+
+    it("should return 0 when there are no voting issues", async () => {
+      const mockGovernance = { postVotingComment: vi.fn() } as any;
+
+      const fakeOctokit = {
+        rest: { issues: { listForRepo: vi.fn() } },
+        paginate: {
+          iterator: vi.fn().mockReturnValue(
+            buildIterator([[]])
+          ),
+        },
+      } as any;
+
+      const count = await reconcileMissingVotingComments(fakeOctokit, owner, repoName, mockGovernance);
+
+      expect(count).toBe(0);
+      expect(mockGovernance.postVotingComment).not.toHaveBeenCalled();
+    });
+
+    it("should include installationId when provided", async () => {
+      const mockGovernance = {
+        postVotingComment: vi.fn().mockResolvedValue("posted"),
+      } as any;
+
+      const fakeOctokit = {
+        rest: { issues: { listForRepo: vi.fn() } },
+        paginate: {
+          iterator: vi.fn().mockReturnValue(
+            buildIterator([[{ number: 10 }]])
+          ),
+        },
+      } as any;
+
+      await reconcileMissingVotingComments(fakeOctokit, owner, repoName, mockGovernance, 999);
+
+      expect(mockGovernance.postVotingComment).toHaveBeenCalledWith({
+        owner,
+        repo: repoName,
+        issueNumber: 10,
+        installationId: 999,
+      });
+    });
+  });
+
+  describe("reconcileUnlabeledIssues", () => {
+    const owner = "test-org";
+    const repoName = "test-repo";
+
+    it("should call startDiscussion for issues with no hivemoot:* labels", async () => {
+      const mockGovernance = {
+        startDiscussion: vi.fn().mockResolvedValue(undefined),
+      } as any;
+
+      const fakeOctokit = {
+        rest: { issues: { listForRepo: vi.fn() } },
+        paginate: {
+          iterator: vi.fn().mockReturnValue(
+            buildIterator([[
+              { number: 10, labels: [] },
+              { number: 20, labels: [] },
+            ]])
+          ),
+        },
+      } as any;
+
+      const count = await reconcileUnlabeledIssues(fakeOctokit, owner, repoName, mockGovernance);
+
+      expect(count).toBe(2);
+      expect(mockGovernance.startDiscussion).toHaveBeenCalledTimes(2);
+      expect(mockGovernance.startDiscussion).toHaveBeenCalledWith({ owner, repo: repoName, issueNumber: 10 });
+      expect(mockGovernance.startDiscussion).toHaveBeenCalledWith({ owner, repo: repoName, issueNumber: 20 });
+    });
+
+    it("should skip issues that already have any hivemoot:* label", async () => {
+      const mockGovernance = {
+        startDiscussion: vi.fn().mockResolvedValue(undefined),
+      } as any;
+
+      const fakeOctokit = {
+        rest: { issues: { listForRepo: vi.fn() } },
+        paginate: {
+          iterator: vi.fn().mockReturnValue(
+            buildIterator([[
+              { number: 10, labels: [{ name: "hivemoot:discussion" }] },
+              { number: 20, labels: [{ name: "hivemoot:voting" }] },
+              { number: 30, labels: [] },
+            ]])
+          ),
+        },
+      } as any;
+
+      const count = await reconcileUnlabeledIssues(fakeOctokit, owner, repoName, mockGovernance);
+
+      expect(count).toBe(1);
+      expect(mockGovernance.startDiscussion).toHaveBeenCalledTimes(1);
+      expect(mockGovernance.startDiscussion).toHaveBeenCalledWith({ owner, repo: repoName, issueNumber: 30 });
+    });
+
+    it("should skip pull requests", async () => {
+      const mockGovernance = {
+        startDiscussion: vi.fn().mockResolvedValue(undefined),
+      } as any;
+
+      const fakeOctokit = {
+        rest: { issues: { listForRepo: vi.fn() } },
+        paginate: {
+          iterator: vi.fn().mockReturnValue(
+            buildIterator([[
+              { number: 10, labels: [] },
+              { number: 11, labels: [], pull_request: {} },
+              { number: 20, labels: [] },
+            ]])
+          ),
+        },
+      } as any;
+
+      const count = await reconcileUnlabeledIssues(fakeOctokit, owner, repoName, mockGovernance);
+
+      expect(count).toBe(2);
+      expect(mockGovernance.startDiscussion).toHaveBeenCalledTimes(2);
+      expect(mockGovernance.startDiscussion).not.toHaveBeenCalledWith(
+        expect.objectContaining({ issueNumber: 11 })
+      );
+    });
+
+    it("should survive per-issue errors and continue processing", async () => {
+      const mockGovernance = {
+        startDiscussion: vi.fn()
+          .mockRejectedValueOnce(new Error("API error"))
+          .mockResolvedValueOnce(undefined),
+      } as any;
+
+      const fakeOctokit = {
+        rest: { issues: { listForRepo: vi.fn() } },
+        paginate: {
+          iterator: vi.fn().mockReturnValue(
+            buildIterator([[{ number: 10, labels: [] }, { number: 20, labels: [] }]])
+          ),
+        },
+      } as any;
+
+      const count = await reconcileUnlabeledIssues(fakeOctokit, owner, repoName, mockGovernance);
+
+      expect(count).toBe(1); // Only #20 succeeded
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining("Failed to reconcile unlabeled issue #10"),
+      );
+    });
+
+    it("should return 0 when there are no unlabeled issues", async () => {
+      const mockGovernance = { startDiscussion: vi.fn() } as any;
+
+      const fakeOctokit = {
+        rest: { issues: { listForRepo: vi.fn() } },
+        paginate: {
+          iterator: vi.fn().mockReturnValue(
+            buildIterator([[{ number: 10, labels: [{ name: "hivemoot:ready-to-implement" }] }]])
+          ),
+        },
+      } as any;
+
+      const count = await reconcileUnlabeledIssues(fakeOctokit, owner, repoName, mockGovernance);
+
+      expect(count).toBe(0);
+      expect(mockGovernance.startDiscussion).not.toHaveBeenCalled();
+    });
+
+    it("should return 0 for an empty repository", async () => {
+      const mockGovernance = { startDiscussion: vi.fn() } as any;
+
+      const fakeOctokit = {
+        rest: { issues: { listForRepo: vi.fn() } },
+        paginate: {
+          iterator: vi.fn().mockReturnValue(buildIterator([[]])),
+        },
+      } as any;
+
+      const count = await reconcileUnlabeledIssues(fakeOctokit, owner, repoName, mockGovernance);
+
+      expect(count).toBe(0);
+      expect(mockGovernance.startDiscussion).not.toHaveBeenCalled();
+    });
+
+    it("should include installationId when provided", async () => {
+      const mockGovernance = {
+        startDiscussion: vi.fn().mockResolvedValue(undefined),
+      } as any;
+
+      const fakeOctokit = {
+        rest: { issues: { listForRepo: vi.fn() } },
+        paginate: {
+          iterator: vi.fn().mockReturnValue(
+            buildIterator([[{ number: 10, labels: [] }]])
+          ),
+        },
+      } as any;
+
+      await reconcileUnlabeledIssues(fakeOctokit, owner, repoName, mockGovernance, 999);
+
+      expect(mockGovernance.startDiscussion).toHaveBeenCalledWith({
+        owner,
+        repo: repoName,
+        issueNumber: 10,
+        installationId: 999,
+      });
+    });
+
+    it("should skip issues with non-hivemoot labels but no hivemoot:* label", async () => {
+      const mockGovernance = {
+        startDiscussion: vi.fn().mockResolvedValue(undefined),
+      } as any;
+
+      const fakeOctokit = {
+        rest: { issues: { listForRepo: vi.fn() } },
+        paginate: {
+          iterator: vi.fn().mockReturnValue(
+            buildIterator([[
+              { number: 10, labels: [{ name: "bug" }, { name: "help wanted" }] },
+              { number: 20, labels: [{ name: "hivemoot:discussion" }] },
+            ]])
+          ),
+        },
+      } as any;
+
+      const count = await reconcileUnlabeledIssues(fakeOctokit, owner, repoName, mockGovernance);
+
+      // #10 has no hivemoot:* label so it is reconciled; #20 already has one
+      expect(count).toBe(1);
+      expect(mockGovernance.startDiscussion).toHaveBeenCalledWith(
+        expect.objectContaining({ issueNumber: 10 })
+      );
+      expect(mockGovernance.startDiscussion).not.toHaveBeenCalledWith(
+        expect.objectContaining({ issueNumber: 20 })
+      );
     });
   });
 
@@ -128,7 +498,10 @@ describe("close-discussions script", () => {
       // No issues in any phase
     };
 
-    it("should skip discussion/voting automation when decision method is manual", async () => {
+    it("should run reconciliation even when all exits are manual, then skip transitions", async () => {
+      const mockGovernance = { postVotingComment: vi.fn() } as any;
+      mockCreateGovernanceService.mockReturnValue(mockGovernance);
+
       const fakeOctokit = {
         rest: {
           issues: {
@@ -144,13 +517,19 @@ describe("close-discussions script", () => {
       const result = await processRepository(fakeOctokit, repo, appId);
 
       expect(result).toEqual({ skippedIssues: [], accessIssues: [] });
-      expect(mockCreateIssueOperations).not.toHaveBeenCalled();
+      // Services ARE created now (for reconciliation)
+      expect(mockCreateIssueOperations).toHaveBeenCalled();
+      expect(mockCreateGovernanceService).toHaveBeenCalled();
+      // But scheduled transitions are still skipped
       expect(logger.info).toHaveBeenCalledWith(
-        expect.stringContaining("skipping discussion/voting automation")
+        expect.stringContaining("all proposal exits are manual")
       );
     });
 
-    it("should continue processing when decision method is hivemoot_vote", async () => {
+    it("should continue processing when at least one phase is auto", async () => {
+      const mockGovernance = { postVotingComment: vi.fn() } as any;
+      mockCreateGovernanceService.mockReturnValue(mockGovernance);
+
       const fakeOctokit = {
         rest: {
           issues: {
@@ -161,11 +540,95 @@ describe("close-discussions script", () => {
           iterator: vi.fn().mockReturnValue(emptyIterator()),
         },
       } as any;
-      mockLoadRepositoryConfig.mockResolvedValue(makeRepoConfig("hivemoot_vote"));
+      mockLoadRepositoryConfig.mockResolvedValue(makeRepoConfig("auto"));
 
       await processRepository(fakeOctokit, repo, appId);
 
       expect(mockCreateIssueOperations).toHaveBeenCalled();
+    });
+
+    it("should continue with phase transitions when reconciliation fails", async () => {
+      const mockGovernance = { postVotingComment: vi.fn() } as any;
+      mockCreateGovernanceService.mockReturnValue(mockGovernance);
+
+      // First call (reconciliation) throws; subsequent calls (phase iteration) succeed
+      const mockIterator = vi.fn()
+        .mockImplementationOnce(() => {
+          throw new Error("Paginator exploded");
+        })
+        .mockReturnValue(emptyIterator());
+
+      const fakeOctokit = {
+        rest: {
+          issues: {
+            listForRepo: vi.fn(),
+          },
+        },
+        paginate: {
+          iterator: mockIterator,
+        },
+      } as any;
+      mockLoadRepositoryConfig.mockResolvedValue(makeRepoConfig("auto"));
+
+      const result = await processRepository(fakeOctokit, repo, appId);
+
+      // Reconciliation failure was caught and logged
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining("Reconciliation failed"),
+      );
+      // Phase transitions still ran (paginate.iterator called for phase issues)
+      expect(mockIterator.mock.calls.length).toBeGreaterThan(1);
+      // No skipped or access issues from the empty iterator
+      expect(result).toEqual({ skippedIssues: [], accessIssues: [] });
+    });
+
+    it("should thread installationId through reconciliation and transitions", async () => {
+      const mockGovernance = {
+        postVotingComment: vi.fn().mockResolvedValue("posted"),
+        transitionToVoting: vi.fn().mockResolvedValue(undefined),
+        startDiscussion: vi.fn().mockResolvedValue(undefined),
+      } as any;
+      mockCreateGovernanceService.mockReturnValue(mockGovernance);
+
+      const discussionOnlyAutoConfig = makeRepoConfig("manual");
+      discussionOnlyAutoConfig.governance.proposals.discussion.exits = [
+        { type: "auto", afterMs: 60_000, minReady: 0, requiredReady: { minCount: 0, users: [] } },
+      ];
+
+      const mockIssues = {
+        getLabelAddedTime: vi.fn().mockResolvedValue(new Date(Date.now() - 120_000)),
+        getDiscussionReadiness: vi.fn().mockResolvedValue(new Set<string>()),
+      } as any;
+      mockCreateIssueOperations.mockReturnValue(mockIssues);
+
+      const fakeOctokit = {
+        rest: {
+          issues: {
+            listForRepo: vi.fn(),
+          },
+        },
+        // Issue has hivemoot:discussion label so reconcileUnlabeledIssues skips it;
+        // reconcileMissingVotingComments and phase transitions still process it.
+        paginate: {
+          iterator: vi.fn().mockReturnValue(buildIterator([[{ number: 42, labels: [{ name: "hivemoot:discussion" }] }]])),
+        },
+      } as any;
+      mockLoadRepositoryConfig.mockResolvedValue(discussionOnlyAutoConfig);
+
+      await processRepository(fakeOctokit, repo, appId, { installationId: 321 });
+
+      expect(mockGovernance.postVotingComment).toHaveBeenCalledWith({
+        owner: "test-org",
+        repo: "test-repo",
+        issueNumber: 42,
+        installationId: 321,
+      });
+      expect(mockGovernance.transitionToVoting).toHaveBeenCalledWith({
+        owner: "test-org",
+        repo: "test-repo",
+        issueNumber: 42,
+        installationId: 321,
+      });
     });
   });
 
@@ -383,7 +846,7 @@ describe("close-discussions script", () => {
     const issueNumber = 42;
 
     beforeEach(() => {
-      // Freeze time so metadata timestamps in issueVotingPassed are deterministic
+      // Freeze time so metadata timestamps in issueReadyToImplement are deterministic
       vi.useFakeTimers();
       vi.setSystemTime(new Date("2024-01-20T12:00:00.000Z"));
       vi.clearAllMocks();
@@ -406,11 +869,11 @@ describe("close-discussions script", () => {
       expect(mockComment).toHaveBeenCalledTimes(2);
       expect(mockComment).toHaveBeenCalledWith(
         { owner, repo, prNumber: 10 },
-        PR_MESSAGES.issueVotingPassed(issueNumber, "agent-alice")
+        PR_MESSAGES.issueReadyToImplement(issueNumber, "agent-alice")
       );
       expect(mockComment).toHaveBeenCalledWith(
         { owner, repo, prNumber: 20 },
-        PR_MESSAGES.issueVotingPassed(issueNumber, "agent-bob")
+        PR_MESSAGES.issueReadyToImplement(issueNumber, "agent-bob")
       );
     });
 
@@ -420,7 +883,7 @@ describe("close-discussions script", () => {
         { number: 20, title: "New PR", state: "OPEN", author: { login: "agent-bob" } },
       ]);
       mockFindPRsWithLabel.mockResolvedValue([
-        { number: 10, createdAt: new Date(), updatedAt: new Date(), labels: [{ name: "implementation" }] },
+        { number: 10, createdAt: new Date(), updatedAt: new Date(), labels: [{ name: "hivemoot:candidate" }] },
       ]);
 
       await notifyPendingPRs(fakeOctokit, appId, owner, repo, issueNumber);
@@ -428,7 +891,7 @@ describe("close-discussions script", () => {
       expect(mockComment).toHaveBeenCalledTimes(1);
       expect(mockComment).toHaveBeenCalledWith(
         { owner, repo, prNumber: 20 },
-        PR_MESSAGES.issueVotingPassed(issueNumber, "agent-bob")
+        PR_MESSAGES.issueReadyToImplement(issueNumber, "agent-bob")
       );
     });
 
@@ -469,11 +932,11 @@ describe("close-discussions script", () => {
       expect(mockComment).toHaveBeenCalledTimes(1);
       expect(mockComment).toHaveBeenCalledWith(
         { owner, repo, prNumber: 20 },
-        PR_MESSAGES.issueVotingPassed(issueNumber, "agent-bob")
+        PR_MESSAGES.issueReadyToImplement(issueNumber, "agent-bob")
       );
     });
 
-    it("should use issueVotingPassed message, not issueReadyNeedsUpdate", async () => {
+    it("should use issueReadyToImplement message, not issueReadyNeedsUpdate", async () => {
       mockGetOpenPRsForIssue.mockResolvedValue([
         { number: 10, title: "My PR", state: "OPEN", author: { login: "agent-alice" } },
       ]);
@@ -481,8 +944,8 @@ describe("close-discussions script", () => {
       await notifyPendingPRs(fakeOctokit, appId, owner, repo, issueNumber);
 
       const commentBody = mockComment.mock.calls[0][1] as string;
-      // issueVotingPassed includes "passed voting"
-      expect(commentBody).toContain("passed voting");
+      // issueReadyToImplement includes "is ready for implementation"
+      expect(commentBody).toContain("is ready for implementation");
       // issueReadyNeedsUpdate includes "opened before approval" — should NOT appear
       expect(commentBody).not.toContain("opened before approval");
     });
@@ -507,6 +970,22 @@ describe("close-discussions script", () => {
 
     it("should return true for ECONNRESET network errors", () => {
       expect(isRetryableError({ code: "ECONNRESET" })).toBe(true);
+    });
+
+    it("should return true for ECONNREFUSED network errors", () => {
+      expect(isRetryableError({ code: "ECONNREFUSED" })).toBe(true);
+    });
+
+    it("should return true for ENOTFOUND network errors", () => {
+      expect(isRetryableError({ code: "ENOTFOUND" })).toBe(true);
+    });
+
+    it("should return true for EAI_AGAIN network errors", () => {
+      expect(isRetryableError({ code: "EAI_AGAIN" })).toBe(true);
+    });
+
+    it("should return true for EPIPE network errors", () => {
+      expect(isRetryableError({ code: "EPIPE" })).toBe(true);
     });
 
     it("should return true for 429 with retry-after header", () => {
@@ -626,6 +1105,7 @@ describe("close-discussions script", () => {
     const createMockDeps = (overrides: Partial<EarlyDecisionDeps> = {}): EarlyDecisionDeps => ({
       earlyExits: [
         {
+          type: "auto",
           afterMs: 15 * 60 * 1000, // 15 minutes
           minVoters: 2,
           requiredVoters: { minCount: 2, voters: ["agent-a", "agent-b"] },
@@ -679,7 +1159,7 @@ describe("close-discussions script", () => {
 
     it("should call the provided resolution function when exit conditions are met", async () => {
       const deps = createMockDeps();
-      const resolveFn = vi.fn().mockResolvedValue("phase:ready-to-implement" as VotingOutcome);
+      const resolveFn = vi.fn().mockResolvedValue("ready-to-implement" as VotingOutcome);
 
       const check = makeEarlyDecisionCheck(resolveFn, deps);
       const result = await check!(testRef, 20 * 60 * 1000); // 20 minutes
@@ -697,18 +1177,18 @@ describe("close-discussions script", () => {
     it("should call trackOutcome with the resolution result", async () => {
       const trackOutcome = vi.fn();
       const deps = createMockDeps({ trackOutcome });
-      const resolveFn = vi.fn().mockResolvedValue("phase:ready-to-implement" as VotingOutcome);
+      const resolveFn = vi.fn().mockResolvedValue("ready-to-implement" as VotingOutcome);
 
       const check = makeEarlyDecisionCheck(resolveFn, deps);
       await check!(testRef, 20 * 60 * 1000);
 
-      expect(trackOutcome).toHaveBeenCalledWith("phase:ready-to-implement", 42);
+      expect(trackOutcome).toHaveBeenCalledWith("ready-to-implement", 42);
     });
 
     it("should call notifyPRs when outcome is ready-to-implement", async () => {
       const notifyPRs = vi.fn().mockResolvedValue(undefined);
       const deps = createMockDeps({ notifyPRs });
-      const resolveFn = vi.fn().mockResolvedValue("phase:ready-to-implement" as VotingOutcome);
+      const resolveFn = vi.fn().mockResolvedValue("ready-to-implement" as VotingOutcome);
 
       const check = makeEarlyDecisionCheck(resolveFn, deps);
       await check!(testRef, 20 * 60 * 1000);
@@ -729,8 +1209,8 @@ describe("close-discussions script", () => {
 
     it("should use the correct resolution function for each phase", async () => {
       // This test verifies the key fix: different phases can use different resolution functions
-      const endVotingFn = vi.fn().mockResolvedValue("phase:ready-to-implement" as VotingOutcome);
-      const resolveInconclusiveFn = vi.fn().mockResolvedValue("phase:ready-to-implement" as VotingOutcome);
+      const endVotingFn = vi.fn().mockResolvedValue("ready-to-implement" as VotingOutcome);
+      const resolveInconclusiveFn = vi.fn().mockResolvedValue("ready-to-implement" as VotingOutcome);
 
       const votingDeps = createMockDeps();
       const inconclusiveDeps = createMockDeps();
@@ -790,7 +1270,7 @@ describe("close-discussions script", () => {
     function createDiscussionDeps(overrides?: Partial<DiscussionEarlyCheckDeps>): DiscussionEarlyCheckDeps {
       return {
         earlyExits: [
-          { afterMs: 30 * MS, minReady: 3, requiredReady: { minCount: 2, users: ["alice", "bob"] } },
+          { type: "auto", afterMs: 30 * MS, minReady: 3, requiredReady: { minCount: 2, users: ["alice", "bob"] } },
         ],
         getDiscussionReadiness: vi.fn().mockResolvedValue(new Set(["alice", "bob", "charlie"])),
         ...overrides,
@@ -856,9 +1336,9 @@ describe("close-discussions script", () => {
       const deps = createDiscussionDeps({
         earlyExits: [
           // First exit: strict requirements (will fail)
-          { afterMs: 15 * MS, minReady: 5, requiredReady: { minCount: 0, users: [] } },
+          { type: "auto", afterMs: 15 * MS, minReady: 5, requiredReady: { minCount: 0, users: [] } },
           // Second exit: relaxed requirements (will pass)
-          { afterMs: 30 * MS, minReady: 2, requiredReady: { minCount: 0, users: [] } },
+          { type: "auto", afterMs: 30 * MS, minReady: 2, requiredReady: { minCount: 0, users: [] } },
         ],
         getDiscussionReadiness: vi.fn().mockResolvedValue(new Set(["alice", "bob", "charlie"])),
       });
@@ -874,7 +1354,7 @@ describe("close-discussions script", () => {
     it("should work with minCount: 1 for requiredReady", async () => {
       const deps = createDiscussionDeps({
         earlyExits: [
-          { afterMs: 30 * MS, minReady: 0, requiredReady: { minCount: 1, users: ["alice", "bob"] } },
+          { type: "auto", afterMs: 30 * MS, minReady: 0, requiredReady: { minCount: 1, users: ["alice", "bob"] } },
         ],
         getDiscussionReadiness: vi.fn().mockResolvedValue(new Set(["bob"])),
       });
@@ -914,6 +1394,27 @@ describe("close-discussions script", () => {
       expect(logger.warn).not.toHaveBeenCalledWith(
         expect.stringContaining("Discussion early check failed")
       );
+    });
+  });
+
+  describe("processRepository — no config file", () => {
+    const repo = {
+      owner: { login: "test-org" },
+      name: "test-repo",
+      full_name: "test-org/test-repo",
+    } as any;
+    const appId = 123;
+
+    it("should skip all automation when config is null (no .github/hivemoot.yml)", async () => {
+      vi.clearAllMocks();
+      mockLoadRepositoryConfig.mockResolvedValue(null);
+
+      const fakeOctokit = {} as any;
+      const result = await processRepository(fakeOctokit, repo, appId);
+
+      expect(result).toEqual({ skippedIssues: [], accessIssues: [] });
+      expect(mockCreateIssueOperations).not.toHaveBeenCalled();
+      expect(mockCreateGovernanceService).not.toHaveBeenCalled();
     });
   });
 });

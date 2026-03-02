@@ -21,7 +21,12 @@ import type { IssueOperations } from "./github-client.js";
 import { createModelFromEnv } from "./llm/provider.js";
 import { DiscussionSummarizer, formatVotingMessage } from "./llm/summarizer.js";
 import { logger as defaultLogger, type Logger } from "./logger.js";
-import type { RequiredVotersConfig, VotingExit, ExitRequires, DiscussionExit } from "./repo-config.js";
+import type {
+  RequiredVotersConfig,
+  VotingAutoExit,
+  ExitRequires,
+  DiscussionAutoExit,
+} from "./repo-config.js";
 import type {
   IssueRef,
   VoteCounts,
@@ -29,6 +34,7 @@ import type {
   VotingOutcome,
   LockReason,
 } from "./types.js";
+import { getIssuePriority } from "./priority.js";
 
 /**
  * Configuration for GovernanceService
@@ -152,22 +158,65 @@ export class GovernanceService {
    * correct vote counting when issues return from needs-more-discussion.
    */
   async transitionToVoting(ref: IssueRef): Promise<void> {
-    // Calculate the next cycle number based on existing voting comments
-    const cycle = await this.calculateVotingCycle(ref);
-    const votingMessage = await this.generateVotingMessage(ref);
-
-    // Build complete voting comment with embedded metadata
-    const commentBody = buildVotingComment(
-      votingMessage,
-      ref.issueNumber,
-      cycle,
-    );
+    const commentBody = await this.buildVotingCommentBody(ref);
 
     await this.issues.transition(ref, {
       removeLabel: LABELS.DISCUSSION,
       addLabel: LABELS.VOTING,
       comment: commentBody,
     });
+
+    await this.pinVotingComment(ref);
+  }
+
+  /**
+   * Post a voting comment on an issue that already has the phase:voting label
+   * but is missing the voting comment (e.g., manual label addition).
+   *
+   * Idempotent — skips if a voting comment already exists. Does NOT change labels.
+   */
+  async postVotingComment(ref: IssueRef): Promise<"posted" | "skipped"> {
+    const existingId = await this.issues.findVotingCommentId(ref);
+    if (existingId !== null) {
+      this.logger.info(
+        `Voting comment already exists for issue #${ref.issueNumber}, skipping`,
+      );
+      return "skipped";
+    }
+
+    const commentBody = await this.buildVotingCommentBody(ref);
+    await this.issues.comment(ref, commentBody);
+    await this.pinVotingComment(ref);
+    return "posted";
+  }
+
+  /**
+   * Pin the current voting comment on an issue.
+   *
+   * Fail-safe: pinning is a UX enhancement and must never interrupt the
+   * governance flow if it fails (API unavailable, permission denied, etc.).
+   */
+  private async pinVotingComment(ref: IssueRef): Promise<void> {
+    try {
+      const commentId = await this.issues.findVotingCommentId(ref);
+      if (commentId !== null) {
+        await this.issues.pinComment(ref, commentId);
+        this.logger.info(`Pinned voting comment ${commentId} on issue #${ref.issueNumber}`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`Failed to pin voting comment on issue #${ref.issueNumber}: ${message}`);
+    }
+  }
+
+  /**
+   * Build the complete voting comment body with metadata.
+   * Includes an LLM-generated discussion summary when available.
+   */
+  private async buildVotingCommentBody(ref: IssueRef): Promise<string> {
+    const cycle = await this.calculateVotingCycle(ref);
+    const votingMessage = await this.generateVotingMessage(ref);
+    return buildVotingComment(votingMessage, ref.issueNumber, cycle);
   }
 
   /**
@@ -186,25 +235,40 @@ export class GovernanceService {
    * Falls back to generic message on any failure.
    */
   private async generateVotingMessage(ref: IssueRef): Promise<string> {
+    // Fetch labels first to extract priority
+    let priority: "high" | "medium" | "low" | undefined;
+    try {
+      const labels = await this.issues.getIssueLabels(ref);
+      priority = getIssuePriority({ labels });
+    } catch {
+      this.logger.debug(`Failed to fetch labels for issue #${ref.issueNumber}, continuing without priority`);
+    }
+
     // Validate LLM is fully configured (including API key) BEFORE any GitHub calls.
     // createModelFromEnv() returns null if provider/model not set, or throws if API key missing.
-    let modelResult: ReturnType<typeof createModelFromEnv>;
+    let modelResult: Awaited<ReturnType<typeof createModelFromEnv>>;
     try {
-      modelResult = createModelFromEnv();
-    } catch (error) {
-      // API key missing - log at debug level since this is a config issue, not a runtime error
-      const message = error instanceof Error ? error.message : String(error);
-      this.logger.debug(
-        `LLM not fully configured for issue #${ref.issueNumber}: ${message}`,
+      modelResult = await createModelFromEnv(
+        ref.installationId !== undefined
+          ? { installationId: ref.installationId }
+          : undefined
       );
-      return MESSAGES.VOTING_START;
+    } catch (error) {
+      // BYOK runtime failures (Redis outage, decryption errors) are operator-actionable —
+      // log at warn. Config-missing errors are expected noise — log at debug.
+      const message = error instanceof Error ? error.message : String(error);
+      const isByokRuntime = message.startsWith("BYOK ");
+      this.logger[isByokRuntime ? "warn" : "debug"](
+        `LLM model resolution failed for issue #${ref.issueNumber}: ${message}`,
+      );
+      return MESSAGES.votingStart(priority);
     }
 
     if (!modelResult) {
       this.logger.debug(
         `LLM not configured, using generic voting message for issue #${ref.issueNumber}`,
       );
-      return MESSAGES.VOTING_START;
+      return MESSAGES.votingStart(priority);
     }
 
     try {
@@ -222,21 +286,22 @@ export class GovernanceService {
           context.title,
           SIGNATURE,
           SIGNATURES.VOTING,
+          priority,
         );
       }
 
       // Summarization failed, use generic message
-      this.logger.debug(
+      this.logger.warn(
         `Using generic voting message for issue #${ref.issueNumber}: ${result.reason}`,
       );
-      return MESSAGES.VOTING_START;
+      return MESSAGES.votingStart(priority);
     } catch (error) {
       // Any unexpected error, fail open with generic message
       const message = error instanceof Error ? error.message : String(error);
       this.logger.warn(
         `Failed to generate voting summary for issue #${ref.issueNumber}: ${message}. Using generic message.`,
       );
-      return MESSAGES.VOTING_START;
+      return MESSAGES.votingStart(priority);
     }
   }
 
@@ -244,9 +309,9 @@ export class GovernanceService {
    * End voting and apply the outcome.
    * Votes are counted from the bot's voting comment reactions.
    *
-   * If the voting comment is not found, posts a human help request
-   * and returns "skipped" to allow the script to continue processing
-   * other issues.
+   * If the voting comment is not found, attempts to self-heal by posting
+   * the voting comment. Falls back to a human help request if self-healing
+   * fails. Returns "skipped" in either case.
    *
    * @param options.earlyDecision - When true, prepend early decision note to outcome message
    * @param options.votingConfig - When provided, enforce requiredVoters/minVoters (missing → inconclusive)
@@ -298,7 +363,7 @@ export class GovernanceService {
       Exclude<VotingOutcome, "skipped">,
       OutcomeTransitionConfig
     > = {
-      "phase:ready-to-implement": {
+      "ready-to-implement": {
         label: LABELS.READY_TO_IMPLEMENT,
         message: earlyPrefix + MESSAGES.votingEndReadyToImplement(validated.votes),
         close: false,
@@ -348,8 +413,9 @@ export class GovernanceService {
    * - needs-more-discussion → return to discussion (open, unlocked)
    * - Still tied → final inconclusive (closed, locked)
    *
-   * If the voting comment is not found, posts a human help request
-   * and returns "skipped" to allow the script to continue processing.
+   * If the voting comment is not found, attempts to self-heal by posting
+   * the voting comment. Falls back to a human help request if self-healing
+   * fails. Returns "skipped" in either case.
    *
    * @param options.votingConfig - When provided, enforce requiredVoters/minVoters (missing → inconclusive)
    * @param options.validatedVotes - Pre-fetched validated votes (avoids redundant API call)
@@ -396,11 +462,11 @@ export class GovernanceService {
       Exclude<VotingOutcome, "skipped">,
       OutcomeTransitionConfig
     > = {
-      "phase:ready-to-implement": {
+      "ready-to-implement": {
         label: LABELS.READY_TO_IMPLEMENT,
         message: MESSAGES.votingEndInconclusiveResolved(
           validated.votes,
-          "phase:ready-to-implement",
+          "ready-to-implement",
         ),
         close: false,
         // Keep unlocked so the bot can post/update leaderboard comments on the issue.
@@ -462,10 +528,37 @@ export class GovernanceService {
   }
 
   /**
-   * Handle missing voting comment by posting a human help request.
-   * Idempotent - checks if warning was already posted to avoid duplicates.
+   * Handle missing voting comment by attempting to self-heal first.
+   *
+   * Three possible outcomes:
+   * - "posted": voting comment was successfully created (self-healed)
+   * - "skipped": voting comment appeared between the caller's check and ours
+   *   (race with webhook handler or cron reconciliation — healthy state)
+   * - exception: self-heal failed, falls back to human help request
    */
   private async handleMissingVotingComment(ref: IssueRef): Promise<void> {
+    // Attempt self-heal: post the missing voting comment
+    try {
+      const result = await this.postVotingComment(ref);
+      if (result === "posted") {
+        this.logger.info(
+          `Self-healed missing voting comment for issue #${ref.issueNumber}`,
+        );
+      } else {
+        // "skipped" = comment appeared between the caller's check and ours
+        // (race with webhook handler or cron reconciliation). Healthy state.
+        this.logger.info(
+          `Voting comment already present for issue #${ref.issueNumber} (concurrent post)`,
+        );
+      }
+      return;
+    } catch (error) {
+      this.logger.warn(
+        `Self-heal failed for issue #${ref.issueNumber}: ${(error as Error).message}. Falling back to human help.`,
+      );
+    }
+
+    // Original behavior: flag for human intervention
     const errorCode = ERROR_CODES.VOTING_COMMENT_NOT_FOUND;
 
     // Check if we already posted this error (idempotent)
@@ -485,7 +578,7 @@ export class GovernanceService {
     );
     await this.issues.comment(ref, errorComment);
 
-    // Add the needs:human label to make the issue visible in issue lists
+    // Add the hivemoot:needs-human label to make the issue visible in issue lists
     // Note: Label addition is best-effort - if the label doesn't exist in the repo,
     // we log a warning but don't fail the operation (the comment is the critical part)
     try {
@@ -590,7 +683,7 @@ export class GovernanceService {
       return "needs-more-discussion";
     }
     if (votes.thumbsUp > votes.thumbsDown) {
-      return "phase:ready-to-implement";
+      return "ready-to-implement";
     }
     if (votes.thumbsDown > votes.thumbsUp) {
       return "rejected";
@@ -652,7 +745,7 @@ export function isDecisive(votes: VoteCounts): boolean {
  * requires condition (majority/unanimous).
  */
 export function isExitEligible(
-  exit: VotingExit,
+  exit: VotingAutoExit,
   validated: ValidatedVoteResult,
 ): boolean {
   if (validated.voters.length < exit.minVoters) {
@@ -681,7 +774,7 @@ export function isExitEligible(
  * Simpler than isExitEligible — no majority/unanimous distinction.
  */
 export function isDiscussionExitEligible(
-  exit: DiscussionExit,
+  exit: DiscussionAutoExit,
   readyUsers: Set<string>,
 ): boolean {
   if (readyUsers.size < exit.minReady) {

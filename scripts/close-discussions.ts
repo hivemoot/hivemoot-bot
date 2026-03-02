@@ -4,20 +4,22 @@
  * This script runs on a schedule (via GitHub Actions) to automatically
  * transition issues through governance phases:
  *
- * 1. Discussion phase → Voting phase (after DISCUSSION_DURATION_MS)
- * 2. Voting phase → Closed/Decided (after VOTING_DURATION_MS)
+ * 1. Discussion phase → Voting phase (when a discussion `type: auto` exit is eligible)
+ * 2. Voting / Extended voting phase → Outcome (when a voting `type: auto` exit is eligible)
  *
  * It authenticates as a GitHub App and processes all installations.
  */
 
 import { Octokit } from "octokit";
 import * as core from "@actions/core";
-import { LABELS, PR_MESSAGES } from "../api/config.js";
+import { LABELS, PR_MESSAGES, getLabelQueryAliases } from "../api/config.js";
 import {
   createIssueOperations,
   createPROperations,
   createGovernanceService,
   getOpenPRsForIssue,
+  isAutoDiscussionExit,
+  isAutoVotingExit,
   loadRepositoryConfig,
   logger,
 } from "../api/lib/index.js";
@@ -26,13 +28,26 @@ import { processImplementationIntake } from "../api/lib/implementation-intake.js
 import { getLinkedIssues } from "../api/lib/graphql-queries.js";
 import { runForAllRepositories, runIfMain } from "./shared/run-installations.js";
 import { isExitEligible, isDiscussionExitEligible } from "../api/lib/governance.js";
-import type { Repository, Issue, IssueRef, EffectiveConfig, VotingOutcome, DiscussionExit, IntakeMethod } from "../api/lib/index.js";
+import type {
+  Repository,
+  Issue,
+  IssueRef,
+  EffectiveConfig,
+  VotingOutcome,
+  DiscussionAutoExit,
+  VotingAutoExit,
+  IntakeMethod,
+  ExitType,
+} from "../api/lib/index.js";
 import type { IssueOperations } from "../api/lib/github-client.js";
 import type { GovernanceService } from "../api/lib/governance.js";
+import type { InstallationContext } from "./shared/run-installations.js";
+import { TRANSIENT_NETWORK_CODES } from "../api/lib/transient-error.js";
 
 /**
  * Represents an issue that was skipped due to missing voting comment.
- * Human intervention has been requested for these issues.
+ * The system may have self-healed by posting the voting comment, or
+ * flagged it for human intervention.
  */
 interface SkippedIssue {
   repo: string;
@@ -48,11 +63,30 @@ interface AccessIssue {
   reason: AccessIssueReason;
 }
 
+function createIssueRef(
+  owner: string,
+  repoName: string,
+  issueNumber: number,
+  installationId?: number
+): IssueRef {
+  return installationId !== undefined
+    ? { owner, repo: repoName, issueNumber, installationId }
+    : { owner, repo: repoName, issueNumber };
+}
+
 /**
- * Whether scheduled discussion/voting automation should run for a repo.
+ * Whether a phase has automatic exits enabled.
  */
-export function isVotingAutomationEnabled(config: EffectiveConfig): boolean {
-  return config.governance.proposals.decision.method === "hivemoot_vote";
+export function hasAutoExits(exits: Array<{ type: ExitType }>): boolean {
+  return exits.some((exit) => exit.type === "auto");
+}
+
+/**
+ * Whether any governance phase has automatic exits enabled.
+ */
+export function hasAutomaticGovernancePhases(config: EffectiveConfig): boolean {
+  const { discussion, voting, extendedVoting } = config.governance.proposals;
+  return hasAutoExits(discussion.exits) || hasAutoExits(voting.exits) || hasAutoExits(extendedVoting.exits);
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -69,19 +103,24 @@ interface RetryableError {
 }
 
 /**
- * Check if an error is retryable (transient network/API issues)
+ * Check if an error is retryable (transient network/API issues).
+ *
+ * Covers: known transient network codes (via shared TRANSIENT_NETWORK_CODES),
+ * HTTP 502/503/504, and rate-limited responses.
+ *
+ * Note: bare HTTP 429 (no rate-limit headers or message) is intentionally
+ * excluded — those are caught and handled by the outer processIssuePhase
+ * error handler rather than being retried transparently.
  */
 export function isRetryableError(error: unknown): boolean {
+  if (typeof error === "object" && error !== null && "code" in error) {
+    const { code } = error as { code?: unknown };
+    if (typeof code === "string" && TRANSIENT_NETWORK_CODES.has(code)) {
+      return true;
+    }
+  }
   const err = error as RetryableError;
-  // Retry on server errors, rate limits, and network timeouts
-  return (
-    err.status === 502 ||
-    err.status === 503 ||
-    err.status === 504 ||
-    isRateLimitError(error) ||
-    err.code === "ETIMEDOUT" ||
-    err.code === "ECONNRESET"
-  );
+  return err.status === 502 || err.status === 503 || err.status === 504 || isRateLimitError(error);
 }
 
 function getHeaderValue(
@@ -155,7 +194,7 @@ export async function withRetry<T>(
  */
 export interface EarlyDecisionDeps {
   /** Early exits to evaluate (all except deadline) */
-  earlyExits: import("../api/lib/repo-config.js").VotingExit[];
+  earlyExits: VotingAutoExit[];
   /** Find the voting comment ID for an issue */
   findVotingCommentId: (ref: IssueRef) => Promise<number | null>;
   /** Get validated vote counts from a voting comment */
@@ -246,7 +285,7 @@ export function makeEarlyDecisionCheck(
       validatedVotes: validated,
     });
     trackOutcome(outcome, ref.issueNumber);
-    if (outcome === "phase:ready-to-implement") {
+    if (outcome === "ready-to-implement") {
       await notifyPRs(ref.issueNumber);
     }
     return true;
@@ -262,7 +301,7 @@ export function makeEarlyDecisionCheck(
  */
 export interface DiscussionEarlyCheckDeps {
   /** Early exits to evaluate (all except deadline) */
-  earlyExits: DiscussionExit[];
+  earlyExits: DiscussionAutoExit[];
   /** Get 👍 reactors on the issue itself */
   getDiscussionReadiness: (ref: IssueRef) => Promise<Set<string>>;
 }
@@ -422,17 +461,20 @@ export async function processIssuePhase(
 // ───────────────────────────────────────────────────────────────────────────────
 
 /**
- * Notify existing PRs that a linked issue has passed voting.
+ * Notify existing PRs that a linked issue is ready to implement.
  *
  * Intentionally notification-only — does NOT auto-tag PRs with the
  * `implementation` label. PR authors must push a new commit after
- * voting passes to activate their PR. This prevents gaming where an
+ * an issue becomes ready to implement to activate their PR. This prevents gaming where an
  * agent pre-creates an empty PR during discussion/voting to auto-claim
  * an implementation slot when voting passes.
  *
  * The activation date guard (isActivationAfterReady) in the webhook
  * handler enforces this: PR activity must occur after the ready label
- * was added. See processImplementationIntake in api/github/webhooks/index.ts.
+ * was added. See processImplementationIntake in api/lib/implementation-intake.ts.
+ *
+ * This behavior is configurable via the `intake` config. With `method: "auto"`,
+ * pre-ready PRs are unconditionally activated (bypassing the timing guard).
  */
 export async function notifyPendingPRs(
   octokit: InstanceType<typeof Octokit>,
@@ -478,7 +520,7 @@ export async function notifyPendingPRs(
 
       await prs.comment(
         ref,
-        PR_MESSAGES.issueVotingPassed(issueNumber, linkedPR.author.login)
+        PR_MESSAGES.issueReadyToImplement(issueNumber, linkedPR.author.login)
       );
       logger.info(`Notified PR #${linkedPR.number} (@${linkedPR.author.login}) that issue #${issueNumber} is ready`);
 
@@ -518,6 +560,114 @@ export async function notifyPendingPRs(
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
+// Voting Comment Reconciliation
+// ───────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Reconcile missing voting comments for hivemoot:voting issues.
+ *
+ * Iterates all open issues with the hivemoot:voting label and calls
+ * governance.postVotingComment() on each. Since postVotingComment is
+ * idempotent (skips when a voting comment already exists), this is safe
+ * to call on every cron run. Errors on individual issues are logged
+ * but do not abort the loop.
+ *
+ * @returns Number of issues where a voting comment was newly posted
+ */
+export async function reconcileMissingVotingComments(
+  octokit: InstanceType<typeof Octokit>,
+  owner: string,
+  repoName: string,
+  governance: GovernanceService,
+  installationId?: number,
+): Promise<number> {
+  let reconciledCount = 0;
+  const seen = new Set<number>();
+
+  for (const alias of getLabelQueryAliases(LABELS.VOTING)) {
+    const iterator = octokit.paginate.iterator(
+      octokit.rest.issues.listForRepo,
+      { owner, repo: repoName, state: "open", labels: alias, per_page: 100 },
+    );
+
+    for await (const { data: page } of iterator) {
+      for (const issue of page as Issue[]) {
+        if ('pull_request' in issue) continue;
+        if (seen.has(issue.number)) continue;
+        seen.add(issue.number);
+        const ref = createIssueRef(owner, repoName, issue.number, installationId);
+        try {
+          const result = await governance.postVotingComment(ref);
+          if (result === "posted") {
+            reconciledCount++;
+            logger.info(`[${owner}/${repoName}] Reconciled voting comment for #${issue.number}`);
+          }
+        } catch (error) {
+          logger.warn(
+            `[${owner}/${repoName}] Failed to reconcile #${issue.number}: ${(error as Error).message}`,
+          );
+        }
+      }
+    }
+  }
+  return reconciledCount;
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
+// Unlabeled Issue Reconciliation
+// ───────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Reconcile open issues that have no hivemoot:* phase label.
+ *
+ * These issues missed the issues.opened webhook (e.g., during a bot outage)
+ * and were never bootstrapped into the discussion phase. This function finds
+ * them and calls startDiscussion() to apply hivemoot:discussion and post the
+ * welcome comment.
+ *
+ * Idempotent: once startDiscussion succeeds, the issue gains the
+ * hivemoot:discussion label and is skipped on the next run. Errors on
+ * individual issues are logged but do not abort the loop.
+ *
+ * @returns Number of issues that were reconciled
+ */
+export async function reconcileUnlabeledIssues(
+  octokit: InstanceType<typeof Octokit>,
+  owner: string,
+  repoName: string,
+  governance: GovernanceService,
+  installationId?: number,
+): Promise<number> {
+  let reconciledCount = 0;
+
+  const iterator = octokit.paginate.iterator(
+    octokit.rest.issues.listForRepo,
+    { owner, repo: repoName, state: "open", per_page: 100 },
+  );
+
+  for await (const { data: page } of iterator) {
+    for (const issue of page as Issue[]) {
+      if ('pull_request' in issue) continue;
+
+      // Skip issues that already have any hivemoot:* label
+      if (issue.labels.some((l) => l.name.startsWith('hivemoot:'))) continue;
+
+      const ref = createIssueRef(owner, repoName, issue.number, installationId);
+      try {
+        await governance.startDiscussion(ref);
+        reconciledCount++;
+        logger.info(`[${owner}/${repoName}] Reconciled unlabeled issue #${issue.number}`);
+      } catch (error) {
+        logger.warn(
+          `[${owner}/${repoName}] Failed to reconcile unlabeled issue #${issue.number}: ${(error as Error).message}`,
+        );
+      }
+    }
+  }
+  return reconciledCount;
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
 // Repository Processing
 // ───────────────────────────────────────────────────────────────────────────────
 
@@ -536,46 +686,54 @@ interface PhaseConfig {
 
 /**
  * Paginate through issues with a given label and process each through
- * the phase transition pipeline. Skips pull requests (the issues API
- * returns both issues and PRs).
+ * the phase transition pipeline. Queries both canonical and legacy label
+ * names to catch entities carrying either old or new labels.
+ * Skips pull requests (the issues API returns both issues and PRs).
  */
 async function processPhaseIssues(
   octokit: InstanceType<typeof Octokit>,
   owner: string,
   repoName: string,
+  installationId: number | undefined,
   issues: IssueOperations,
   governance: GovernanceService,
   phase: PhaseConfig,
   onAccessIssue: (ref: IssueRef, status: number | undefined, reason: AccessIssueReason) => void
 ): Promise<void> {
-  const iterator = octokit.paginate.iterator(
-    octokit.rest.issues.listForRepo,
-    {
-      owner,
-      repo: repoName,
-      state: "open",
-      labels: phase.label,
-      per_page: 100,
-    }
-  );
+  const seen = new Set<number>();
 
-  for await (const { data: page } of iterator) {
-    for (const issue of page as Issue[]) {
-      if ('pull_request' in issue) {
-        continue;
+  for (const alias of getLabelQueryAliases(phase.label)) {
+    const iterator = octokit.paginate.iterator(
+      octokit.rest.issues.listForRepo,
+      {
+        owner,
+        repo: repoName,
+        state: "open",
+        labels: alias,
+        per_page: 100,
       }
-      const ref: IssueRef = { owner, repo: repoName, issueNumber: issue.number };
-      await processIssuePhase(
-        issues,
-        governance,
-        ref,
-        phase.label,
-        phase.durationMs,
-        phase.phaseName,
-        () => phase.transition(governance, ref),
-        onAccessIssue,
-        phase.earlyCheck
-      );
+    );
+
+    for await (const { data: page } of iterator) {
+      for (const issue of page as Issue[]) {
+        if ('pull_request' in issue) {
+          continue;
+        }
+        if (seen.has(issue.number)) continue;
+        seen.add(issue.number);
+        const ref = createIssueRef(owner, repoName, issue.number, installationId);
+        await processIssuePhase(
+          issues,
+          governance,
+          ref,
+          phase.label,
+          phase.durationMs,
+          phase.phaseName,
+          () => phase.transition(governance, ref),
+          onAccessIssue,
+          phase.earlyCheck
+        );
+      }
     }
   }
 }
@@ -592,27 +750,70 @@ async function processPhaseIssues(
 export async function processRepository(
   octokit: InstanceType<typeof Octokit>,
   repo: Repository,
-  appId: number
+  appId: number,
+  installation?: InstallationContext
 ): Promise<{ skippedIssues: SkippedIssue[]; accessIssues: AccessIssue[] }> {
   const owner = repo.owner.login;
   const repoName = repo.name;
+  const installationId = installation?.installationId;
   const skippedIssues: SkippedIssue[] = [];
   const accessIssues: AccessIssue[] = [];
 
   logger.group(`Processing ${repo.full_name}`);
 
   try {
-    // Load per-repo configuration (falls back to defaults if not present)
-    const repoConfig: EffectiveConfig = await loadRepositoryConfig(octokit, owner, repoName);
-    if (!isVotingAutomationEnabled(repoConfig)) {
+    // Load per-repo configuration (returns null when no config file exists)
+    const repoConfig = await loadRepositoryConfig(octokit, owner, repoName);
+    if (!repoConfig) {
+      logger.debug(`[${repo.full_name}] No config file found; skipping automation`);
+      return { skippedIssues: [], accessIssues: [] };
+    }
+    const issues = createIssueOperations(octokit, { appId });
+    const governance = createGovernanceService(issues);
+
+    // ── Reconciliation (always runs, even for manual-only repos) ──
+    // Best-effort: do not let reconciliation failures block phase transitions.
+    try {
+      const reconciled = await reconcileMissingVotingComments(
+        octokit,
+        owner,
+        repoName,
+        governance,
+        installationId
+      );
+      if (reconciled > 0) {
+        logger.info(`[${repo.full_name}] Reconciled ${reconciled} missing voting comment(s)`);
+      }
+    } catch (error) {
+      logger.warn(
+        `[${repo.full_name}] Reconciliation failed: ${(error as Error).message}. Continuing with phase transitions.`,
+      );
+    }
+
+    try {
+      const reconciled = await reconcileUnlabeledIssues(
+        octokit,
+        owner,
+        repoName,
+        governance,
+        installationId
+      );
+      if (reconciled > 0) {
+        logger.info(`[${repo.full_name}] Reconciled ${reconciled} unlabeled issue(s)`);
+      }
+    } catch (error) {
+      logger.warn(
+        `[${repo.full_name}] Unlabeled issue reconciliation failed: ${(error as Error).message}. Continuing with phase transitions.`,
+      );
+    }
+
+    // ── Automatic transitions (only for repos with auto exits) ──
+    if (!hasAutomaticGovernancePhases(repoConfig)) {
       logger.info(
-        `[${repo.full_name}] proposals.decision.method=${repoConfig.governance.proposals.decision.method}; skipping discussion/voting automation`
+        `[${repo.full_name}] all proposal exits are manual; skipping scheduled phase transitions`
       );
       return { skippedIssues, accessIssues };
     }
-
-    const issues = createIssueOperations(octokit, { appId });
-    const governance = createGovernanceService(issues);
 
     const trackOutcome = (outcome: VotingOutcome, issueNumber: number) => {
       if (outcome === "skipped") {
@@ -628,27 +829,14 @@ export async function processRepository(
       accessIssues.push({ repo: repo.full_name, issueNumber: ref.issueNumber, status, reason });
     };
 
-    const { voting, extendedVoting } = repoConfig.governance.proposals;
-    const { trustedReviewers, intake, maxPRsPerIssue } = repoConfig.governance.pr;
-    const prIntakeConfig = { maxPRsPerIssue, trustedReviewers, intake };
-
-    // Deadline exit (last) provides the default voting config for timer-based transitions
-    const deadlineExit = voting.exits[voting.exits.length - 1];
-    const votingEndOptions: import("../api/lib/governance.js").EndVotingOptions = {
-      votingConfig: {
-        minVoters: deadlineExit.minVoters,
-        requiredVoters: deadlineExit.requiredVoters,
-        requires: deadlineExit.requires,
-      },
-    };
-    const extendedDeadlineExit = extendedVoting.exits[extendedVoting.exits.length - 1];
-    const extendedVotingEndOptions: import("../api/lib/governance.js").EndVotingOptions = {
-      votingConfig: {
-        minVoters: extendedDeadlineExit.minVoters,
-        requiredVoters: extendedDeadlineExit.requiredVoters,
-        requires: extendedDeadlineExit.requires,
-      },
-    };
+    const { discussion, voting, extendedVoting } = repoConfig.governance.proposals;
+    const prIntakeConfig = repoConfig.governance.pr
+      ? {
+          maxPRsPerIssue: repoConfig.governance.pr.maxPRsPerIssue,
+          trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+          intake: repoConfig.governance.pr.intake,
+        }
+      : undefined;
 
     // Voting/inconclusive phases share a transition pattern: end voting, track
     // outcome, and notify pending PRs if the proposal passed.
@@ -660,65 +848,97 @@ export async function processRepository(
     ) => async (_gov: GovernanceService, ref: IssueRef): Promise<void> => {
       const outcome = await endFn(ref, endOptions);
       trackOutcome(outcome, ref.issueNumber);
-      if (outcome === "phase:ready-to-implement") {
+      if (outcome === "ready-to-implement") {
         await notifyPendingPRs(octokit, appId, owner, repoName, ref.issueNumber, prIntakeConfig);
       }
     };
 
-    // Early decision check dependencies for the voting phase
-    const votingEarlyDecisionDeps: EarlyDecisionDeps = {
-      earlyExits: voting.exits.slice(0, -1), // all except deadline
-      findVotingCommentId: (ref) => issues.findVotingCommentId(ref),
-      getValidatedVoteCounts: (ref, commentId) => issues.getValidatedVoteCounts(ref, commentId),
-      votingEndOptions,
-      trackOutcome,
-      notifyPRs: (issueNumber) => notifyPendingPRs(octokit, appId, owner, repoName, issueNumber, prIntakeConfig),
-    };
-    // Early decision check dependencies for the extended-voting phase
-    const extendedEarlyDecisionDeps: EarlyDecisionDeps = {
-      earlyExits: extendedVoting.exits.slice(0, -1), // all except deadline
-      findVotingCommentId: (ref) => issues.findVotingCommentId(ref),
-      getValidatedVoteCounts: (ref, commentId) => issues.getValidatedVoteCounts(ref, commentId),
-      votingEndOptions: extendedVotingEndOptions,
-      trackOutcome,
-      notifyPRs: (issueNumber) => notifyPendingPRs(octokit, appId, owner, repoName, issueNumber, prIntakeConfig),
-    };
+    const createEndOptions = (
+      deadlineExit: VotingAutoExit,
+    ): import("../api/lib/governance.js").EndVotingOptions => ({
+      votingConfig: {
+        minVoters: deadlineExit.minVoters,
+        requiredVoters: deadlineExit.requiredVoters,
+        requires: deadlineExit.requires,
+      },
+    });
 
-    const { discussion } = repoConfig.governance.proposals;
+    const phases: PhaseConfig[] = [];
 
-    const phases: PhaseConfig[] = [
-      {
+    const discussionAutoExits = discussion.exits.filter(isAutoDiscussionExit);
+    if (discussionAutoExits.length > 0) {
+      const deadlineExit = discussionAutoExits[discussionAutoExits.length - 1];
+      phases.push({
         label: LABELS.DISCUSSION,
-        durationMs: discussion.durationMs,
+        durationMs: deadlineExit.afterMs,
         phaseName: "discussion",
         transition: (_gov, ref) => governance.transitionToVoting(ref),
         earlyCheck: makeDiscussionEarlyCheck(
           (ref) => governance.transitionToVoting(ref),
           {
-            earlyExits: discussion.exits.slice(0, -1),
+            earlyExits: discussionAutoExits.slice(0, -1),
             getDiscussionReadiness: (ref) => issues.getDiscussionReadiness(ref),
           },
         ),
-      },
-      {
+      });
+    } else {
+      logger.info(`[${repo.full_name}] discussion exits are manual; skipping automatic discussion transitions`);
+    }
+
+    const votingAutoExits = voting.exits.filter(isAutoVotingExit);
+    if (votingAutoExits.length > 0) {
+      const deadlineExit = votingAutoExits[votingAutoExits.length - 1];
+      const votingEndOptions = createEndOptions(deadlineExit);
+      const votingEarlyDecisionDeps: EarlyDecisionDeps = {
+        earlyExits: votingAutoExits.slice(0, -1), // all except deadline
+        findVotingCommentId: (ref) => issues.findVotingCommentId(ref),
+        getValidatedVoteCounts: (ref, commentId) => issues.getValidatedVoteCounts(ref, commentId),
+        votingEndOptions,
+        trackOutcome,
+        notifyPRs: (issueNumber) => notifyPendingPRs(octokit, appId, owner, repoName, issueNumber, prIntakeConfig),
+      };
+
+      phases.push({
         label: LABELS.VOTING,
-        durationMs: voting.durationMs,
+        durationMs: deadlineExit.afterMs,
         phaseName: "voting",
         transition: votingTransition((ref, opts) => governance.endVoting(ref, opts), votingEndOptions),
         earlyCheck: makeEarlyDecisionCheck((ref, opts) => governance.endVoting(ref, opts), votingEarlyDecisionDeps),
-      },
-      {
+      });
+    } else {
+      logger.info(`[${repo.full_name}] voting exits are manual; skipping automatic voting transitions`);
+    }
+
+    const extendedAutoExits = extendedVoting.exits.filter(isAutoVotingExit);
+    if (extendedAutoExits.length > 0) {
+      const deadlineExit = extendedAutoExits[extendedAutoExits.length - 1];
+      const extendedVotingEndOptions = createEndOptions(deadlineExit);
+      const extendedEarlyDecisionDeps: EarlyDecisionDeps = {
+        earlyExits: extendedAutoExits.slice(0, -1), // all except deadline
+        findVotingCommentId: (ref) => issues.findVotingCommentId(ref),
+        getValidatedVoteCounts: (ref, commentId) => issues.getValidatedVoteCounts(ref, commentId),
+        votingEndOptions: extendedVotingEndOptions,
+        trackOutcome,
+        notifyPRs: (issueNumber) => notifyPendingPRs(octokit, appId, owner, repoName, issueNumber, prIntakeConfig),
+      };
+
+      phases.push({
         label: LABELS.EXTENDED_VOTING,
-        durationMs: extendedVoting.durationMs,
+        durationMs: deadlineExit.afterMs,
         phaseName: "extended voting",
         transition: votingTransition((ref, opts) => governance.resolveInconclusive(ref, opts), extendedVotingEndOptions),
-        earlyCheck: makeEarlyDecisionCheck((ref, opts) => governance.resolveInconclusive(ref, opts), extendedEarlyDecisionDeps),
-      },
-    ];
+        earlyCheck: makeEarlyDecisionCheck(
+          (ref, opts) => governance.resolveInconclusive(ref, opts),
+          extendedEarlyDecisionDeps,
+        ),
+      });
+    } else {
+      logger.info(`[${repo.full_name}] extendedVoting exits are manual; skipping automatic extended voting transitions`);
+    }
 
     for (const phase of phases) {
       await processPhaseIssues(
-        octokit, owner, repoName, issues, governance, phase, trackAccessIssue
+        octokit, owner, repoName, installationId, issues, governance, phase, trackAccessIssue
       );
     }
 
@@ -741,7 +961,7 @@ export async function processRepository(
 async function main(): Promise<void> {
   await runForAllRepositories<{ skippedIssues: SkippedIssue[]; accessIssues: AccessIssue[] }>({
     scriptName: "scheduled discussion/voting phase closer",
-    startMessage: "Per-repo config loaded from .github/hivemoot.yml (defaults: 24h discussion, 24h voting)",
+    startMessage: "Per-repo config loaded from .github/hivemoot.yml (processing phases with auto exits; manual-only phases are skipped)",
     processRepository,
     afterAll: ({ results }) => {
       const allSkippedIssues = results.flatMap((r) => r.result.skippedIssues);
@@ -754,7 +974,7 @@ async function main(): Promise<void> {
         logger.warn(
           `${allSkippedIssues.length} issue(s) skipped due to missing voting comments: ${skippedList}`
         );
-        logger.warn("Human intervention requested for these issues (see needs:human label)");
+        logger.warn("Human intervention requested for these issues (see hivemoot:needs-human label)");
         core.warning(`${allSkippedIssues.length} issue(s) require human intervention`);
       }
 

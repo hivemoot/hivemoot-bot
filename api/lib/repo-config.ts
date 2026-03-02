@@ -12,11 +12,10 @@
 import * as yaml from "js-yaml";
 import {
   CONFIG_BOUNDS,
-  DISCUSSION_DURATION_MS,
-  VOTING_DURATION_MS,
   MAX_PRS_PER_ISSUE,
   PR_STALE_THRESHOLD_DAYS,
 } from "../config.js";
+import { getErrorStatus } from "./github-client.js";
 import { logger } from "./logger.js";
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -29,7 +28,7 @@ export interface RequiredVotersConfig {
 }
 
 export type ExitRequires = "majority" | "unanimous";
-export type ProposalDecisionMethod = "manual" | "hivemoot_vote";
+export type ExitType = "manual" | "auto";
 
 // ── Intake Method Types ─────────────────────────────────────────────────────
 
@@ -42,12 +41,28 @@ interface IntakeMethodApproval {
   minApprovals: number;
 }
 
-export type IntakeMethod = IntakeMethodUpdate | IntakeMethodApproval;
+interface IntakeMethodAuto {
+  method: "auto";
+}
+
+export type IntakeMethod = IntakeMethodUpdate | IntakeMethodApproval | IntakeMethodAuto;
 
 // ── Merge-Ready Config ──────────────────────────────────────────────────
 
 export interface MergeReadyConfig {
   minApprovals: number;
+}
+
+// ── Automerge Config ────────────────────────────────────────────────────
+
+export interface AutomergeConfig {
+  dryRun: boolean;
+  allowedPaths: string[];
+  denyPaths: string[];
+  maxFiles: number;
+  maxChangedLines: number;
+  minApprovals: number;
+  requireChecks: boolean;
 }
 
 // ── Standup Config ──────────────────────────────────────────────────────
@@ -57,22 +72,44 @@ export interface StandupConfig {
   category: string;
 }
 
-export interface VotingExit {
+export interface VotingAutoExit {
+  type: "auto";
   afterMs: number;
   requires: ExitRequires;
   minVoters: number;
   requiredVoters: RequiredVotersConfig;
 }
 
+export interface VotingManualExit {
+  type: "manual";
+}
+
+export type VotingExit = VotingAutoExit | VotingManualExit;
+
 export interface RequiredReadyConfig {
   minCount: number;
   users: string[];
 }
 
-export interface DiscussionExit {
+export interface DiscussionAutoExit {
+  type: "auto";
   afterMs: number;
   minReady: number;
   requiredReady: RequiredReadyConfig;
+}
+
+export interface DiscussionManualExit {
+  type: "manual";
+}
+
+export type DiscussionExit = DiscussionAutoExit | DiscussionManualExit;
+
+export function isAutoVotingExit(exit: VotingExit): exit is VotingAutoExit {
+  return exit.type === "auto";
+}
+
+export function isAutoDiscussionExit(exit: DiscussionExit): exit is DiscussionAutoExit {
+  return exit.type === "auto";
 }
 
 /**
@@ -82,9 +119,6 @@ export interface RepoConfigFile {
   version?: number;
   governance?: {
     proposals?: {
-      decision?: {
-        method?: unknown;
-      };
       discussion?: {
         exits?: unknown[];
       };
@@ -101,12 +135,26 @@ export interface RepoConfigFile {
       trustedReviewers?: unknown;
       intake?: unknown;
       mergeReady?: unknown;
+      automerge?: unknown;
     };
   };
   standup?: {
     enabled?: boolean;
     category?: string;
   };
+}
+
+/**
+ * PR workflow configuration when explicitly enabled.
+ * Present only when the `pr:` section exists in the config file.
+ */
+export interface PRConfig {
+  staleDays: number;
+  maxPRsPerIssue: number;
+  trustedReviewers: string[];
+  intake: IntakeMethod[];
+  mergeReady: MergeReadyConfig | null;
+  automerge: AutomergeConfig | null;
 }
 
 /**
@@ -117,32 +165,24 @@ export interface EffectiveConfig {
   version: number;
   governance: {
     proposals: {
-      decision: {
-        method: ProposalDecisionMethod;
-      };
       discussion: {
         exits: DiscussionExit[];
-        /** Derived from last exit's afterMs (the deadline) */
+        /** Derived from the last auto exit's afterMs (0 when manual-only). */
         durationMs: number;
       };
       voting: {
         exits: VotingExit[];
-        /** Derived from last exit's afterMs (the deadline) */
+        /** Derived from the last auto exit's afterMs (0 when manual-only). */
         durationMs: number;
       };
       extendedVoting: {
         exits: VotingExit[];
-        /** Derived from last exit's afterMs (the deadline) */
+        /** Derived from the last auto exit's afterMs (0 when manual-only). */
         durationMs: number;
       };
     };
-    pr: {
-      staleDays: number;
-      maxPRsPerIssue: number;
-      trustedReviewers: string[];
-      intake: IntakeMethod[];
-      mergeReady: MergeReadyConfig | null;
-    };
+    /** null when `pr:` section is absent — all PR workflows disabled. */
+    pr: PRConfig | null;
   };
   standup: StandupConfig;
 }
@@ -377,18 +417,29 @@ function parseRequiredVotersConfig(
 }
 
 const VALID_REQUIRES: ExitRequires[] = ["majority", "unanimous"];
+const DEFAULT_MANUAL_VOTING_EXIT: VotingManualExit = { type: "manual" };
+const DEFAULT_MANUAL_DISCUSSION_EXIT: DiscussionManualExit = { type: "manual" };
+
+function parseExitType(entry: Record<string, unknown>, fieldPath: string, repoFullName: string): ExitType | null {
+  const type = entry.type;
+  if (type !== "manual" && type !== "auto") {
+    logger.warn(
+      `[${repoFullName}] Invalid ${fieldPath}.type: expected "manual" or "auto". Skipping.`
+    );
+    return null;
+  }
+  return type;
+}
 
 /**
- * Parse and validate exits from config.
+ * Parse and validate voting exits from config.
  *
- * Each exit has:
- * - afterMinutes: time gate (clamped to phaseDurationMinutes bounds)
- * - requires: "majority" (default) or "unanimous"
- * - minVoters: quorum (clamped to voting.minVoters bounds)
- * - requiredVoters: participation requirement
+ * Two modes are supported:
+ * - manual: no automatic progression for the phase
+ * - auto: time-based progression with voting requirements
  *
- * Sorted ascending by afterMs. Must have at least one entry.
- *
+ * Mixed manual+auto exits are treated as configuration errors and resolve to
+ * manual for safety (avoid unexpected automation).
  */
 function parseExits(
   value: unknown,
@@ -396,97 +447,121 @@ function parseExits(
 ): VotingExit[] {
   const defaultMinVoters = CONFIG_BOUNDS.voting.minVoters.default;
   const defaultRequiredVoters: RequiredVotersConfig = { minCount: 0, voters: [] };
-
-  const defaultExit: VotingExit = {
-    afterMs: VOTING_DURATION_MS,
-    requires: "majority",
-    minVoters: defaultMinVoters,
-    requiredVoters: defaultRequiredVoters,
-  };
+  const manualDefault: VotingExit[] = [DEFAULT_MANUAL_VOTING_EXIT];
 
   if (value === undefined || value === null) {
-    return [defaultExit];
+    return manualDefault;
   }
 
   if (!Array.isArray(value)) {
     logger.warn(
-      `[${repoFullName}] Invalid exits: expected array. Using default.`
+      `[${repoFullName}] Invalid voting exits: expected array. Using manual exit.`
     );
-    return [defaultExit];
+    return manualDefault;
   }
 
   if (value.length === 0) {
     logger.warn(
-      `[${repoFullName}] Empty exits array. Using default.`
+      `[${repoFullName}] Empty voting exits array. Using manual exit.`
     );
-    return [defaultExit];
+    return manualDefault;
   }
 
   const bounds = CONFIG_BOUNDS.phaseDurationMinutes;
+  const exits: VotingExit[] = [];
 
-  const exits: VotingExit[] = value
-    .filter((entry): entry is Record<string, unknown> => {
-      if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
-        logger.warn(`[${repoFullName}] Invalid exit entry: expected object. Skipping.`);
-        return false;
-      }
-      return true;
-    })
-    .map((entry) => {
-      // Parse afterMinutes
-      const afterMinutesRaw = entry.afterMinutes;
-      let afterMs: number;
-      if (typeof afterMinutesRaw !== "number" || !Number.isFinite(afterMinutesRaw)) {
-        logger.warn(
-          `[${repoFullName}] Invalid exit afterMinutes: expected number. Using default.`
-        );
-        afterMs = VOTING_DURATION_MS;
+  for (const entry of value) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      logger.warn(`[${repoFullName}] Invalid voting exit entry: expected object. Skipping.`);
+      continue;
+    }
+
+    const exitType = parseExitType(entry, "voting exit", repoFullName);
+    if (!exitType) {
+      continue;
+    }
+
+    if (exitType === "manual") {
+      exits.push(DEFAULT_MANUAL_VOTING_EXIT);
+      continue;
+    }
+
+    // Parse afterMinutes for auto exits (required)
+    const afterMinutesRaw = entry.afterMinutes;
+    if (typeof afterMinutesRaw !== "number" || !Number.isFinite(afterMinutesRaw)) {
+      logger.warn(
+        `[${repoFullName}] Invalid voting exit afterMinutes: expected number for type:auto. Skipping.`
+      );
+      continue;
+    }
+    const clamped = clamp(afterMinutesRaw, bounds.min, bounds.max);
+    if (clamped !== afterMinutesRaw) {
+      logger.info(
+        `[${repoFullName}] voting exit afterMinutes clamped from ${afterMinutesRaw} to ${clamped}`
+      );
+    }
+    const afterMs = clamped * MS_PER_MINUTE;
+
+    // Parse requires
+    let requires: ExitRequires = "majority";
+    if (entry.requires !== undefined && entry.requires !== null) {
+      if (VALID_REQUIRES.includes(entry.requires as ExitRequires)) {
+        requires = entry.requires as ExitRequires;
       } else {
-        const clamped = clamp(afterMinutesRaw, bounds.min, bounds.max);
-        if (clamped !== afterMinutesRaw) {
-          logger.info(
-            `[${repoFullName}] exit afterMinutes clamped from ${afterMinutesRaw} to ${clamped}`
-          );
-        }
-        afterMs = clamped * MS_PER_MINUTE;
+        logger.warn(
+          `[${repoFullName}] Invalid voting exit requires: "${String(entry.requires)}". Using default ("majority").`
+        );
       }
+    }
 
-      // Parse requires
-      let requires: ExitRequires = "majority";
-      if (entry.requires !== undefined && entry.requires !== null) {
-        if (VALID_REQUIRES.includes(entry.requires as ExitRequires)) {
-          requires = entry.requires as ExitRequires;
-        } else {
-          logger.warn(
-            `[${repoFullName}] Invalid exit requires: "${String(entry.requires)}". Using default ("majority").`
-          );
-        }
-      }
+    // Parse minVoters (falls back to CONFIG_BOUNDS default)
+    const minVoters = (entry.minVoters !== undefined && entry.minVoters !== null)
+      ? parseIntValue(entry.minVoters, MIN_VOTERS_BOUNDS, "voting exit.minVoters", repoFullName)
+      : defaultMinVoters;
 
-      // Parse minVoters (falls back to CONFIG_BOUNDS default)
-      const minVoters = (entry.minVoters !== undefined && entry.minVoters !== null)
-        ? parseIntValue(entry.minVoters, MIN_VOTERS_BOUNDS, "exit.minVoters", repoFullName)
-        : defaultMinVoters;
+    // Parse requiredVoters (falls back to empty)
+    const requiredVoters = (entry.requiredVoters !== undefined && entry.requiredVoters !== null)
+      ? parseRequiredVotersConfig(entry.requiredVoters, repoFullName)
+      : defaultRequiredVoters;
 
-      // Parse requiredVoters (falls back to mode:all, voters:[])
-      const requiredVoters = (entry.requiredVoters !== undefined && entry.requiredVoters !== null)
-        ? parseRequiredVotersConfig(entry.requiredVoters, repoFullName)
-        : defaultRequiredVoters;
-
-      return { afterMs, requires, minVoters, requiredVoters };
+    exits.push({
+      type: "auto",
+      afterMs,
+      requires,
+      minVoters,
+      requiredVoters,
     });
+  }
 
   if (exits.length === 0) {
     logger.warn(
-      `[${repoFullName}] All exit entries were invalid. Using default.`
+      `[${repoFullName}] All voting exit entries were invalid. Using manual exit.`
     );
-    return [defaultExit];
+    return manualDefault;
   }
 
-  // Sort ascending by afterMs
-  exits.sort((a, b) => a.afterMs - b.afterMs);
+  const hasManual = exits.some((exit) => exit.type === "manual");
+  const hasAuto = exits.some((exit) => exit.type === "auto");
+  if (hasManual && hasAuto) {
+    logger.warn(
+      `[${repoFullName}] Mixed manual and auto voting exits are not allowed. Using manual exit.`
+    );
+    return manualDefault;
+  }
 
-  return exits;
+  if (hasManual) {
+    if (exits.length > 1) {
+      logger.info(
+        `[${repoFullName}] Multiple manual voting exits configured. Collapsing to a single manual exit.`
+      );
+    }
+    return manualDefault;
+  }
+
+  // Sort auto exits ascending by afterMs
+  const autoExits = exits.filter(isAutoVotingExit);
+  autoExits.sort((a, b) => a.afterMs - b.afterMs);
+  return autoExits;
 }
 
 /**
@@ -559,135 +634,125 @@ function parseRequiredReadyConfig(
 /**
  * Parse and validate discussion exits from config.
  *
- * Each exit has:
- * - afterMinutes: time gate (clamped to phaseDurationMinutes bounds)
- * - minReady: quorum of 👍 reactions (clamped, default 0)
- * - requiredReady: specific users who must have reacted 👍
+ * Two modes are supported:
+ * - manual: no automatic progression for the phase
+ * - auto: time-based progression with readiness requirements
  *
- * Sorted ascending by afterMs. Falls back to single deadline exit if missing.
+ * Mixed manual+auto exits are treated as configuration errors and resolve to
+ * manual for safety (avoid unexpected automation).
  */
 function parseDiscussionExits(
   value: unknown,
-  defaultAfterMs: number,
   repoFullName: string,
 ): DiscussionExit[] {
   const defaultRequiredReady: RequiredReadyConfig = { minCount: 0, users: [] };
-
-  const defaultExit: DiscussionExit = {
-    afterMs: defaultAfterMs,
-    minReady: 0,
-    requiredReady: defaultRequiredReady,
-  };
+  const manualDefault: DiscussionExit[] = [DEFAULT_MANUAL_DISCUSSION_EXIT];
 
   if (value === undefined || value === null) {
-    return [defaultExit];
+    return manualDefault;
   }
 
   if (!Array.isArray(value)) {
     logger.warn(
-      `[${repoFullName}] Invalid discussion exits: expected array. Using default.`
+      `[${repoFullName}] Invalid discussion exits: expected array. Using manual exit.`
     );
-    return [defaultExit];
+    return manualDefault;
   }
 
   if (value.length === 0) {
     logger.warn(
-      `[${repoFullName}] Empty discussion exits array. Using default.`
+      `[${repoFullName}] Empty discussion exits array. Using manual exit.`
     );
-    return [defaultExit];
+    return manualDefault;
   }
 
   const bounds = CONFIG_BOUNDS.phaseDurationMinutes;
+  const exits: DiscussionExit[] = [];
 
-  const exits: DiscussionExit[] = value
-    .filter((entry): entry is Record<string, unknown> => {
-      if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
-        logger.warn(`[${repoFullName}] Invalid discussion exit entry: expected object. Skipping.`);
-        return false;
-      }
-      return true;
-    })
-    .map((entry) => {
-      // Parse afterMinutes
-      const afterMinutesRaw = entry.afterMinutes;
-      let afterMs: number;
-      if (typeof afterMinutesRaw !== "number" || !Number.isFinite(afterMinutesRaw)) {
-        logger.warn(
-          `[${repoFullName}] Invalid discussion exit afterMinutes: expected number. Using default.`
-        );
-        afterMs = defaultAfterMs;
-      } else {
-        const clamped = clamp(afterMinutesRaw, bounds.min, bounds.max);
-        if (clamped !== afterMinutesRaw) {
-          logger.info(
-            `[${repoFullName}] discussion exit afterMinutes clamped from ${afterMinutesRaw} to ${clamped}`
-          );
-        }
-        afterMs = clamped * MS_PER_MINUTE;
-      }
+  for (const entry of value) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      logger.warn(`[${repoFullName}] Invalid discussion exit entry: expected object. Skipping.`);
+      continue;
+    }
 
-      // Parse minReady (default 0)
-      const minReady = (entry.minReady !== undefined && entry.minReady !== null)
-        ? parseIntValue(entry.minReady, MIN_READY_BOUNDS, "discussion exit.minReady", repoFullName)
-        : 0;
+    const exitType = parseExitType(entry, "discussion exit", repoFullName);
+    if (!exitType) {
+      continue;
+    }
 
-      // Parse requiredReady (default empty)
-      const requiredReady = (entry.requiredReady !== undefined && entry.requiredReady !== null)
-        ? parseRequiredReadyConfig(entry.requiredReady, repoFullName)
-        : defaultRequiredReady;
+    if (exitType === "manual") {
+      exits.push(DEFAULT_MANUAL_DISCUSSION_EXIT);
+      continue;
+    }
 
-      return { afterMs, minReady, requiredReady };
+    // Parse afterMinutes for auto exits (required)
+    const afterMinutesRaw = entry.afterMinutes;
+    if (typeof afterMinutesRaw !== "number" || !Number.isFinite(afterMinutesRaw)) {
+      logger.warn(
+        `[${repoFullName}] Invalid discussion exit afterMinutes: expected number for type:auto. Skipping.`
+      );
+      continue;
+    }
+
+    const clamped = clamp(afterMinutesRaw, bounds.min, bounds.max);
+    if (clamped !== afterMinutesRaw) {
+      logger.info(
+        `[${repoFullName}] discussion exit afterMinutes clamped from ${afterMinutesRaw} to ${clamped}`
+      );
+    }
+    const afterMs = clamped * MS_PER_MINUTE;
+
+    // Parse minReady (default 0)
+    const minReady = (entry.minReady !== undefined && entry.minReady !== null)
+      ? parseIntValue(entry.minReady, MIN_READY_BOUNDS, "discussion exit.minReady", repoFullName)
+      : 0;
+
+    // Parse requiredReady (default empty)
+    const requiredReady = (entry.requiredReady !== undefined && entry.requiredReady !== null)
+      ? parseRequiredReadyConfig(entry.requiredReady, repoFullName)
+      : defaultRequiredReady;
+
+    exits.push({
+      type: "auto",
+      afterMs,
+      minReady,
+      requiredReady,
     });
+  }
 
   if (exits.length === 0) {
     logger.warn(
-      `[${repoFullName}] All discussion exit entries were invalid. Using default.`
+      `[${repoFullName}] All discussion exit entries were invalid. Using manual exit.`
     );
-    return [defaultExit];
+    return manualDefault;
   }
 
-  // Sort ascending by afterMs
-  exits.sort((a, b) => a.afterMs - b.afterMs);
+  const hasManual = exits.some((exit) => exit.type === "manual");
+  const hasAuto = exits.some((exit) => exit.type === "auto");
+  if (hasManual && hasAuto) {
+    logger.warn(
+      `[${repoFullName}] Mixed manual and auto discussion exits are not allowed. Using manual exit.`
+    );
+    return manualDefault;
+  }
 
-  return exits;
+  if (hasManual) {
+    if (exits.length > 1) {
+      logger.info(
+        `[${repoFullName}] Multiple manual discussion exits configured. Collapsing to a single manual exit.`
+      );
+    }
+    return manualDefault;
+  }
+
+  // Sort auto exits ascending by afterMs
+  const autoExits = exits.filter(isAutoDiscussionExit);
+  autoExits.sort((a, b) => a.afterMs - b.afterMs);
+  return autoExits;
 }
 
-const DEFAULT_INTAKE: IntakeMethod[] = [{ method: "update" }];
-const VALID_INTAKE_METHODS = new Set(["update", "approval"]);
-const DEFAULT_PROPOSAL_DECISION_METHOD: ProposalDecisionMethod = "manual";
-const VALID_PROPOSAL_DECISION_METHODS = new Set<ProposalDecisionMethod>([
-  "manual",
-  "hivemoot_vote",
-]);
-
-/**
- * Parse and validate proposal decision method.
- * Defaults to "manual" when missing or invalid.
- */
-function parseProposalDecisionMethod(
-  value: unknown,
-  repoFullName: string
-): ProposalDecisionMethod {
-  if (value === undefined || value === null) {
-    return DEFAULT_PROPOSAL_DECISION_METHOD;
-  }
-
-  if (typeof value !== "string") {
-    logger.warn(
-      `[${repoFullName}] Invalid proposals.decision.method: expected string. Using default ("${DEFAULT_PROPOSAL_DECISION_METHOD}").`
-    );
-    return DEFAULT_PROPOSAL_DECISION_METHOD;
-  }
-
-  if (!VALID_PROPOSAL_DECISION_METHODS.has(value as ProposalDecisionMethod)) {
-    logger.warn(
-      `[${repoFullName}] Unknown proposals.decision.method: "${value}". Using default ("${DEFAULT_PROPOSAL_DECISION_METHOD}").`
-    );
-    return DEFAULT_PROPOSAL_DECISION_METHOD;
-  }
-
-  return value as ProposalDecisionMethod;
-}
+const DEFAULT_INTAKE: IntakeMethod[] = [{ method: "auto" }];
+const VALID_INTAKE_METHODS = new Set(["update", "approval", "auto"]);
 
 /**
  * Parse and validate trustedReviewers from config.
@@ -705,7 +770,7 @@ function parseTrustedReviewers(
  *
  * Each entry must have a known `method` field. Method-specific options
  * are validated per method. Invalid entries are filtered with warnings.
- * If the result is empty, falls back to default [{ method: "update" }].
+ * If the result is empty, falls back to default [{ method: "auto" }].
  */
 function parseIntakeMethods(
   value: unknown,
@@ -750,6 +815,11 @@ function parseIntakeMethods(
 
     if (method === "update") {
       methods.push({ method: "update" });
+      continue;
+    }
+
+    if (method === "auto") {
+      methods.push({ method: "auto" });
       continue;
     }
 
@@ -850,6 +920,189 @@ function parseMergeReadyConfig(
   return { minApprovals };
 }
 
+const DEFAULT_ALLOWED_PATHS = ["**/*.md", "**/*.txt", "docs/**"];
+const DEFAULT_DENY_PATHS = [
+  ".github/**",
+  "package.json",
+  "package-lock.json",
+  "*.lock",
+  "pnpm-lock.yaml",
+  "go.sum",
+  "bun.lockb",
+  "go.work.sum",
+];
+
+/**
+ * Validate and sanitize a path patterns array from config.
+ * Returns a string array clamped to maxPathPatterns entries.
+ * Non-string and empty entries are filtered with warnings.
+ */
+function parsePathPatterns(
+  value: unknown,
+  defaultPatterns: string[],
+  fieldName: string,
+  repoFullName: string
+): string[] {
+  if (value === undefined || value === null) {
+    return defaultPatterns;
+  }
+
+  if (!Array.isArray(value)) {
+    logger.warn(
+      `[${repoFullName}] Invalid ${fieldName}: expected array. Using defaults.`
+    );
+    return defaultPatterns;
+  }
+
+  const maxPatterns = CONFIG_BOUNDS.automerge.maxPathPatterns;
+  const result: string[] = [];
+
+  for (const entry of value) {
+    if (result.length >= maxPatterns) {
+      logger.info(
+        `[${repoFullName}] ${fieldName} truncated to ${maxPatterns} entries`
+      );
+      break;
+    }
+
+    if (typeof entry !== "string" || entry.trim().length === 0) {
+      logger.warn(
+        `[${repoFullName}] Invalid ${fieldName} entry: expected non-empty string. Skipping.`
+      );
+      continue;
+    }
+
+    result.push(entry.trim());
+  }
+
+  return result;
+}
+
+/**
+ * Parse and validate automerge config from the pr section.
+ *
+ * Returns null (feature disabled) when:
+ * - automerge is absent, null, or undefined
+ * - enabled is explicitly false
+ * - trustedReviewers is empty (can't satisfy approval requirement)
+ * - automerge is not a valid object
+ *
+ * dryRun defaults to true (label only, no merge).
+ * requireChecks defaults to true.
+ */
+function parseAutomergeConfig(
+  value: unknown,
+  trustedReviewers: string[],
+  repoFullName: string
+): AutomergeConfig | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+
+  if (typeof value !== "object" || Array.isArray(value)) {
+    logger.warn(
+      `[${repoFullName}] Invalid automerge: expected object. Disabling feature.`
+    );
+    return null;
+  }
+
+  const obj = value as {
+    enabled?: unknown;
+    dryRun?: unknown;
+    allowedPaths?: unknown;
+    denyPaths?: unknown;
+    maxFiles?: unknown;
+    maxChangedLines?: unknown;
+    minApprovals?: unknown;
+    requireChecks?: unknown;
+  };
+
+  // Check enabled flag — absent defaults to true (presence of section = opt-in)
+  if (obj.enabled !== undefined && obj.enabled !== null) {
+    if (typeof obj.enabled !== "boolean") {
+      logger.warn(
+        `[${repoFullName}] Invalid automerge.enabled: expected boolean. Disabling feature.`
+      );
+      return null;
+    }
+    if (!obj.enabled) {
+      return null;
+    }
+  }
+
+  if (trustedReviewers.length === 0) {
+    logger.warn(
+      `[${repoFullName}] automerge configured but trustedReviewers is empty. ` +
+      `Cannot satisfy approval requirement. Disabling feature.`
+    );
+    return null;
+  }
+
+  // Parse dryRun (default true for safe phased rollout)
+  let dryRun = true;
+  if (obj.dryRun !== undefined && obj.dryRun !== null) {
+    if (typeof obj.dryRun === "boolean") {
+      dryRun = obj.dryRun;
+    } else {
+      logger.warn(
+        `[${repoFullName}] Invalid automerge.dryRun: expected boolean. Using default (true).`
+      );
+    }
+  }
+
+  // Parse requireChecks (default true)
+  let requireChecks = true;
+  if (obj.requireChecks !== undefined && obj.requireChecks !== null) {
+    if (typeof obj.requireChecks === "boolean") {
+      requireChecks = obj.requireChecks;
+    } else {
+      logger.warn(
+        `[${repoFullName}] Invalid automerge.requireChecks: expected boolean. Using default (true).`
+      );
+    }
+  }
+
+  const allowedPaths = parsePathPatterns(obj.allowedPaths, DEFAULT_ALLOWED_PATHS, "automerge.allowedPaths", repoFullName);
+  const denyPaths = parsePathPatterns(obj.denyPaths, DEFAULT_DENY_PATHS, "automerge.denyPaths", repoFullName);
+
+  const maxFiles = parseIntValue(
+    obj.maxFiles,
+    CONFIG_BOUNDS.automerge.maxFiles,
+    "automerge.maxFiles",
+    repoFullName
+  );
+
+  const maxChangedLines = parseIntValue(
+    obj.maxChangedLines,
+    CONFIG_BOUNDS.automerge.maxChangedLines,
+    "automerge.maxChangedLines",
+    repoFullName
+  );
+
+  let minApprovals = parseIntValue(
+    obj.minApprovals,
+    CONFIG_BOUNDS.automerge.minApprovals,
+    "automerge.minApprovals",
+    repoFullName
+  );
+  // Clamp to trustedReviewers.length (can't require more than available)
+  minApprovals = clamp(
+    minApprovals,
+    CONFIG_BOUNDS.automerge.minApprovals.min,
+    Math.min(CONFIG_BOUNDS.automerge.minApprovals.max, trustedReviewers.length)
+  );
+
+  return {
+    dryRun,
+    allowedPaths,
+    denyPaths,
+    maxFiles,
+    maxChangedLines,
+    minApprovals,
+    requireChecks,
+  };
+}
+
 /**
  * Parse and validate standup config.
  * Opt-in feature — disabled by default.
@@ -901,6 +1154,22 @@ function parseStandupConfig(
   return { enabled: true, category: obj.category.trim() };
 }
 
+function deriveDiscussionDurationMs(exits: DiscussionExit[]): number {
+  const autoExits = exits.filter(isAutoDiscussionExit);
+  if (autoExits.length === 0) {
+    return 0;
+  }
+  return autoExits[autoExits.length - 1].afterMs;
+}
+
+function deriveVotingDurationMs(exits: VotingExit[]): number {
+  const autoExits = exits.filter(isAutoVotingExit);
+  if (autoExits.length === 0) {
+    return 0;
+  }
+  return autoExits[autoExits.length - 1].afterMs;
+}
+
 /**
  * Parse and validate a RepoConfigFile object.
  * Returns EffectiveConfig with all values validated and clamped.
@@ -909,65 +1178,59 @@ function parseStandupConfig(
  */
 function parseRepoConfig(raw: unknown, repoFullName: string): EffectiveConfig {
   const config = raw as RepoConfigFile | undefined;
-  const decisionMethod = parseProposalDecisionMethod(
-    config?.governance?.proposals?.decision?.method,
-    repoFullName
-  );
 
-  // Discussion exits (default: single exit at DISCUSSION_DURATION_MS)
+  // Discussion exits
   const discussionExitsRaw = config?.governance?.proposals?.discussion?.exits;
-  const discussionExits = parseDiscussionExits(discussionExitsRaw, DISCUSSION_DURATION_MS, repoFullName);
+  const discussionExits = parseDiscussionExits(discussionExitsRaw, repoFullName);
 
-  // Resolve PR settings (trustedReviewers parsed first — needed for intake and mergeReady clamping)
-  const prConfig = config?.governance?.pr;
-  const trustedReviewers = parseTrustedReviewers(prConfig?.trustedReviewers, repoFullName);
-  const intake = parseIntakeMethods(prConfig?.intake, trustedReviewers, repoFullName);
-  const mergeReady = parseMergeReadyConfig(prConfig?.mergeReady, trustedReviewers, repoFullName);
+  // PR workflows: opt-in — absent `pr:` section means all PR workflows disabled.
+  // When the key is present (even as empty `pr: {}`), parse with defaults.
+  const prConfigRaw = config?.governance?.pr;
+  const hasPrSection = config?.governance !== undefined
+    && config?.governance !== null
+    && "pr" in (config.governance as object);
 
-  // Voting exits (default applied if missing)
+  let pr: PRConfig | null = null;
+  if (hasPrSection) {
+    const trustedReviewers = parseTrustedReviewers(prConfigRaw?.trustedReviewers, repoFullName);
+    const intake = parseIntakeMethods(prConfigRaw?.intake, trustedReviewers, repoFullName);
+    const mergeReady = parseMergeReadyConfig(prConfigRaw?.mergeReady, trustedReviewers, repoFullName);
+    const automerge = parseAutomergeConfig(prConfigRaw?.automerge, trustedReviewers, repoFullName);
+    pr = {
+      staleDays: parseIntValue(prConfigRaw?.staleDays, PR_STALE_DAYS_BOUNDS, "pr.staleDays", repoFullName),
+      maxPRsPerIssue: parseIntValue(prConfigRaw?.maxPRsPerIssue, MAX_PRS_PER_ISSUE_BOUNDS, "pr.maxPRsPerIssue", repoFullName),
+      trustedReviewers,
+      intake,
+      mergeReady,
+      automerge,
+    };
+  }
+
+  // Voting exits
   const exitsRaw = config?.governance?.proposals?.voting?.exits;
   const exits = parseExits(exitsRaw, repoFullName);
-  // Extended voting exits (fallback to voting.exits when missing for backward compatibility)
+  // Extended voting exits (independent defaults)
   const extendedExitsRaw = config?.governance?.proposals?.extendedVoting?.exits;
-  const extendedExits = parseExits(extendedExitsRaw ?? exitsRaw, repoFullName);
+  const extendedExits = parseExits(extendedExitsRaw, repoFullName);
 
   return {
     version: typeof config?.version === "number" ? config.version : 1,
     governance: {
       proposals: {
-        decision: {
-          method: decisionMethod,
-        },
         discussion: {
           exits: discussionExits,
-          durationMs: discussionExits[discussionExits.length - 1].afterMs,
+          durationMs: deriveDiscussionDurationMs(discussionExits),
         },
         voting: {
           exits,
-          durationMs: exits[exits.length - 1].afterMs,
+          durationMs: deriveVotingDurationMs(exits),
         },
         extendedVoting: {
           exits: extendedExits,
-          durationMs: extendedExits[extendedExits.length - 1].afterMs,
+          durationMs: deriveVotingDurationMs(extendedExits),
         },
       },
-      pr: {
-        staleDays: parseIntValue(
-          prConfig?.staleDays,
-          PR_STALE_DAYS_BOUNDS,
-          "pr.staleDays",
-          repoFullName
-        ),
-        maxPRsPerIssue: parseIntValue(
-          prConfig?.maxPRsPerIssue,
-          MAX_PRS_PER_ISSUE_BOUNDS,
-          "pr.maxPRsPerIssue",
-          repoFullName
-        ),
-        trustedReviewers,
-        intake,
-        mergeReady,
-      },
+      pr,
     },
     standup: parseStandupConfig(config?.standup, repoFullName),
   };
@@ -975,46 +1238,29 @@ function parseRepoConfig(raw: unknown, repoFullName: string): EffectiveConfig {
 
 /**
  * Get the default configuration (env-derived, clamped to CONFIG_BOUNDS).
+ *
+ * PR workflows default to null (disabled) — repos must explicitly opt in
+ * by adding a `pr:` section in their .github/hivemoot.yml.
  */
 export function getDefaultConfig(): EffectiveConfig {
-  const createDefaultVotingExit = (): VotingExit => ({
-    afterMs: VOTING_DURATION_MS,
-    requires: "majority" as const,
-    minVoters: CONFIG_BOUNDS.voting.minVoters.default,
-    requiredVoters: { minCount: 0, voters: [] },
-  });
-
   return {
     version: 1,
     governance: {
       proposals: {
-        decision: {
-          method: DEFAULT_PROPOSAL_DECISION_METHOD,
-        },
         discussion: {
-          exits: [{
-            afterMs: DISCUSSION_DURATION_MS,
-            minReady: 0,
-            requiredReady: { minCount: 0, users: [] },
-          }],
-          durationMs: DISCUSSION_DURATION_MS,
+          exits: [DEFAULT_MANUAL_DISCUSSION_EXIT],
+          durationMs: 0,
         },
         voting: {
-          exits: [createDefaultVotingExit()],
-          durationMs: VOTING_DURATION_MS,
+          exits: [DEFAULT_MANUAL_VOTING_EXIT],
+          durationMs: 0,
         },
         extendedVoting: {
-          exits: [createDefaultVotingExit()],
-          durationMs: VOTING_DURATION_MS,
+          exits: [DEFAULT_MANUAL_VOTING_EXIT],
+          durationMs: 0,
         },
       },
-      pr: {
-        staleDays: PR_STALE_THRESHOLD_DAYS,
-        maxPRsPerIssue: MAX_PRS_PER_ISSUE,
-        trustedReviewers: [],
-        intake: [{ method: "update" }],
-        mergeReady: null,
-      },
+      pr: null,
     },
     standup: { enabled: false, category: "" },
   };
@@ -1026,16 +1272,24 @@ export function getDefaultConfig(): EffectiveConfig {
  * Fetches the config file from the repository using GitHub Contents API,
  * parses YAML, validates values, and clamps to safe boundaries.
  *
+ * Returns `null` when no config file exists (HTTP 404). Callers must treat
+ * `null` as "skip all automation" — the bot should not act on repos that
+ * have not opted in via a config file.
+ *
+ * Returns `EffectiveConfig` (with defaults for omitted fields) when the file
+ * exists but is empty, invalid YAML, or has an unexpected shape — this
+ * preserves automation for repos that have a file but made a config mistake.
+ *
  * @param octokit - GitHub client (Octokit or Probot context.octokit)
  * @param owner - Repository owner
  * @param repo - Repository name
- * @returns EffectiveConfig with validated settings
+ * @returns EffectiveConfig with validated settings, or null if no config file
  */
 export async function loadRepositoryConfig(
   octokit: RepoConfigClient,
   owner: string,
   repo: string
-): Promise<EffectiveConfig> {
+): Promise<EffectiveConfig | null> {
   const repoFullName = `${owner}/${repo}`;
 
   try {
@@ -1090,15 +1344,16 @@ export async function loadRepositoryConfig(
     logger.info(`[${repoFullName}] Loaded config from ${CONFIG_PATH}`);
     return parseRepoConfig(parsed, repoFullName);
   } catch (error) {
-    const status = (error as { status?: number }).status;
+    const status = getErrorStatus(error);
 
-    // 404 is expected when repo doesn't have a config file
+    // 404 means no config file — return null so callers skip all automation.
     if (status === 404) {
-      logger.debug(`[${repoFullName}] No ${CONFIG_PATH} found. Using defaults.`);
-      return getDefaultConfig();
+      logger.debug(`[${repoFullName}] No ${CONFIG_PATH} found. Skipping automation.`);
+      return null;
     }
 
-    // Policy: config load errors should not block processing; log and use defaults.
+    // For other errors (network, permissions, etc.) fall back to defaults so
+    // a transient API failure does not permanently silence the bot.
     const errorMessage = error instanceof Error ? error.message : String(error);
     const statusSuffix = status ? ` (status ${status})` : "";
     logger.warn(

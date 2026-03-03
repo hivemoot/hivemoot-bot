@@ -1472,10 +1472,23 @@ const COMMAND_HANDLERS: Record<string, (ctx: CommandContext) => Promise<CommandR
 };
 
 /**
+ * Build the reply body for an authorized user who sent an unrecognized command.
+ * Lists all known verbs so the user can correct their typo or learn what's available.
+ */
+function buildUnknownCommandReply(verb: string): string {
+  const available = Object.keys(COMMAND_HANDLERS)
+    .sort()
+    .map((v) => `\`/${v}\``)
+    .join(", ");
+  return `Unknown command \`/${verb}\`. Available commands: ${available}.`;
+}
+
+/**
  * Execute a parsed command.
  *
  * Authorization flow:
- * 1. Check if the verb is recognized → ignore if not
+ * 1. Check if the verb is recognized — if not, check auth and reply with
+ *    available commands for authorized users; silent ignore for others.
  * 2. Check sender permissions → silent ignore if not authorized
  * 3. React with 👀 to acknowledge receipt
  * 4. Execute the handler
@@ -1484,8 +1497,29 @@ const COMMAND_HANDLERS: Record<string, (ctx: CommandContext) => Promise<CommandR
 export async function executeCommand(ctx: CommandContext): Promise<CommandResult> {
   const handler = COMMAND_HANDLERS[ctx.verb];
   if (!handler) {
-    // Unknown command — silent ignore (not a command we handle)
-    return { status: "ignored" };
+    // Unknown command — check auth before responding.
+    // Per issue #81, unauthorized users always get silent ignore regardless of verb.
+    const authorization = await isAuthorized(ctx);
+    if (!authorization.authorized) {
+      ctx.log.info(
+        `Unknown command /${ctx.verb} from unauthorized user ${ctx.senderLogin} on #${ctx.issueNumber} — ignoring`,
+      );
+      return { status: "ignored" };
+    }
+
+    // Authorized user typed an unrecognized command — give them useful feedback.
+    // Idempotency guard: skip if we already replied (eyes reaction present).
+    if (await alreadyProcessed(ctx)) {
+      ctx.log.info(
+        `Unknown command /${ctx.verb} on comment ${ctx.commentId} already processed — skipping retry`,
+      );
+      return { status: "ignored" };
+    }
+
+    await react(ctx, "eyes");
+    await react(ctx, "confused");
+    await reply(ctx, buildUnknownCommandReply(ctx.verb));
+    return { status: "rejected", reason: `Unknown command: /${ctx.verb}` };
   }
 
   // Authorization: only maintainers can use commands

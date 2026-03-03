@@ -302,9 +302,52 @@ describe("executeCommand", () => {
   });
 
   describe("unknown commands", () => {
-    it("should ignore unknown command verbs", async () => {
-      const result = await executeCommand(createCtx({ verb: "unknown" }));
+    it("should reply with available commands for authorized users", async () => {
+      const ctx = createCtx({ verb: "frobnicate" });
+      const result = await executeCommand(ctx);
+
+      expect(result).toEqual({ status: "rejected", reason: "Unknown command: /frobnicate" });
+      expect(ctx.octokit.rest.reactions.createForIssueComment).toHaveBeenCalledWith(
+        expect.objectContaining({ content: "eyes" }),
+      );
+      expect(ctx.octokit.rest.reactions.createForIssueComment).toHaveBeenCalledWith(
+        expect.objectContaining({ content: "confused" }),
+      );
+      const createComment = ctx.octokit.rest.issues.createComment as ReturnType<typeof vi.fn>;
+      expect(createComment).toHaveBeenCalledOnce();
+      const body: string = createComment.mock.calls[0][0].body;
+      expect(body).toContain("/frobnicate");
+      expect(body).toContain("/vote");
+      expect(body).toContain("/doctor");
+    });
+
+    it("should silently ignore unknown commands from unauthorized users", async () => {
+      const ctx = createCtx({
+        octokit: createMockOctokit("read"),
+        verb: "frobnicate",
+      });
+      const result = await executeCommand(ctx);
+
       expect(result).toEqual({ status: "ignored" });
+      expect(ctx.octokit.rest.reactions.createForIssueComment).not.toHaveBeenCalled();
+      expect(ctx.octokit.rest.issues.createComment).not.toHaveBeenCalled();
+    });
+
+    it("should skip retry on unknown command when already processed", async () => {
+      const octokit = createMockOctokit();
+      // Simulate bot comment existing so bot login resolves
+      (octokit.rest.issues.listComments as ReturnType<typeof vi.fn>).mockResolvedValue({
+        data: [{ user: { login: "hivemoot[bot]" }, performed_via_github_app: { id: 12345 } }],
+      });
+      // Simulate eyes reaction already present from bot
+      (octokit.rest.reactions.listForIssueComment as ReturnType<typeof vi.fn>).mockResolvedValue({
+        data: [{ user: { login: "hivemoot[bot]" } }],
+      });
+      const ctx = createCtx({ octokit, verb: "frobnicate" });
+      const result = await executeCommand(ctx);
+
+      expect(result).toEqual({ status: "ignored" });
+      expect(octokit.rest.issues.createComment).not.toHaveBeenCalled();
     });
   });
 

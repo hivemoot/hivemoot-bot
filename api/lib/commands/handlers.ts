@@ -1306,7 +1306,7 @@ async function runConfigDoctorCheck(
       return {
         name: "Config",
         status: "advisory",
-        detail: `Loaded \`${configPath}\` (${intakeDetail}) — governance exits misconfigured (add \`afterMinutes\` to each \`type: auto\` exit)`,
+        detail: `Loaded \`${configPath}\` (${intakeDetail}) — governance exits are misconfigured and some entries will be discarded`,
         subItems: governanceAdvisories,
       };
     }

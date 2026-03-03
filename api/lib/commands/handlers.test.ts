@@ -725,8 +725,28 @@ describe("executeCommand", () => {
 
       const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
       expect(commentArgs.body).toContain("[!] **Config**");
-      expect(commentArgs.body).toContain("governance exits misconfigured");
+      expect(commentArgs.body).toContain("governance exits are misconfigured");
       expect(commentArgs.body).toContain("governance.proposals.discussion.exits");
+      expect(commentArgs.body).toContain("silently discarded");
+    });
+
+    it("should report Config as advisory when type:auto has non-finite afterMinutes (e.g. .inf)", async () => {
+      const ctx = createCtx({ verb: "doctor" });
+      ctx.octokit.rest.repos.getContent.mockResolvedValueOnce({
+        data: {
+          type: "file",
+          content: Buffer.from(
+            "version: 1\ngovernance:\n  proposals:\n    voting:\n      exits:\n        - type: auto\n          afterMinutes: .inf\n",
+          ).toString("base64"),
+        },
+      });
+
+      await executeCommand(ctx);
+
+      const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
+      expect(commentArgs.body).toContain("[!] **Config**");
+      expect(commentArgs.body).toContain("governance exits are misconfigured");
+      expect(commentArgs.body).toContain("governance.proposals.voting.exits");
       expect(commentArgs.body).toContain("silently discarded");
     });
 
@@ -764,7 +784,7 @@ describe("executeCommand", () => {
 
       const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
       expect(commentArgs.body).toContain("[!] **Config**");
-      expect(commentArgs.body).toContain("governance exits misconfigured");
+      expect(commentArgs.body).toContain("governance exits are misconfigured");
       expect(commentArgs.body).toContain("governance.proposals.discussion.exits");
       expect(commentArgs.body).toContain("must be an array");
     });
@@ -784,7 +804,7 @@ describe("executeCommand", () => {
 
       const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
       expect(commentArgs.body).toContain("[!] **Config**");
-      expect(commentArgs.body).toContain("governance exits misconfigured");
+      expect(commentArgs.body).toContain("governance exits are misconfigured");
       expect(commentArgs.body).toContain("governance.proposals.voting.exits");
       expect(commentArgs.body).toContain("mixes");
     });
@@ -804,7 +824,7 @@ describe("executeCommand", () => {
 
       const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
       expect(commentArgs.body).toContain("[x] **Config**");
-      expect(commentArgs.body).not.toContain("governance exits misconfigured");
+      expect(commentArgs.body).not.toContain("governance exits are misconfigured");
     });
   });
 

@@ -249,6 +249,20 @@ describe("OnboardingService.createOnboardingPR", () => {
     expect(mocks.pullsList).toHaveBeenCalledTimes(2);
   });
 
+  it("should handle PR-dismissed (422 on pulls.create) and re-query finds closed PR", async () => {
+    mocks.pullsList
+      .mockResolvedValueOnce({ data: [] })
+      .mockResolvedValueOnce({
+        data: [{ number: 100, html_url: "https://github.com/owner/repo/pull/100", state: "closed" }],
+      });
+    mocks.pullsCreate.mockRejectedValue({ status: 422 });
+
+    const result = await service.createOnboardingPR("owner", "repo");
+
+    expect(result).toEqual({ skipped: true, reason: "pr-dismissed", prNumber: 100, prUrl: "https://github.com/owner/repo/pull/100" });
+    expect(mocks.pullsList).toHaveBeenCalledTimes(2);
+  });
+
   it("should rethrow 422 from pulls.create if re-query finds no PR", async () => {
     mocks.pullsList.mockResolvedValue({ data: [] });
     mocks.pullsCreate.mockRejectedValue({ status: 422 });

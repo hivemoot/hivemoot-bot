@@ -1185,6 +1185,11 @@ async function runLabelDoctorCheck(ctx: CommandContext): Promise<DoctorCheckResu
  * The parser silently discards these and falls back to manual mode, so operators
  * get `Config: pass` with no signal that their auto exits are broken.
  *
+ * Covers all silent discard paths in the exits parsers:
+ * - `exits` is not an array (type error — clearly misconfigured)
+ * - `exits` contains mixed manual and auto entries (collapses to manual)
+ * - `exits` has `type: auto` entries missing a valid `afterMinutes` (entry is skipped)
+ *
  * Returns advisory messages for each affected phase.
  */
 function detectDiscardedAutoExits(rawConfig: unknown): string[] {
@@ -1210,20 +1215,42 @@ function detectDiscardedAutoExits(rawConfig: unknown): string[] {
     const phase = proposalsObj[key];
     if (typeof phase !== "object" || phase === null || Array.isArray(phase)) continue;
     const exits = (phase as Record<string, unknown>).exits;
-    if (!Array.isArray(exits)) continue;
+    if (exits === undefined || exits === null) continue;
 
-    for (const exit of exits) {
-      if (typeof exit !== "object" || exit === null || Array.isArray(exit)) continue;
-      const exitObj = exit as Record<string, unknown>;
-      if (
-        exitObj.type === "auto" &&
-        (typeof exitObj.afterMinutes !== "number" || !Number.isFinite(exitObj.afterMinutes))
-      ) {
-        advisories.push(
-          `\`governance.proposals.${label}.exits\` has a \`type: auto\` entry without \`afterMinutes\` — it will be silently discarded and fall back to manual mode`,
-        );
-        break; // one advisory per phase is enough
-      }
+    const phasePrefix = `\`governance.proposals.${label}.exits\``;
+
+    // Non-array exits value is a type error — the parser ignores it and falls back to manual
+    if (!Array.isArray(exits)) {
+      advisories.push(
+        `${phasePrefix} must be an array (got \`${typeof exits}\`) — it will be ignored and fall back to manual mode`,
+      );
+      continue;
+    }
+
+    // Mixed manual and auto entries: the parser collapses to manual-only with no in-band signal
+    const hasAuto = exits.some((e) => typeof e === "object" && e !== null && (e as Record<string, unknown>).type === "auto");
+    const hasManual = exits.some((e) => typeof e === "object" && e !== null && (e as Record<string, unknown>).type === "manual");
+    if (hasAuto && hasManual) {
+      advisories.push(
+        `${phasePrefix} mixes \`type: manual\` and \`type: auto\` entries — mixed exits are not supported and will fall back to manual mode`,
+      );
+      continue;
+    }
+
+    // type:auto entries without a valid afterMinutes are silently skipped
+    const hasBadAuto = exits.some(
+      (e) =>
+        typeof e === "object" &&
+        e !== null &&
+        !Array.isArray(e) &&
+        (e as Record<string, unknown>).type === "auto" &&
+        (typeof (e as Record<string, unknown>).afterMinutes !== "number" ||
+          !Number.isFinite((e as Record<string, unknown>).afterMinutes as number)),
+    );
+    if (hasBadAuto) {
+      advisories.push(
+        `${phasePrefix} has a \`type: auto\` entry without \`afterMinutes\` — it will be silently discarded and fall back to manual mode`,
+      );
     }
   }
 

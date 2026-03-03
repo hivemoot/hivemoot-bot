@@ -709,6 +709,63 @@ describe("executeCommand", () => {
       expect(commentArgs.body).toContain("**PR Workflow**: No trusted reviewers configured");
       expect(commentArgs.body).toContain("**Standup**: Category `Hivemoot Reports` is available");
     });
+
+    it("should report Config as advisory when discussion exits have type:auto without afterMinutes", async () => {
+      const ctx = createCtx({ verb: "doctor" });
+      ctx.octokit.rest.repos.getContent.mockResolvedValueOnce({
+        data: {
+          type: "file",
+          content: Buffer.from(
+            "version: 1\ngovernance:\n  proposals:\n    discussion:\n      exits:\n        - type: auto\n",
+          ).toString("base64"),
+        },
+      });
+
+      await executeCommand(ctx);
+
+      const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
+      expect(commentArgs.body).toContain("[!] **Config**");
+      expect(commentArgs.body).toContain("governance exits misconfigured");
+      expect(commentArgs.body).toContain("governance.proposals.discussion.exits");
+      expect(commentArgs.body).toContain("silently discarded");
+    });
+
+    it("should report Config as advisory for multiple phases with broken auto exits", async () => {
+      const ctx = createCtx({ verb: "doctor" });
+      ctx.octokit.rest.repos.getContent.mockResolvedValueOnce({
+        data: {
+          type: "file",
+          content: Buffer.from(
+            "version: 1\ngovernance:\n  proposals:\n    voting:\n      exits:\n        - type: auto\n    extendedVoting:\n      exits:\n        - type: auto\n",
+          ).toString("base64"),
+        },
+      });
+
+      await executeCommand(ctx);
+
+      const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
+      expect(commentArgs.body).toContain("[!] **Config**");
+      expect(commentArgs.body).toContain("governance.proposals.voting.exits");
+      expect(commentArgs.body).toContain("governance.proposals.extendedVoting.exits");
+    });
+
+    it("should report Config as pass when auto exits have valid afterMinutes", async () => {
+      const ctx = createCtx({ verb: "doctor" });
+      ctx.octokit.rest.repos.getContent.mockResolvedValueOnce({
+        data: {
+          type: "file",
+          content: Buffer.from(
+            "version: 1\ngovernance:\n  proposals:\n    discussion:\n      exits:\n        - type: auto\n          afterMinutes: 1440\n",
+          ).toString("base64"),
+        },
+      });
+
+      await executeCommand(ctx);
+
+      const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
+      expect(commentArgs.body).toContain("[x] **Config**");
+      expect(commentArgs.body).not.toContain("governance exits misconfigured");
+    });
   });
 
   describe("/gather command", () => {

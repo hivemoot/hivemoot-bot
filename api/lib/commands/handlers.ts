@@ -1180,6 +1180,56 @@ async function runLabelDoctorCheck(ctx: CommandContext): Promise<DoctorCheckResu
   };
 }
 
+/**
+ * Check raw governance config for `type: auto` exits that lack `afterMinutes`.
+ * The parser silently discards these and falls back to manual mode, so operators
+ * get `Config: pass` with no signal that their auto exits are broken.
+ *
+ * Returns advisory messages for each affected phase.
+ */
+function detectDiscardedAutoExits(rawConfig: unknown): string[] {
+  if (typeof rawConfig !== "object" || rawConfig === null || Array.isArray(rawConfig)) {
+    return [];
+  }
+
+  const raw = rawConfig as Record<string, unknown>;
+  const proposals = (raw.governance as Record<string, unknown> | undefined)?.proposals;
+  if (typeof proposals !== "object" || proposals === null || Array.isArray(proposals)) {
+    return [];
+  }
+
+  const proposalsObj = proposals as Record<string, unknown>;
+  const phases = [
+    { key: "discussion", label: "discussion" },
+    { key: "voting", label: "voting" },
+    { key: "extendedVoting", label: "extendedVoting" },
+  ];
+
+  const advisories: string[] = [];
+  for (const { key, label } of phases) {
+    const phase = proposalsObj[key];
+    if (typeof phase !== "object" || phase === null || Array.isArray(phase)) continue;
+    const exits = (phase as Record<string, unknown>).exits;
+    if (!Array.isArray(exits)) continue;
+
+    for (const exit of exits) {
+      if (typeof exit !== "object" || exit === null || Array.isArray(exit)) continue;
+      const exitObj = exit as Record<string, unknown>;
+      if (
+        exitObj.type === "auto" &&
+        (typeof exitObj.afterMinutes !== "number" || !Number.isFinite(exitObj.afterMinutes))
+      ) {
+        advisories.push(
+          `\`governance.proposals.${label}.exits\` has a \`type: auto\` entry without \`afterMinutes\` — it will be silently discarded and fall back to manual mode`,
+        );
+        break; // one advisory per phase is enough
+      }
+    }
+  }
+
+  return advisories;
+}
+
 async function runConfigDoctorCheck(
   ctx: CommandContext,
   repoConfig: EffectiveConfig,
@@ -1223,6 +1273,17 @@ async function runConfigDoctorCheck(
     const intakeDetail = repoConfig.governance.pr
       ? `intake: ${repoConfig.governance.pr.intake.map((entry) => entry.method).join(", ") || "none"}`
       : "PR workflows: disabled";
+
+    const governanceAdvisories = detectDiscardedAutoExits(parsed);
+    if (governanceAdvisories.length > 0) {
+      return {
+        name: "Config",
+        status: "advisory",
+        detail: `Loaded \`${configPath}\` (${intakeDetail}) — governance exits misconfigured (add \`afterMinutes\` to each \`type: auto\` exit)`,
+        subItems: governanceAdvisories,
+      };
+    }
+
     return {
       name: "Config",
       status: "pass",

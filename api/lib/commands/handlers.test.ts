@@ -333,6 +333,26 @@ describe("executeCommand", () => {
       expect(ctx.octokit.rest.issues.createComment).not.toHaveBeenCalled();
     });
 
+    it("should surface transient auth error on unknown command as visible failure", async () => {
+      const octokit = createMockOctokit();
+      const econnreset = Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" });
+      octokit.rest.repos.getCollaboratorPermissionLevel.mockRejectedValue(econnreset);
+
+      const ctx = createCtx({ octokit, verb: "frobnicate" });
+      const result = await executeCommand(ctx);
+
+      expect(result).toEqual({
+        status: "rejected",
+        reason: expect.stringContaining("TRANSIENT"),
+      });
+      expect(octokit.rest.reactions.createForIssueComment).toHaveBeenCalledWith(
+        expect.objectContaining({ content: "confused" }),
+      );
+      expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({ body: expect.stringContaining("transient") }),
+      );
+    });
+
     it("should skip retry on unknown command when already processed", async () => {
       const octokit = createMockOctokit();
       // Simulate bot comment existing so bot login resolves

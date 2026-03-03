@@ -1501,6 +1501,14 @@ export async function executeCommand(ctx: CommandContext): Promise<CommandResult
     // Per issue #81, unauthorized users always get silent ignore regardless of verb.
     const authorization = await isAuthorized(ctx);
     if (!authorization.authorized) {
+      if (authorization.transientError) {
+        const classification = classifyCommandFailure(authorization.transientError);
+        const failureCode = buildFailureCode(ctx.verb, classification);
+        const correlationId = buildCommandCorrelationId(ctx);
+        await react(ctx, "confused");
+        await reply(ctx, buildCommandFailureReply(ctx, failureCode, correlationId, classification));
+        return { status: "rejected", reason: `Auth check failed: ${failureCode}` };
+      }
       ctx.log.info(
         `Unknown command /${ctx.verb} from unauthorized user ${ctx.senderLogin} on #${ctx.issueNumber} — ignoring`,
       );

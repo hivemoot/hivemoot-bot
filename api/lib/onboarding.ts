@@ -174,7 +174,7 @@ export interface OnboardingClient {
         head: string;
         per_page?: number;
       }) => Promise<{
-        data: Array<{ number: number; html_url: string }>;
+        data: Array<{ number: number; html_url: string; state: string }>;
       }>;
       create: (params: {
         owner: string;
@@ -233,8 +233,11 @@ export class OnboardingService {
       return { skipped: true, reason: "config-exists" };
     }
 
-    const existingPR = await this.findOpenOnboardingPR(owner, repo, owner);
+    const existingPR = await this.findExistingOnboardingPR(owner, repo, owner);
     if (existingPR) {
+      if (existingPR.state === "closed") {
+        return { skipped: true, reason: "pr-dismissed", prNumber: existingPR.number, prUrl: existingPR.html_url };
+      }
       return { skipped: true, reason: "pr-exists", prNumber: existingPR.number, prUrl: existingPR.html_url };
     }
 
@@ -296,9 +299,10 @@ export class OnboardingService {
       if (getErrorStatus(error) !== 422) {
         throw error;
       }
-      const existingPR = await this.findOpenOnboardingPR(owner, repo, owner);
+      const existingPR = await this.findExistingOnboardingPR(owner, repo, owner);
       if (existingPR) {
-        return { skipped: true, reason: "pr-exists", prNumber: existingPR.number, prUrl: existingPR.html_url };
+        const reason = existingPR.state === "closed" ? "pr-dismissed" : "pr-exists";
+        return { skipped: true, reason, prNumber: existingPR.number, prUrl: existingPR.html_url };
       }
       throw error;
     }
@@ -316,15 +320,15 @@ export class OnboardingService {
     }
   }
 
-  private async findOpenOnboardingPR(
+  private async findExistingOnboardingPR(
     owner: string,
     repo: string,
-    repoOwner: string
-  ): Promise<{ number: number; html_url: string } | null> {
+    repoOwner: string,
+  ): Promise<{ number: number; html_url: string; state: string } | null> {
     const { data: prs } = await this.client.rest.pulls.list({
       owner,
       repo,
-      state: "open",
+      state: "all",
       head: `${repoOwner}:${ONBOARDING_BRANCH}`,
       per_page: 1,
     });

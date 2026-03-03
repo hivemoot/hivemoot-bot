@@ -106,12 +106,23 @@ describe("OnboardingService.createOnboardingPR", () => {
 
   it("should skip when an open onboarding PR already exists", async () => {
     mocks.pullsList.mockResolvedValue({
-      data: [{ number: 7, html_url: "https://github.com/owner/repo/pull/7" }],
+      data: [{ number: 7, html_url: "https://github.com/owner/repo/pull/7", state: "open" }],
     });
 
     const result = await service.createOnboardingPR("owner", "repo");
 
     expect(result).toEqual({ skipped: true, reason: "pr-exists", prNumber: 7, prUrl: "https://github.com/owner/repo/pull/7" });
+    expect(mocks.pullsCreate).not.toHaveBeenCalled();
+  });
+
+  it("should skip when a closed (dismissed) onboarding PR exists", async () => {
+    mocks.pullsList.mockResolvedValue({
+      data: [{ number: 8, html_url: "https://github.com/owner/repo/pull/8", state: "closed" }],
+    });
+
+    const result = await service.createOnboardingPR("owner", "repo");
+
+    expect(result).toEqual({ skipped: true, reason: "pr-dismissed", prNumber: 8, prUrl: "https://github.com/owner/repo/pull/8" });
     expect(mocks.pullsCreate).not.toHaveBeenCalled();
   });
 
@@ -212,13 +223,13 @@ describe("OnboardingService.createOnboardingPR", () => {
     );
   });
 
-  it("should filter open PRs by owner:branch head format", async () => {
+  it("should query all PR states by owner:branch head format", async () => {
     await service.createOnboardingPR("owner", "repo");
 
     expect(mocks.pullsList).toHaveBeenCalledWith({
       owner: "owner",
       repo: "repo",
-      state: "open",
+      state: "all",
       head: `owner:${ONBOARDING_BRANCH}`,
       per_page: 1,
     });
@@ -228,7 +239,7 @@ describe("OnboardingService.createOnboardingPR", () => {
     mocks.pullsList
       .mockResolvedValueOnce({ data: [] })
       .mockResolvedValueOnce({
-        data: [{ number: 99, html_url: "https://github.com/owner/repo/pull/99" }],
+        data: [{ number: 99, html_url: "https://github.com/owner/repo/pull/99", state: "open" }],
       });
     mocks.pullsCreate.mockRejectedValue({ status: 422 });
 

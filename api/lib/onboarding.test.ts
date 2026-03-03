@@ -269,4 +269,17 @@ describe("OnboardingService.createOnboardingPR", () => {
 
     await expect(service.createOnboardingPR("owner", "repo")).rejects.toEqual({ status: 422 });
   });
+
+  it("should propagate non-422 errors from createOrUpdateFileContents", async () => {
+    mocks.reposCreateOrUpdateFileContents.mockRejectedValue({ status: 500 });
+
+    await expect(service.createOnboardingPR("owner", "repo")).rejects.toEqual({ status: 500 });
+    expect(mocks.pullsCreate).not.toHaveBeenCalled();
+  });
+
+  it("should propagate non-422 errors from pulls.create", async () => {
+    mocks.pullsCreate.mockRejectedValue({ status: 500 });
+
+    await expect(service.createOnboardingPR("owner", "repo")).rejects.toEqual({ status: 500 });
+  });
 });

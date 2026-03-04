@@ -1495,7 +1495,7 @@ function buildUnknownCommandReply(verb: string): string {
  * 5. React with ✅ on success, post error comment on rejection
  */
 export async function executeCommand(ctx: CommandContext): Promise<CommandResult> {
-  const handler = COMMAND_HANDLERS[ctx.verb];
+  const handler = Object.hasOwn(COMMAND_HANDLERS, ctx.verb) ? COMMAND_HANDLERS[ctx.verb] : undefined;
   if (!handler) {
     // Unknown command — check auth before responding.
     // Per issue #81, unauthorized users always get silent ignore regardless of verb.

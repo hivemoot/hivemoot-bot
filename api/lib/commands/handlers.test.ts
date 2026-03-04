@@ -369,6 +369,22 @@ describe("executeCommand", () => {
       expect(result).toEqual({ status: "ignored" });
       expect(octokit.rest.issues.createComment).not.toHaveBeenCalled();
     });
+
+    it("should treat prototype-inherited names like /constructor as unknown commands", async () => {
+      // COMMAND_HANDLERS is a plain object; inherited names like "constructor",
+      // "toString", and "hasOwnProperty" must not be treated as known handlers.
+      for (const verb of ["constructor", "toString", "hasOwnProperty"]) {
+        const ctx = createCtx({ verb });
+        const result = await executeCommand(ctx);
+
+        expect(result).toEqual({ status: "rejected", reason: `Unknown command: /${verb}` });
+        const createComment = ctx.octokit.rest.issues.createComment as ReturnType<typeof vi.fn>;
+        const body: string = createComment.mock.calls[0][0].body;
+        expect(body).toContain(`/${verb}`);
+        expect(body).toContain("Available commands");
+        vi.clearAllMocks();
+      }
+    });
   });
 
   describe("/vote command", () => {

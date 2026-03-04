@@ -1805,6 +1805,40 @@ describe("Queen Bot", () => {
       expect(octokit.rest.issues.removeLabel).not.toHaveBeenCalled();
     });
 
+    it("should surface errors from pull_request.ready_for_review", async () => {
+      const { handlers } = createWebhookHarness();
+      const log = mkLog();
+      vi.mocked(loadRepositoryConfig).mockRejectedValueOnce(new Error("config-fail"));
+
+      await expect(handlers.get("pull_request.ready_for_review")!({
+        octokit: createPRGuardOctokit(),
+        log,
+        payload: {
+          pull_request: { number: 1, draft: false, labels: [] },
+          repository: testRepo,
+        },
+      })).rejects.toThrow("config-fail");
+
+      expect(log.error).toHaveBeenCalled();
+    });
+
+    it("should surface errors from pull_request.converted_to_draft", async () => {
+      const { handlers } = createWebhookHarness();
+      const log = mkLog();
+      vi.mocked(loadRepositoryConfig).mockRejectedValueOnce(new Error("config-fail"));
+
+      await expect(handlers.get("pull_request.converted_to_draft")!({
+        octokit: createPRGuardOctokit(),
+        log,
+        payload: {
+          pull_request: { number: 1, draft: true, labels: [{ name: LABELS.MERGE_READY }] },
+          repository: testRepo,
+        },
+      })).rejects.toThrow("config-fail");
+
+      expect(log.error).toHaveBeenCalled();
+    });
+
     it("should skip merge-readiness on check_suite.completed when pr config is null", async () => {
       const { handlers } = createWebhookHarness();
       vi.mocked(loadRepositoryConfig).mockResolvedValue(nullPrConfig as any);

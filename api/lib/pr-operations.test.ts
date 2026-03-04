@@ -230,6 +230,8 @@ describe("PROperations", () => {
               updated_at: "2024-01-15T10:30:00Z",
               user: { login: "test-author" },
               head: { sha: "abc123def456" },
+              mergeable: true,
+              draft: false,
             },
           }),
           update: vi.fn().mockResolvedValue({}),
@@ -270,6 +272,8 @@ describe("PROperations", () => {
         updatedAt: new Date("2024-01-15T10:30:00Z"),
         author: "test-author",
         headSha: "abc123def456",
+        mergeable: true,
+        draft: false,
       });
       expect(mockClient.rest.pulls.get).toHaveBeenCalledWith({
         owner: "test-org",

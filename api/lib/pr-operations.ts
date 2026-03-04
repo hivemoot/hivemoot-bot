@@ -32,6 +32,7 @@ export interface PRClient {
           user: { login: string } | null;
           head: { sha: string };
           mergeable: boolean | null;
+          draft?: boolean;
         };
       }>;
 
@@ -254,6 +255,7 @@ export class PROperations {
     author: string;
     headSha: string;
     mergeable: boolean | null;
+    draft: boolean;
   }> {
     const { data } = await this.client.rest.pulls.get({
       owner: ref.owner,
@@ -270,6 +272,7 @@ export class PROperations {
       author: data.user?.login ?? "unknown",
       headSha: data.head.sha,
       mergeable: data.mergeable,
+      draft: data.draft ?? false,
     };
   }
 

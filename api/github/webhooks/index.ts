@@ -295,6 +295,92 @@ export function app(probotApp: Probot): void {
   });
 
   /**
+   * Handle draft -> ready transition.
+   * Re-runs merge-readiness/automerge evaluation when an author marks a PR ready.
+   */
+  probotApp.on("pull_request.ready_for_review", async (context) => {
+    const { number } = context.payload.pull_request;
+    const { owner, repo, fullName } = getRepoContext(context.payload.repository);
+
+    context.log.info(`Processing ready_for_review for PR #${number} in ${fullName}`);
+
+    try {
+      const appId = getAppId();
+      const prs = createPROperations(context.octokit, { appId });
+      const repoConfig = await loadRepositoryConfig(context.octokit, owner, repo);
+      if (!repoConfig) {
+        context.log.debug(`No config in ${fullName}; skipping ready_for_review automation`);
+        return;
+      }
+
+      if (repoConfig.governance.pr) {
+        const currentLabels = context.payload.pull_request.labels?.map(
+          (l: { name: string }) => l.name
+        );
+        const prRef = { owner, repo, prNumber: number };
+
+        await evaluateMergeReadiness({
+          prs,
+          ref: prRef,
+          config: repoConfig.governance.pr.mergeReady,
+          trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+          currentLabels,
+          draft: false,
+          log: context.log,
+        });
+
+        await evaluateAutomerge({
+          prs,
+          ref: prRef,
+          config: repoConfig.governance.pr.automerge,
+          trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+          currentLabels,
+          log: context.log,
+        });
+      }
+    } catch (error) {
+      context.log.error({ err: error, pr: number, repo: fullName }, "Failed to process ready_for_review");
+      throw error;
+    }
+  });
+
+  /**
+   * Handle ready -> draft transition.
+   * Draft PRs cannot be merge-ready/automerge, so remove both labels immediately.
+   */
+  probotApp.on("pull_request.converted_to_draft", async (context) => {
+    const { number } = context.payload.pull_request;
+    const { owner, repo, fullName } = getRepoContext(context.payload.repository);
+
+    context.log.info(`Processing converted_to_draft for PR #${number} in ${fullName}`);
+
+    try {
+      const appId = getAppId();
+      const prs = createPROperations(context.octokit, { appId });
+      const repoConfig = await loadRepositoryConfig(context.octokit, owner, repo);
+      if (!repoConfig) {
+        context.log.debug(`No config in ${fullName}; skipping converted_to_draft automation`);
+        return;
+      }
+
+      if (!repoConfig.governance.pr) return;
+
+      const currentLabels = context.payload.pull_request.labels?.map((l: { name: string }) => l.name) ?? [];
+      const hadMergeReady = currentLabels.some((label) => isLabelMatch(label, LABELS.MERGE_READY));
+      const hadAutomerge = currentLabels.some((label) => isLabelMatch(label, LABELS.AUTOMERGE));
+
+      if (!hadMergeReady && !hadAutomerge) return;
+
+      const prRef = { owner, repo, prNumber: number };
+      await prs.removeLabel(prRef, LABELS.MERGE_READY);
+      await prs.removeLabel(prRef, LABELS.AUTOMERGE);
+    } catch (error) {
+      context.log.error({ err: error, pr: number, repo: fullName }, "Failed to process converted_to_draft");
+      throw error;
+    }
+  });
+
+  /**
    * Handle PR description edits to pick up newly added closing keywords.
    */
   probotApp.on("pull_request.edited", async (context) => {
@@ -547,6 +633,7 @@ export function app(probotApp: Probot): void {
           ref: { owner, repo, prNumber: number },
           config: repoConfig.governance.pr.mergeReady,
           trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+          draft: context.payload.pull_request.draft,
           log: context.log,
         });
 
@@ -590,6 +677,7 @@ export function app(probotApp: Probot): void {
           ref: { owner, repo, prNumber: number },
           config: repoConfig.governance.pr.mergeReady,
           trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+          draft: context.payload.pull_request.draft,
           log: context.log,
         });
 
@@ -637,6 +725,7 @@ export function app(probotApp: Probot): void {
           config: repoConfig.governance.pr.mergeReady,
           trustedReviewers: repoConfig.governance.pr.trustedReviewers,
           currentLabels,
+          draft: context.payload.pull_request.draft,
           log: context.log,
         });
       }

@@ -7,17 +7,18 @@
  *
  * Conditions (hard gates — block merge-ready label):
  * 1. PR is open and not merged
- * 2. At least minApprovals approvals from trustedReviewers
- * 3. PR is not conflicting (`mergeable !== false`; `null` = not yet computed, allowed)
- * 4. All check runs on HEAD are completed with success/neutral/skipped
- * 5. All commit statuses on HEAD are success (legacy Status API)
+ * 2. PR is not draft
+ * 3. At least minApprovals approvals from trustedReviewers
+ * 4. PR is not conflicting (`mergeable !== false`; `null` = not yet computed, allowed)
+ * 5. All check runs on HEAD are completed with success/neutral/skipped
+ * 6. All commit statuses on HEAD are success (legacy Status API)
  *
  * Advisory checks (informational — do not block):
  * - PR has `implementation` label
  * - PR has `merge-ready` label
  *
  * Short-circuit order in evaluateMergeReadiness optimized by API cost:
- * config → labels → approvals (1 call) → PR fetch (headSha + mergeable) → mergeable → CI (2 calls)
+ * config → labels → draft (if pre-fetched) → approvals (1 call) → PR fetch (headSha + mergeable + draft fallback) → mergeable → CI (2 calls)
  */
 
 import { LABELS, isLabelMatch } from "../config.js";
@@ -36,6 +37,8 @@ export interface MergeReadinessParams {
   trustedReviewers: string[];
   /** Pre-fetched labels to avoid extra API call (from webhook payload). */
   currentLabels?: string[];
+  /** Draft state from webhook payload (optional; fetched from PR when absent and headSha isn't pre-fetched). */
+  draft?: boolean;
   /** HEAD SHA to check CI against. Fetched from PR if not provided. */
   headSha?: string;
   log?: { info: (msg: string) => void; debug?: (msg: string) => void };
@@ -296,6 +299,16 @@ export async function evaluateMergeReadiness(
   const hasImplementation = labels.some(l => isLabelMatch(l, LABELS.IMPLEMENTATION));
   const hasMergeReady = labels.some(l => isLabelMatch(l, LABELS.MERGE_READY));
 
+  // Draft PRs are never merge-ready.
+  if (params.draft === true) {
+    if (hasMergeReady) {
+      await prs.removeLabel(ref, LABELS.MERGE_READY);
+      log?.info(`[PR #${ref.prNumber}] Removed merge-ready: PR is draft`);
+      return { action: "removed" };
+    }
+    return { action: "skipped", reason: "PR is draft" };
+  }
+
   if (!hasImplementation) {
     if (hasMergeReady) {
       await prs.removeLabel(ref, LABELS.MERGE_READY);
@@ -326,6 +339,7 @@ export async function evaluateMergeReadiness(
   }
 
   // 4. Get HEAD SHA + mergeable state (use pre-fetched or fetch from PR)
+  let draft: boolean | undefined = params.draft;
   let headSha: string;
   let mergeable: boolean | null;
   if (params.headSha) {
@@ -336,6 +350,18 @@ export async function evaluateMergeReadiness(
     const pr = await prs.get(ref);
     headSha = pr.headSha;
     mergeable = pr.mergeable;
+    if (draft === undefined) {
+      draft = pr.draft;
+    }
+  }
+
+  if (draft === true) {
+    if (hasMergeReady) {
+      await prs.removeLabel(ref, LABELS.MERGE_READY);
+      log?.info(`[PR #${ref.prNumber}] Removed merge-ready: PR is draft`);
+      return { action: "removed" };
+    }
+    return { action: "skipped", reason: "PR is draft" };
   }
 
   // 5. Check mergeable state (null = not yet computed by GitHub, allow through)

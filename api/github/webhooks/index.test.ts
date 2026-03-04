@@ -2069,6 +2069,27 @@ describe("Queen Bot", () => {
       expect(evaluateMergeReadiness).not.toHaveBeenCalled();
       expect(evaluateAutomerge).not.toHaveBeenCalled();
     });
+
+    it("should skip label cleanup on pull_request.converted_to_draft when no tracked labels are present", async () => {
+      const { handlers } = createWebhookHarness();
+      const octokit = mkOctokit();
+      vi.mocked(loadRepositoryConfig).mockResolvedValue(prConfig as any);
+
+      await handlers.get("pull_request.converted_to_draft")!({
+        octokit,
+        log: mkLog(),
+        payload: {
+          pull_request: {
+            number: 4,
+            draft: true,
+            labels: [{ name: LABELS.IMPLEMENTATION }],
+          },
+          repository: testRepo,
+        },
+      });
+
+      expect(octokit.rest.issues.removeLabel).not.toHaveBeenCalled();
+    });
   });
 
   describe("Message Templates", () => {

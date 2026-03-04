@@ -118,6 +118,19 @@ describe("evaluateMergeReadiness", () => {
       expect(prs.removeLabel).toHaveBeenCalledWith(defaultRef, "hivemoot:merge-ready");
       expect(prs.getCheckRunsForRef).not.toHaveBeenCalled();
     });
+
+    it("should skip when draft is discovered via prs.get() and merge-ready is absent", async () => {
+      const prs = createMockPrs({
+        getLabels: vi.fn().mockResolvedValue(["hivemoot:candidate"]),
+        getApproverLogins: vi.fn().mockResolvedValue(new Set(["alice"])),
+        get: vi.fn().mockResolvedValue({ headSha: "abc123", mergeable: true, draft: true }),
+      });
+      const result = await evaluateMergeReadiness(buildParams({ prs }));
+
+      expect(result).toEqual({ action: "skipped", reason: "PR is draft" });
+      expect(prs.removeLabel).not.toHaveBeenCalled();
+      expect(prs.getCheckRunsForRef).not.toHaveBeenCalled();
+    });
   });
 
   describe("approval check", () => {

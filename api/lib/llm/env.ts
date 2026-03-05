@@ -21,6 +21,8 @@
  * @param name  - Optional variable name, used in a warning log when
  *               normalization changes the value.
  */
+import { logger } from "../logger.js";
+
 export function normalizeEnvString(value: string | undefined, name?: string): string | undefined {
   if (value === undefined) {
     return undefined;
@@ -39,7 +41,7 @@ export function normalizeEnvString(value: string | undefined, name?: string): st
   }
 
   if (normalized !== value && name) {
-    console.warn(`[llm] env var ${name} was normalized (whitespace/quotes removed)`);
+    logger.warn(`[llm] env var ${name} was normalized (whitespace/quotes removed)`);
   }
 
   return normalized.length > 0 ? normalized : undefined;

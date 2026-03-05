@@ -24,6 +24,7 @@ import { resolveInstallationBYOKConfig } from "./byok.js";
 import { LLM_DEFAULTS } from "./types.js";
 import { CONFIG_BOUNDS } from "../../config.js";
 import { normalizeEnvString } from "./env.js";
+import { logger } from "../logger.js";
 
 export interface ModelResolutionOptions {
   installationId?: number;
@@ -287,7 +288,7 @@ export async function createModelFromEnv(
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.warn(`[llm] createModelFromEnv: model creation failed, degrading to no-LLM: ${message}`);
+    logger.warn(`[llm] createModelFromEnv: model creation failed, degrading to no-LLM: ${message}`);
     return null;
   }
 }

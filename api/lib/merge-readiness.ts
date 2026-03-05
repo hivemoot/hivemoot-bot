@@ -378,7 +378,7 @@ export async function evaluateMergeReadiness(
  *
  * Zero checks/statuses = treated as passing (repo has no CI configured).
  */
-async function isCIPassing(
+export async function isCIPassing(
   prs: PROperations,
   ref: PRRef,
   sha: string

@@ -18,7 +18,9 @@
  * - PR has `merge-ready` label
  *
  * Short-circuit order in evaluateMergeReadiness optimized by API cost:
- * config → labels → draft (if pre-fetched) → approvals (1 call) → PR fetch (headSha + mergeable + draft fallback) → mergeable → CI (2 calls)
+ * config → labels → draft (if pre-fetched) → approvals (1 call)
+ * → PR fetch (for missing headSha and/or missing draft)
+ * → mergeable → CI (2 calls)
  */
 
 import { LABELS, isLabelMatch } from "../config.js";
@@ -37,7 +39,7 @@ export interface MergeReadinessParams {
   trustedReviewers: string[];
   /** Pre-fetched labels to avoid extra API call (from webhook payload). */
   currentLabels?: string[];
-  /** Draft state from webhook payload (optional; fetched from PR when absent and headSha isn't pre-fetched). */
+  /** Draft state from webhook payload (optional; fetched from PR when absent). */
   draft?: boolean;
   /** HEAD SHA to check CI against. Fetched from PR if not provided. */
   headSha?: string;
@@ -338,18 +340,21 @@ export async function evaluateMergeReadiness(
     };
   }
 
-  // 4. Get HEAD SHA + mergeable state (use pre-fetched or fetch from PR)
+  // 4. Resolve HEAD SHA + mergeable state and ensure draft is known.
+  // When draft is not pre-fetched, we fetch PR state even if headSha is provided,
+  // so SHA-only webhooks (check_run/check_suite/status) still enforce draft gating.
   let draft: boolean | undefined = params.draft;
   let headSha: string;
   let mergeable: boolean | null;
-  if (params.headSha) {
+  if (params.headSha && draft !== undefined) {
     headSha = params.headSha;
     // When headSha is pre-fetched (webhook payload), we don't have mergeable — treat as unknown
     mergeable = null;
   } else {
     const pr = await prs.get(ref);
-    headSha = pr.headSha;
-    mergeable = pr.mergeable;
+    headSha = params.headSha ?? pr.headSha;
+    // With pre-fetched SHA we still treat mergeable as unknown for this path.
+    mergeable = params.headSha ? null : pr.mergeable;
     if (draft === undefined) {
       draft = pr.draft;
     }

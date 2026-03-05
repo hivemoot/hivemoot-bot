@@ -363,6 +363,7 @@ describe("GovernanceService", () => {
       // Two comment calls: failed self-heal + successful human help
       expect(mockIssues.comment).toHaveBeenCalledTimes(2);
       expect(mockIssues.addLabels).toHaveBeenCalledWith(testRef, [LABELS.NEEDS_HUMAN]);
+      expect(mockIssues.removeLabel).toHaveBeenCalledWith(testRef, LABELS.VOTING);
     });
 
     it("should skip duplicate human help after self-heal failure", async () => {
@@ -392,6 +393,22 @@ describe("GovernanceService", () => {
 
       expect(outcome).toBe("skipped");
       expect(mockIssues.addLabels).toHaveBeenCalledWith(testRef, [LABELS.NEEDS_HUMAN]);
+      expect(mockIssues.removeLabel).not.toHaveBeenCalled();
+    });
+
+    it("should survive removeLabel failure in human help fallback", async () => {
+      vi.mocked(mockIssues.findVotingCommentId).mockResolvedValue(null);
+      vi.mocked(mockIssues.hasHumanHelpComment).mockResolvedValue(false);
+      vi.mocked(mockIssues.comment)
+        .mockRejectedValueOnce(new Error("API error"))
+        .mockResolvedValueOnce(undefined);
+      vi.mocked(mockIssues.removeLabel).mockRejectedValue(new Error("Remove label failed"));
+
+      const outcome = await governance.endVoting(testRef);
+
+      expect(outcome).toBe("skipped");
+      expect(mockIssues.addLabels).toHaveBeenCalledWith(testRef, [LABELS.NEEDS_HUMAN]);
+      expect(mockIssues.removeLabel).toHaveBeenCalledWith(testRef, LABELS.VOTING);
     });
 
     it("should not post human help when race condition causes skipped result", async () => {
@@ -424,6 +441,7 @@ describe("GovernanceService", () => {
       // Self-heal threw, so we should see human help
       expect(mockIssues.hasHumanHelpComment).toHaveBeenCalledWith(testRef, ERROR_CODES.VOTING_COMMENT_NOT_FOUND);
       expect(mockIssues.addLabels).toHaveBeenCalledWith(testRef, [LABELS.NEEDS_HUMAN]);
+      expect(mockIssues.removeLabel).toHaveBeenCalledWith(testRef, LABELS.VOTING);
     });
 
     it("should fall back to human help when comment() throws in postVotingComment", async () => {
@@ -441,6 +459,7 @@ describe("GovernanceService", () => {
       // Two calls: failed voting comment + successful human help comment
       expect(mockIssues.comment).toHaveBeenCalledTimes(2);
       expect(mockIssues.addLabels).toHaveBeenCalledWith(testRef, [LABELS.NEEDS_HUMAN]);
+      expect(mockIssues.removeLabel).toHaveBeenCalledWith(testRef, LABELS.VOTING);
     });
   });
 
@@ -869,6 +888,7 @@ describe("GovernanceService", () => {
       expect(outcome).toBe("skipped");
       expect(mockIssues.hasHumanHelpComment).toHaveBeenCalledWith(testRef, ERROR_CODES.VOTING_COMMENT_NOT_FOUND);
       expect(mockIssues.addLabels).toHaveBeenCalledWith(testRef, [LABELS.NEEDS_HUMAN]);
+      expect(mockIssues.removeLabel).toHaveBeenCalledWith(testRef, LABELS.EXTENDED_VOTING);
     });
 
     it("should apply needs-human-input when eyes > all others after extended voting", async () => {

@@ -372,8 +372,20 @@ export function app(probotApp: Probot): void {
       if (!hadMergeReady && !hadAutomerge) return;
 
       const prRef = { owner, repo, prNumber: number };
-      await prs.removeLabel(prRef, LABELS.MERGE_READY);
-      await prs.removeLabel(prRef, LABELS.AUTOMERGE);
+      const removedLabels: string[] = [];
+
+      if (hadMergeReady) {
+        await prs.removeLabel(prRef, LABELS.MERGE_READY);
+        removedLabels.push(LABELS.MERGE_READY);
+      }
+      if (hadAutomerge) {
+        await prs.removeLabel(prRef, LABELS.AUTOMERGE);
+        removedLabels.push(LABELS.AUTOMERGE);
+      }
+
+      if (hadMergeReady) {
+        await prs.comment(prRef, PR_MESSAGES.prConvertedToDraft(removedLabels));
+      }
     } catch (error) {
       context.log.error({ err: error, pr: number, repo: fullName }, "Failed to process converted_to_draft");
       throw error;

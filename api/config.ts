@@ -634,6 +634,15 @@ No activity for ${daysSinceActivity} days. Auto-closes in ${daysUntilClose} days
 Closed after ${daysSinceActivity} days of inactivity. Issue remains open for other implementations.${SIGNATURE}`,
 
   /**
+   * Posted to a PR when it is converted to draft and merge-ready labels are removed.
+   */
+  prConvertedToDraft: (removedLabels: string[]) =>
+    `# 🐝 Back to Draft 📝
+
+Converted to draft, so removed ${removedLabels.map((label) => `\`${label}\``).join(" and ")}.
+Mark this PR ready for review to re-run merge-readiness and automerge checks.${SIGNATURE}`,
+
+  /**
    * Posted to competing PRs when another PR is merged for the same issue.
    */
   prSuperseded: (mergedPRNumber: number) =>

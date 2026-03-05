@@ -2100,8 +2100,45 @@ describe("Queen Bot", () => {
           name: LABELS.AUTOMERGE,
         })
       );
+      expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: "hivemoot",
+          repo: "test-repo",
+          issue_number: 3,
+          body: expect.stringContaining(`\`${LABELS.MERGE_READY}\``),
+        })
+      );
       expect(evaluateMergeReadiness).not.toHaveBeenCalled();
       expect(evaluateAutomerge).not.toHaveBeenCalled();
+    });
+
+    it("should remove automerge without posting draft comment when merge-ready is absent", async () => {
+      const { handlers } = createWebhookHarness();
+      const octokit = mkOctokit();
+      vi.mocked(loadRepositoryConfig).mockResolvedValue(prConfig as any);
+
+      await handlers.get("pull_request.converted_to_draft")!({
+        octokit,
+        log: mkLog(),
+        payload: {
+          pull_request: {
+            number: 5,
+            draft: true,
+            labels: [{ name: LABELS.AUTOMERGE }],
+          },
+          repository: testRepo,
+        },
+      });
+
+      expect(octokit.rest.issues.removeLabel).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: "hivemoot",
+          repo: "test-repo",
+          issue_number: 5,
+          name: LABELS.AUTOMERGE,
+        })
+      );
+      expect(octokit.rest.issues.createComment).not.toHaveBeenCalled();
     });
 
     it("should skip label cleanup on pull_request.converted_to_draft when no tracked labels are present", async () => {
@@ -2123,6 +2160,7 @@ describe("Queen Bot", () => {
       });
 
       expect(octokit.rest.issues.removeLabel).not.toHaveBeenCalled();
+      expect(octokit.rest.issues.createComment).not.toHaveBeenCalled();
     });
   });
 
@@ -2494,6 +2532,7 @@ describe("Queen Bot", () => {
         },
       });
       expect(octokit.rest.issues.removeLabel).not.toHaveBeenCalled();
+      expect(octokit.rest.issues.createComment).not.toHaveBeenCalled();
     });
 
     it("check_suite.completed: skips automation when config is null", async () => {

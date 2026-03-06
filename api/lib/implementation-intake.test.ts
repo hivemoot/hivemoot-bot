@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { LABELS } from "../config.js";
+import { LABELS, PR_MESSAGES } from "../config.js";
 import { processImplementationIntake, recalculateLeaderboardForPR } from "./implementation-intake.js";
 import type { LinkedIssue } from "./types.js";
 
@@ -782,7 +782,10 @@ describe("Intake Methods", () => {
     });
 
     expect(prs.addLabels).not.toHaveBeenCalled();
-    expect(prs.comment).toHaveBeenCalled(); // issueReadyNeedsUpdate
+    expect(prs.comment).toHaveBeenCalledWith(
+      { owner: "hivemoot", repo: "colony", prNumber: 101 },
+      PR_MESSAGES.issueReadyNeedsUpdate(7)
+    );
   });
 
   it("intake: [update] — post-ready PR activated (existing behavior)", async () => {

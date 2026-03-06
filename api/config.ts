@@ -615,7 +615,8 @@ Issue #${issueNumber} hasn't passed voting. This PR won't be tracked until it do
     `# 🐝 Update Needed ⏳
 
 Issue #${issueNumber} is approved, but this PR was opened before approval.
-Add a new commit or leave a comment to activate it for implementation tracking.${SIGNATURE}`,
+Update-based intake only activates after new author activity once the issue is ready.
+Add a new commit or leave a comment to confirm you're still actively implementing this issue.${SIGNATURE}`,
 
   /**
    * Posted to a PR when it becomes stale (no activity for threshold days).

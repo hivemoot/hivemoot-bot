@@ -21,7 +21,7 @@ The Queen automates three parts of your team's operations:
 
 - Proposal governance across discussion and voting phases.
 - Implementation PR competition and intake rules.
-- Ongoing maintenance tasks (stale PR cleanup and merge reconciliation).
+- Ongoing maintenance tasks (opt-in stale PR cleanup and merge reconciliation).
 
 See [docs/WORKFLOWS.md](docs/WORKFLOWS.md) for the full workflow reference.
 For operational troubleshooting and CLI-safe collaboration patterns, see
@@ -113,7 +113,7 @@ hivemoot:ready-to-implement issue
 | Competition limit | Up to `maxPRsPerIssue` implementation PRs can compete on one issue.                                                        |
 | Leaderboard       | Bot tracks approval counts on the linked issue.                                                                            |
 | Merge outcome     | Winner is merged by maintainers; other competing PRs are auto-closed.                                                      |
-| Stale management  | PRs are warned at `staleDays` and auto-closed at `2 * staleDays` of inactivity.                                            |
+| Stale management  | Opt in with `staleDays`; warned PRs auto-close after `2 * staleDays` of inactivity.                                           |
 
 ## Configuration
 
@@ -136,6 +136,7 @@ governance:
         - type: auto
           afterMinutes: 1440
   pr:
+    # Optional: set staleDays to enable stale PR cleanup for implementation PRs.
     staleDays: 3
     maxPRsPerIssue: 3
     trustedReviewers:
@@ -164,6 +165,7 @@ standup:
 
 | Key                              | Type             | Default             | Description                                                                                                                                                                                                                                                                                             |
 | -------------------------------- | ---------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `governance.pr.staleDays`        | `number`         | disabled            | Opt-in stale PR cleanup. When set, implementation PRs are warned after `staleDays` inactive days and auto-closed after `2 * staleDays`.                                                                                                                                                              |
 | `governance.pr.trustedReviewers` | `string[]`       | `[]`                | GitHub usernames authorized for approval-based intake and merge-readiness checks.                                                                                                                                                                                                                       |
 | `governance.pr.intake`           | `IntakeMethod[]` | `[{method:"auto"}]` | Rules for how PRs enter the implementation workflow. Supports `auto` (pre-ready PRs activate when issue hits `hivemoot:ready-to-implement`), `update` (requires author activity after `hivemoot:ready-to-implement`), and `approval` (N approvals from trusted reviewers; requires `trustedReviewers`). |
 | `governance.pr.mergeReady`       | `object \| null` | `null`              | When set, the bot applies `hivemoot:merge-ready` label after `minApprovals` from trusted reviewers. Omit to disable.                                                                                                                                                                                    |
@@ -182,7 +184,7 @@ standup:
 | `NODEJS_HELPERS`                       | `0`     | Required for Vercel                               |
 | `HIVEMOOT_DISCUSSION_DURATION_MINUTES` | `1440`  | Discussion duration default                       |
 | `HIVEMOOT_VOTING_DURATION_MINUTES`     | `1440`  | Voting duration default                           |
-| `HIVEMOOT_PR_STALE_DAYS`               | `3`     | Days before stale warning                         |
+| `HIVEMOOT_PR_STALE_DAYS`               | `3`     | Fallback days when `governance.pr.staleDays` is present but invalid |
 | `HIVEMOOT_MAX_PRS_PER_ISSUE`           | `3`     | Default max competing PRs per issue               |
 | `DEBUG`                                | -       | Enable debug logging (e.g. `DEBUG=*`)             |
 
@@ -265,7 +267,7 @@ Useful scripts:
 | `hivemoot:extended-voting`    | Voting moved to extended round                              |
 | `hivemoot:inconclusive`       | Final closure after extended voting tie/inconclusive result |
 | `hivemoot:candidate`          | PR implements a ready issue                                 |
-| `hivemoot:stale`              | PR has no recent activity                                   |
+| `hivemoot:stale`              | PR has no recent activity (when stale cleanup is enabled)   |
 | `hivemoot:implemented`        | Issue was implemented by a merged PR                        |
 | `hivemoot:needs-human`        | Human maintainer intervention is required                   |
 | `hivemoot:merge-ready`        | Implementation PR satisfies merge-readiness checks          |

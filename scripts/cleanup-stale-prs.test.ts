@@ -354,6 +354,24 @@ describe("processRepository", () => {
     expect(createPROperations).not.toHaveBeenCalled();
   });
 
+  it("should skip processing when stale cleanup is not explicitly enabled", async () => {
+    const { createPROperations, loadRepositoryConfig } = await import("../api/lib/index.js");
+    vi.mocked(loadRepositoryConfig).mockResolvedValue({
+      ...defaultMockConfig,
+      governance: {
+        ...defaultMockConfig.governance,
+        pr: { ...defaultMockConfig.governance.pr, staleDays: null },
+      },
+    });
+
+    const mockOctokit = {} as Parameters<typeof processRepository>[0];
+    const repo = { owner: { login: "test-org" }, name: "test-repo", full_name: "test-org/test-repo" };
+
+    await processRepository(mockOctokit, repo, testAppId);
+
+    expect(createPROperations).not.toHaveBeenCalled();
+  });
+
   it("should handle empty repository (no implementation PRs)", async () => {
     const { createPROperations, loadRepositoryConfig } = await import("../api/lib/index.js");
     const mockPRs = {

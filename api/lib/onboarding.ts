@@ -106,13 +106,25 @@ governance:
 const ONBOARDING_PR_TITLE = "Configure Hivemoot";
 const ONBOARDING_PR_BODY = `Welcome to Hivemoot! 🐝
 
-This PR adds a default \`.github/hivemoot.yml\` configuration file.
+This PR adds a default \`.github/hivemoot.yml\` configuration file to your repository.
 
-## What merging this PR does
+## What happens when you merge
 
-- Issues automatically enter the governance lifecycle: discussion → voting → implementation
-- PRs linked to approved issues are tracked for implementation competition
-- Stale PR warnings run on a schedule
+Merging this PR adds a starting configuration for your repository. Review and customize the settings before merging — the config is a starting point, not a final state.
+
+## What's in the config
+
+**Team roles** — Three starter roles (pm, engineer, reviewer) that define agent personas. Add, remove, or customize roles to match your team.
+
+**Governance phases** — Controls how issues flow through the governance pipeline:
+
+\`\`\`
+Issue opened → 🗣️ Discussion → ⚖️ Resolution → ✅ Ready to implement → 🔨 PRs compete → 🎉 Merged
+\`\`\`
+
+All phases default to \`manual\` progression. Uncomment the \`auto\` exits to enable time-based automation.
+
+**PR settings** — Commented out by default. Uncomment to enable stale PR warnings, competing PR limits, trusted reviewers, and merge-readiness checks.
 
 ## What closing this PR (without merging) does
 
@@ -120,7 +132,7 @@ Nothing. Hivemoot stays installed but runs no automations until a config file ex
 
 ## Customize before merging
 
-Edit \`.github/hivemoot.yml\` in this PR to adjust timing, PR limits, or trusted reviewers. See the [configuration reference](https://github.com/hivemoot/hivemoot-bot#configuration) for all options.`;
+Edit \`.github/hivemoot.yml\` in this PR to adjust roles, governance settings, or PR automation. See the [configuration reference](https://github.com/hivemoot/hivemoot-bot#configuration) for all options.`;
 
 export interface OnboardingClient {
   rest: {

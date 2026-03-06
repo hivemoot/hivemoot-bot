@@ -47,6 +47,17 @@ export type MergeReadinessResult =
   | { action: "removed" }
   | { action: "noop"; labeled: boolean };
 
+/**
+ * Three-state CI result for `isCIPassing()`.
+ *
+ * - `"passing"`: all checks/statuses completed with a passing conclusion
+ * - `"pending"`: at least one check/status is still in progress (not yet completed)
+ * - `"failing"`: at least one check/status completed with a non-passing conclusion
+ *
+ * Distinguishing pending from failing prevents label removal while CI is still running.
+ */
+export type CIStatus = "passing" | "pending" | "failing";
+
 // ───────────────────────────────────────────────────────────────────────────────
 // Preflight Check Types (shared between merge-ready label and /preflight command)
 // ───────────────────────────────────────────────────────────────────────────────
@@ -349,9 +360,15 @@ export async function evaluateMergeReadiness(
   }
 
   // 6. Check CI status (2 API calls in parallel)
-  const ciPassing = await isCIPassing(prs, ref, headSha);
+  const ciStatus = await isCIPassing(prs, ref, headSha);
 
-  if (!ciPassing) {
+  if (ciStatus === "pending") {
+    // CI is still in progress — do not remove the label. Wait for the next
+    // check_run.completed event when all checks have finished.
+    return { action: "skipped", reason: "CI in progress" };
+  }
+
+  if (ciStatus === "failing") {
     if (hasMergeReady) {
       await prs.removeLabel(ref, LABELS.MERGE_READY);
       log?.info(`[PR #${ref.prNumber}] Removed merge-ready: CI not passing`);
@@ -376,13 +393,18 @@ export async function evaluateMergeReadiness(
  * Queries both the Checks API (GitHub Actions) and the legacy Status API
  * (external CI like Jenkins) in parallel. Both must pass.
  *
+ * Returns a three-state result:
+ * - `"passing"`: all checks/statuses completed with a passing conclusion
+ * - `"pending"`: at least one check/status is still in progress
+ * - `"failing"`: at least one check/status completed with a non-passing conclusion
+ *
  * Zero checks/statuses = treated as passing (repo has no CI configured).
  */
 export async function isCIPassing(
   prs: PROperations,
   ref: PRRef,
   sha: string
-): Promise<boolean> {
+): Promise<CIStatus> {
   const [checksResult, statusResult] = await Promise.all([
     prs.getCheckRunsForRef(ref.owner, ref.repo, sha),
     prs.getCombinedStatus(ref.owner, ref.repo, sha),
@@ -390,23 +412,34 @@ export async function isCIPassing(
 
   // Fail-closed if check runs were truncated (>100) — we can't verify unseen checks
   if (checksResult.totalCount > checksResult.checkRuns.length) {
-    return false;
+    return "failing";
   }
 
-  // Check Runs: all must be completed with a passing conclusion
+  // Check Runs: all must be completed with a passing conclusion.
+  // Track pending separately so we don't prematurely signal failure while CI runs.
+  let hasPending = false;
   for (const checkRun of checksResult.checkRuns) {
     if (checkRun.status !== "completed") {
-      return false;
-    }
-    if (!checkRun.conclusion || !PASSING_CHECK_CONCLUSIONS.has(checkRun.conclusion)) {
-      return false;
+      hasPending = true;
+    } else if (!checkRun.conclusion || !PASSING_CHECK_CONCLUSIONS.has(checkRun.conclusion)) {
+      return "failing";
     }
   }
 
-  // Legacy Status API: combined state must be "success" or no statuses at all
-  if (statusResult.totalCount > 0 && statusResult.state !== "success") {
-    return false;
+  if (hasPending) {
+    return "pending";
   }
 
-  return true;
+  // Legacy Status API: combined state must be "success" or no statuses at all.
+  // The state enum is: "success" | "pending" | "failure" | "error".
+  if (statusResult.totalCount > 0) {
+    if (statusResult.state === "pending") {
+      return "pending";
+    }
+    if (statusResult.state !== "success") {
+      return "failing";
+    }
+  }
+
+  return "passing";
 }

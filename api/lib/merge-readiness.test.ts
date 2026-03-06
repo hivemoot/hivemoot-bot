@@ -236,7 +236,7 @@ describe("evaluateMergeReadiness", () => {
       expect(result).toEqual({ action: "skipped", reason: "CI not passing" });
     });
 
-    it("should skip when check runs are pending", async () => {
+    it("should skip when check runs are pending (CI in progress, not failing)", async () => {
       const result = await evaluateMergeReadiness(
         buildCIParams(
           [{ id: 1, status: "in_progress", conclusion: null }],
@@ -245,7 +245,38 @@ describe("evaluateMergeReadiness", () => {
         )
       );
 
-      expect(result).toEqual({ action: "skipped", reason: "CI not passing" });
+      expect(result).toEqual({ action: "skipped", reason: "CI in progress" });
+    });
+
+    it("should not remove merge-ready label when CI is still in progress", async () => {
+      const params = buildCIParams(
+        [{ id: 1, status: "in_progress", conclusion: null }],
+        "pending",
+        0,
+        { currentLabels: ["hivemoot:candidate", "hivemoot:merge-ready"] }
+      );
+      const result = await evaluateMergeReadiness(params);
+
+      expect(result).toEqual({ action: "skipped", reason: "CI in progress" });
+      expect(params.prs.removeLabel).not.toHaveBeenCalled();
+    });
+
+    it("should skip when legacy status is pending (CI in progress)", async () => {
+      const result = await evaluateMergeReadiness(
+        buildCIParams([], "pending", 1)
+      );
+
+      expect(result).toEqual({ action: "skipped", reason: "CI in progress" });
+    });
+
+    it("should not remove merge-ready label when legacy status is pending", async () => {
+      const params = buildCIParams([], "pending", 1, {
+        currentLabels: ["hivemoot:candidate", "hivemoot:merge-ready"],
+      });
+      const result = await evaluateMergeReadiness(params);
+
+      expect(result).toEqual({ action: "skipped", reason: "CI in progress" });
+      expect(params.prs.removeLabel).not.toHaveBeenCalled();
     });
 
     it("should skip when check runs have failed conclusion", async () => {

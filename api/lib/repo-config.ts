@@ -91,6 +91,11 @@ export interface RequiredReadyConfig {
   users: string[];
 }
 
+export interface ReadinessSignalConfig {
+  enabled: boolean;
+  minEndorsements: number;
+}
+
 export interface DiscussionAutoExit {
   type: "auto";
   afterMs: number;
@@ -121,6 +126,7 @@ export interface RepoConfigFile {
     proposals?: {
       discussion?: {
         exits?: unknown[];
+        readinessSignal?: unknown;
       };
       voting?: {
         exits?: unknown[];
@@ -169,6 +175,8 @@ export interface EffectiveConfig {
         exits: DiscussionExit[];
         /** Derived from the last auto exit's afterMs (0 when manual-only). */
         durationMs: number;
+        /** Advisory readiness signal config. null when feature is disabled. */
+        readinessSignal: ReadinessSignalConfig | null;
       };
       voting: {
         exits: VotingExit[];
@@ -414,6 +422,58 @@ function parseRequiredVotersConfig(
   minCount = clamp(minCount, 0, voters.length);
 
   return { minCount, voters };
+}
+
+const MIN_ENDORSEMENTS_BOUNDS = {
+  ...CONFIG_BOUNDS.readinessSignal.minEndorsements,
+};
+
+/**
+ * Parse and validate readinessSignal config from the discussion section.
+ *
+ * Returns null (feature disabled) when:
+ * - readinessSignal is absent, null, or undefined
+ * - enabled is explicitly false
+ * - readinessSignal is not a valid object
+ */
+function parseReadinessSignalConfig(
+  value: unknown,
+  repoFullName: string
+): ReadinessSignalConfig | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+
+  if (typeof value !== "object" || Array.isArray(value)) {
+    logger.warn(
+      `[${repoFullName}] Invalid readinessSignal: expected object. Disabling feature.`
+    );
+    return null;
+  }
+
+  const obj = value as { enabled?: unknown; minEndorsements?: unknown };
+
+  // Check enabled flag — absent defaults to true (presence of section = opt-in)
+  if (obj.enabled !== undefined && obj.enabled !== null) {
+    if (typeof obj.enabled !== "boolean") {
+      logger.warn(
+        `[${repoFullName}] Invalid readinessSignal.enabled: expected boolean. Disabling feature.`
+      );
+      return null;
+    }
+    if (!obj.enabled) {
+      return null;
+    }
+  }
+
+  const minEndorsements = parseIntValue(
+    obj.minEndorsements,
+    MIN_ENDORSEMENTS_BOUNDS,
+    "readinessSignal.minEndorsements",
+    repoFullName
+  );
+
+  return { enabled: true, minEndorsements };
 }
 
 const VALID_REQUIRES: ExitRequires[] = ["majority", "unanimous"];
@@ -1183,6 +1243,10 @@ function parseRepoConfig(raw: unknown, repoFullName: string): EffectiveConfig {
   const discussionExitsRaw = config?.governance?.proposals?.discussion?.exits;
   const discussionExits = parseDiscussionExits(discussionExitsRaw, repoFullName);
 
+  // Readiness signal config
+  const readinessSignalRaw = config?.governance?.proposals?.discussion?.readinessSignal;
+  const readinessSignal = parseReadinessSignalConfig(readinessSignalRaw, repoFullName);
+
   // PR workflows: opt-in — absent `pr:` section means all PR workflows disabled.
   // When the key is present (even as empty `pr: {}`), parse with defaults.
   const governance = config?.governance;
@@ -1221,6 +1285,7 @@ function parseRepoConfig(raw: unknown, repoFullName: string): EffectiveConfig {
         discussion: {
           exits: discussionExits,
           durationMs: deriveDiscussionDurationMs(discussionExits),
+          readinessSignal,
         },
         voting: {
           exits,
@@ -1251,6 +1316,7 @@ export function getDefaultConfig(): EffectiveConfig {
         discussion: {
           exits: [DEFAULT_MANUAL_DISCUSSION_EXIT],
           durationMs: 0,
+          readinessSignal: null,
         },
         voting: {
           exits: [DEFAULT_MANUAL_VOTING_EXIT],

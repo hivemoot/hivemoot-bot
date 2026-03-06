@@ -8,7 +8,8 @@
 
 import * as yaml from "js-yaml";
 import { LABELS, REQUIRED_REPOSITORY_LABELS, SIGNATURE, isLabelMatch } from "../../config.js";
-import { SIGNATURES, buildAlignmentComment } from "../bot-comments.js";
+import { SIGNATURES, buildAlignmentComment, buildReadinessComment, isReadinessComment } from "../bot-comments.js";
+import { parseCommand } from "./parser.js";
 import {
   createIssueOperations,
   createGovernanceService,
@@ -80,6 +81,8 @@ export interface CommandOctokit {
         page?: number;
       }) => Promise<{
         data: Array<{
+          id: number;
+          body?: string;
           user: { login: string } | null;
           performed_via_github_app?: { id: number; name: string } | null;
         }>;
@@ -127,6 +130,12 @@ export type CommandResult =
  * Per issue #81: "only repo maintainers should use these commands"
  */
 const AUTHORIZED_PERMISSIONS = new Set(["admin", "maintain", "write"]);
+
+/**
+ * Commands that skip the maintainer permission check.
+ * Any issue participant can invoke these — quorum is the gate, not role.
+ */
+const OPEN_COMMANDS = new Set(["ready"]);
 const BRANCH_REFRESH_MAX_POLLS = 10;
 const BRANCH_REFRESH_POLL_INTERVAL_MS = 3000;
 const MERGEABLE_STATE_RESOLUTION_MAX_POLLS = 10;
@@ -1457,6 +1466,174 @@ async function handleDoctor(ctx: CommandContext): Promise<CommandResult> {
   return { status: "executed", message: "Doctor report posted." };
 }
 
+/**
+ * Paginate all comments on an issue, returning id, body, user, and app info.
+ */
+async function getAllIssueComments(ctx: CommandContext): Promise<Array<{
+  id: number;
+  body?: string;
+  user: { login: string } | null;
+  performed_via_github_app?: { id: number; name: string } | null;
+}>> {
+  const perPage = 100;
+  let page = 1;
+  const all: Array<{
+    id: number;
+    body?: string;
+    user: { login: string } | null;
+    performed_via_github_app?: { id: number; name: string } | null;
+  }> = [];
+
+  while (true) {
+    const { data } = await ctx.octokit.rest.issues.listComments({
+      owner: ctx.owner,
+      repo: ctx.repo,
+      issue_number: ctx.issueNumber,
+      per_page: perPage,
+      page,
+    });
+    all.push(...data);
+    if (data.length < perPage) break;
+    page += 1;
+  }
+
+  return all;
+}
+
+/**
+ * Build the readiness advisory comment body.
+ * Lists all participants who have signaled, and call-to-action for voting.
+ */
+function buildReadinessAdvisoryBody(
+  signalers: Iterable<string>,
+  thresholdMet: boolean,
+  minEndorsements: number,
+): string {
+  const names = [...signalers].sort();
+  const mentions = names.map((n) => `@${n}`).join(", ");
+  const count = names.length;
+
+  const header = thresholdMet
+    ? "🐝 **Discussion appears ready**"
+    : `🐝 **Discussion readiness: ${count}/${minEndorsements}**`;
+
+  const lines = [
+    header,
+    "",
+    `Signaled by: ${mentions}`,
+    "",
+  ];
+
+  if (thresholdMet) {
+    lines.push("If you agree, use `@hivemoot vote` to begin voting.");
+    lines.push("");
+    lines.push("*This is advisory only — a subsequent objection supersedes it.*");
+  } else {
+    lines.push(`${minEndorsements - count} more signal${minEndorsements - count === 1 ? "" : "s"} needed to post the readiness advisory.`);
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Handle /ready command: signal that the discussion appears ready to advance.
+ *
+ * Any participant can invoke this. When minEndorsements distinct participants
+ * have signaled, the bot posts (or updates) an advisory comment listing them.
+ * The advisory is soft — it does not advance the phase. A maintainer must
+ * still run /vote to move to voting.
+ *
+ * Access: open (no maintainer permission required). Quorum is the gate.
+ */
+async function handleReady(ctx: CommandContext): Promise<CommandResult> {
+  if (ctx.isPullRequest) {
+    return { status: "rejected", reason: "The `/ready` command can only be used on issues, not pull requests." };
+  }
+
+  if (!hasLabel(ctx, LABELS.DISCUSSION)) {
+    return {
+      status: "rejected",
+      reason: "This issue is not in the discussion phase. The `/ready` command requires `hivemoot:discussion`.",
+    };
+  }
+
+  // Load repo config to get readinessSignal settings
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const config = (await loadRepositoryConfig(ctx.octokit as any, ctx.owner, ctx.repo)) ?? getDefaultConfig();
+  const signalConfig = config.governance.proposals.discussion.readinessSignal;
+
+  if (!signalConfig || !signalConfig.enabled) {
+    return {
+      status: "rejected",
+      reason: "The readiness signal feature is not enabled. Add `readinessSignal: { enabled: true }` under `governance.proposals.discussion` in `.github/hivemoot.yml`.",
+    };
+  }
+
+  // Scan all thread comments for /ready invocations, deduplicated by username.
+  // Include the current sender even if their comment hasn't been stored yet.
+  let allComments: Awaited<ReturnType<typeof getAllIssueComments>>;
+  try {
+    allComments = await getAllIssueComments(ctx);
+  } catch (error) {
+    ctx.log.error({ err: error, issue: ctx.issueNumber }, "Failed to list comments for /ready");
+    throw error;
+  }
+
+  const signalers = new Set<string>();
+  signalers.add(ctx.senderLogin.toLowerCase());
+
+  for (const comment of allComments) {
+    if (!comment.body || !comment.user) continue;
+    const parsed = parseCommand(comment.body);
+    if (parsed?.verb === "ready") {
+      signalers.add(comment.user.login.toLowerCase());
+    }
+  }
+
+  const thresholdMet = signalers.size >= signalConfig.minEndorsements;
+
+  // Find existing readiness advisory comment (from this app).
+  const existingComment = allComments.find((c) =>
+    isReadinessComment(c.body, ctx.appId, c.performed_via_github_app?.id ?? null)
+  );
+
+  if (!thresholdMet && !existingComment) {
+    // Below threshold, no advisory posted yet — just acknowledge via reaction.
+    ctx.log.info(
+      { signalers: [...signalers], needed: signalConfig.minEndorsements },
+      `/ready signal recorded for #${ctx.issueNumber} — threshold not yet met`,
+    );
+    return {
+      status: "executed",
+      message: `Readiness signal recorded (${signalers.size}/${signalConfig.minEndorsements}).`,
+    };
+  }
+
+  // Post or update the advisory comment.
+  const advisoryBody = buildReadinessComment(
+    buildReadinessAdvisoryBody(signalers, thresholdMet, signalConfig.minEndorsements),
+    ctx.issueNumber,
+  ) + SIGNATURE;
+
+  if (existingComment) {
+    await ctx.octokit.rest.issues.updateComment({
+      owner: ctx.owner,
+      repo: ctx.repo,
+      comment_id: existingComment.id,
+      body: advisoryBody,
+    });
+    return { status: "executed", message: "Updated the readiness advisory comment." };
+  }
+
+  await ctx.octokit.rest.issues.createComment({
+    owner: ctx.owner,
+    repo: ctx.repo,
+    issue_number: ctx.issueNumber,
+    body: advisoryBody,
+  });
+  return { status: "executed", message: "Posted the readiness advisory comment." };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Command Router
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1469,6 +1646,7 @@ const COMMAND_HANDLERS: Record<string, (ctx: CommandContext) => Promise<CommandR
   gather: handleGather,
   preflight: handlePreflight,
   squash: handleSquash,
+  ready: handleReady,
 };
 
 /**
@@ -1488,27 +1666,32 @@ export async function executeCommand(ctx: CommandContext): Promise<CommandResult
     return { status: "ignored" };
   }
 
-  // Authorization: only maintainers can use commands
-  const authorization = await isAuthorized(ctx);
-  if (!authorization.authorized) {
-    // Transient auth failures get user-visible feedback so the command
-    // isn't silently swallowed by ECONNRESET or rate-limit errors.
-    if (authorization.transientError) {
-      const classification = classifyCommandFailure(authorization.transientError);
-      const failureCode = buildFailureCode(ctx.verb, classification);
-      const correlationId = buildCommandCorrelationId(ctx);
-      await react(ctx, "confused");
-      await reply(ctx, buildCommandFailureReply(ctx, failureCode, correlationId, classification));
-      return { status: "rejected", reason: `Auth check failed: ${failureCode}` };
-    }
+  // Authorization: open commands skip the maintainer permission check.
+  // All other commands require admin/maintain/write repo permission.
+  let permission: string | null = null;
+  if (!OPEN_COMMANDS.has(ctx.verb)) {
+    const authorization = await isAuthorized(ctx);
+    if (!authorization.authorized) {
+      // Transient auth failures get user-visible feedback so the command
+      // isn't silently swallowed by ECONNRESET or rate-limit errors.
+      if (authorization.transientError) {
+        const classification = classifyCommandFailure(authorization.transientError);
+        const failureCode = buildFailureCode(ctx.verb, classification);
+        const correlationId = buildCommandCorrelationId(ctx);
+        await react(ctx, "confused");
+        await reply(ctx, buildCommandFailureReply(ctx, failureCode, correlationId, classification));
+        return { status: "rejected", reason: `Auth check failed: ${failureCode}` };
+      }
 
-    // Per issue #81: "for everyone else this should be ignored"
-    ctx.log.info(
-      `Command /${ctx.verb} from unauthorized user ${ctx.senderLogin} on #${ctx.issueNumber} — ignoring`,
-    );
-    return { status: "ignored" };
+      // Per issue #81: "for everyone else this should be ignored"
+      ctx.log.info(
+        `Command /${ctx.verb} from unauthorized user ${ctx.senderLogin} on #${ctx.issueNumber} — ignoring`,
+      );
+      return { status: "ignored" };
+    }
+    permission = authorization.permission;
   }
-  const logContext = buildCommandLogContext(ctx, authorization.permission);
+  const logContext = buildCommandLogContext(ctx, permission);
 
   // Idempotency guard: if we already reacted with 👀, this is a webhook
   // retry and the command was already executed. Skip to prevent duplicates.

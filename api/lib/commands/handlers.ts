@@ -7,7 +7,7 @@
  */
 
 import * as yaml from "js-yaml";
-import { LABELS, REQUIRED_REPOSITORY_LABELS, SIGNATURE, isLabelMatch } from "../../config.js";
+import { LABELS, MESSAGES, READINESS_ADVISORY_SIGNATURE, REQUIRED_REPOSITORY_LABELS, SIGNATURE, isLabelMatch } from "../../config.js";
 import { SIGNATURES, buildAlignmentComment } from "../bot-comments.js";
 import {
   createIssueOperations,
@@ -29,6 +29,7 @@ import type { IssueRef, PRRef } from "../types.js";
 import type { EffectiveConfig } from "../repo-config.js";
 import { getErrorStatus } from "../github-client.js";
 import { isTransientError } from "../transient-error.js";
+import { parseCommand } from "./parser.js";
 
 /**
  * Minimal interface for the octokit client needed by command handlers.
@@ -82,6 +83,7 @@ export interface CommandOctokit {
         data: Array<{
           user: { login: string } | null;
           performed_via_github_app?: { id: number; name: string } | null;
+          body: string;
         }>;
       }>;
     };
@@ -1457,6 +1459,102 @@ async function handleDoctor(ctx: CommandContext): Promise<CommandResult> {
   return { status: "executed", message: "Doctor report posted." };
 }
 
+/**
+ * Handle /ready command: register readiness endorsement and post an advisory
+ * comment when enough distinct participants have signaled.
+ *
+ * Idempotent: posts at most one advisory comment per thread regardless of
+ * how many /ready invocations accumulate above the threshold.
+ */
+async function handleReady(ctx: CommandContext): Promise<CommandResult> {
+  if (ctx.isPullRequest) {
+    return { status: "rejected", reason: "The `/ready` command can only be used on issues, not pull requests." };
+  }
+
+  if (!hasLabel(ctx, LABELS.DISCUSSION)) {
+    return {
+      status: "rejected",
+      reason: "This issue is not in the discussion phase. The `/ready` command requires `hivemoot:discussion`.",
+    };
+  }
+
+  const octokit = ctx.octokit as any; // Full Probot client at runtime
+  const repoConfig = (await loadRepositoryConfig(octokit, ctx.owner, ctx.repo)) ?? getDefaultConfig();
+  const readinessSignal = repoConfig.governance.proposals.discussion.readinessSignal;
+
+  if (!readinessSignal || !readinessSignal.enabled) {
+    return {
+      status: "rejected",
+      reason: "The readiness signal feature is not enabled. Configure `governance.proposals.discussion.readinessSignal` in `.github/hivemoot.yml` to enable it.",
+    };
+  }
+
+  // Scan all thread comments to count distinct /ready endorsers and detect
+  // if the advisory has already been posted (idempotency).
+  const endorsers = new Set<string>();
+  let advisoryAlreadyPosted = false;
+
+  const perPage = 100;
+  let page = 1;
+
+  while (true) {
+    const { data: comments } = await ctx.octokit.rest.issues.listComments({
+      owner: ctx.owner,
+      repo: ctx.repo,
+      issue_number: ctx.issueNumber,
+      per_page: perPage,
+      page,
+    });
+
+    for (const comment of comments) {
+      // Track endorsers: distinct users who invoked /ready
+      const login = comment.user?.login;
+      if (login) {
+        const parsed = parseCommand(comment.body);
+        if (parsed?.verb === "ready") {
+          endorsers.add(login.toLowerCase());
+        }
+      }
+
+      // Idempotency: if advisory was already posted, don't post again
+      if (comment.body?.includes(READINESS_ADVISORY_SIGNATURE)) {
+        advisoryAlreadyPosted = true;
+      }
+    }
+
+    if (comments.length < perPage) {
+      break;
+    }
+
+    page += 1;
+  }
+
+  if (advisoryAlreadyPosted) {
+    return { status: "executed", message: "Readiness advisory already posted — threshold met." };
+  }
+
+  const minEndorsements = readinessSignal.minEndorsements;
+
+  if (endorsers.size < minEndorsements) {
+    await reply(
+      ctx,
+      `Readiness signal noted. ${endorsers.size}/${minEndorsements} endorsements so far.`,
+    );
+    return { status: "executed", message: `Readiness signal noted: ${endorsers.size}/${minEndorsements}.` };
+  }
+
+  // Threshold met — post the advisory comment
+  const endorserList = [...endorsers];
+  await ctx.octokit.rest.issues.createComment({
+    owner: ctx.owner,
+    repo: ctx.repo,
+    issue_number: ctx.issueNumber,
+    body: MESSAGES.discussionReady(endorserList),
+  });
+
+  return { status: "executed", message: "Readiness advisory posted." };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Command Router
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1469,6 +1567,7 @@ const COMMAND_HANDLERS: Record<string, (ctx: CommandContext) => Promise<CommandR
   gather: handleGather,
   preflight: handlePreflight,
   squash: handleSquash,
+  ready: handleReady,
 };
 
 /**

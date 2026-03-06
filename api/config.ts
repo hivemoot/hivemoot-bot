@@ -98,6 +98,12 @@ export const VOTING_DURATION_MS = parseMinutesToMs(
 
 export const SIGNATURE = "\n\n---\nbuzz buzz 🐝 Hivemoot Queen";
 
+/**
+ * Unique header in the readiness advisory comment.
+ * Used to detect if the advisory has already been posted (idempotency guard).
+ */
+export const READINESS_ADVISORY_SIGNATURE = "# 🐝 Discussion appears ready";
+
 // ───────────────────────────────────────────────────────────────────────────────
 // Message Templates
 // ───────────────────────────────────────────────────────────────────────────────
@@ -302,6 +308,21 @@ ${formatVotes(votes)}
 Hivemoot couldn't reach consensus after two voting periods. Closing this issue.
 
 A maintainer can reopen if circumstances change.${SIGNATURE}`,
+
+  /**
+   * Posted as an advisory when a discussion reaches the readiness threshold.
+   * Soft signal only — no phase transition. Idempotent (one per thread).
+   */
+  discussionReady: (endorsers: string[]) => {
+    const signaledBy = endorsers.map((u) => `@${u}`).join(", ");
+    return `# 🐝 Discussion appears ready
+
+Signaled by: ${signaledBy}
+
+If you agree, use \`@hivemoot vote\` to begin voting.
+
+*This is advisory only — a subsequent objection supersedes it.*${SIGNATURE}`;
+  },
 
   // Posted when the voting comment cannot be found (human intervention needed)
   votingCommentNotFound: () => `${SIGNATURES.HUMAN_HELP}

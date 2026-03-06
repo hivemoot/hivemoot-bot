@@ -68,7 +68,7 @@ let mockRepoConfig: {
   version: number;
   governance: {
     proposals: {
-      discussion: { exits: { type: string }[]; durationMs: number };
+      discussion: { exits: { type: string }[]; durationMs: number; readinessSignal: { enabled: boolean; minEndorsements: number } | null };
       voting: { exits: { type: string }[]; durationMs: number };
       extendedVoting: { exits: { type: string }[]; durationMs: number };
     };
@@ -202,7 +202,7 @@ describe("executeCommand", () => {
       version: 1,
       governance: {
         proposals: {
-          discussion: { exits: [{ type: "manual" }], durationMs: 0 },
+          discussion: { exits: [{ type: "manual" }], durationMs: 0, readinessSignal: null },
           voting: { exits: [{ type: "manual" }], durationMs: 0 },
           extendedVoting: { exits: [{ type: "manual" }], durationMs: 0 },
         },
@@ -579,7 +579,7 @@ describe("executeCommand", () => {
         version: 1,
         governance: {
           proposals: {
-            discussion: { exits: [{ type: "manual" }], durationMs: 0 },
+            discussion: { exits: [{ type: "manual" }], durationMs: 0, readinessSignal: null },
             voting: { exits: [{ type: "manual" }], durationMs: 0 },
             extendedVoting: { exits: [{ type: "manual" }], durationMs: 0 },
           },
@@ -658,7 +658,7 @@ describe("executeCommand", () => {
         version: 1,
         governance: {
           proposals: {
-            discussion: { exits: [{ type: "manual" }], durationMs: 0 },
+            discussion: { exits: [{ type: "manual" }], durationMs: 0, readinessSignal: null },
             voting: { exits: [{ type: "manual" }], durationMs: 0 },
             extendedVoting: { exits: [{ type: "manual" }], durationMs: 0 },
           },
@@ -684,7 +684,7 @@ describe("executeCommand", () => {
         version: 1,
         governance: {
           proposals: {
-            discussion: { exits: [{ type: "manual" }], durationMs: 0 },
+            discussion: { exits: [{ type: "manual" }], durationMs: 0, readinessSignal: null },
             voting: { exits: [{ type: "manual" }], durationMs: 0 },
             extendedVoting: { exits: [{ type: "manual" }], durationMs: 0 },
           },
@@ -1491,6 +1491,181 @@ describe("executeCommand", () => {
 
       const replyCall = ctx.octokit.rest.issues.createComment.mock.calls[0];
       expect(replyCall[0].body).toContain("Hivemoot Queen");
+    });
+  });
+
+  describe("/ready command", () => {
+    beforeEach(() => {
+      // Enable readiness signal for all /ready tests
+      mockRepoConfig.governance.proposals.discussion.readinessSignal = {
+        enabled: true,
+        minEndorsements: 3,
+      };
+    });
+
+    it("should reject /ready on pull requests", async () => {
+      const ctx = createCtx({ verb: "ready", isPullRequest: true });
+      const result = await executeCommand(ctx);
+      expect(result.status).toBe("rejected");
+      expect(result.reason).toContain("issues, not pull requests");
+    });
+
+    it("should reject /ready when issue is not in discussion phase", async () => {
+      const ctx = createCtx({
+        verb: "ready",
+        issueLabels: [{ name: LABELS.VOTING }],
+      });
+      const result = await executeCommand(ctx);
+      expect(result.status).toBe("rejected");
+      expect(result.reason).toContain("hivemoot:discussion");
+    });
+
+    it("should reject /ready when readinessSignal is disabled", async () => {
+      mockRepoConfig.governance.proposals.discussion.readinessSignal = null;
+      const octokit = createMockOctokit();
+      octokit.rest.issues.listComments.mockResolvedValue({ data: [] });
+      const ctx = createCtx({ verb: "ready", octokit });
+      const result = await executeCommand(ctx);
+      expect(result.status).toBe("rejected");
+      expect(result.reason).toContain("not enabled");
+    });
+
+    it("should post progress reply when below threshold", async () => {
+      const octokit = createMockOctokit();
+      // Simulate 1 /ready invocation (the current comment author)
+      octokit.rest.issues.listComments.mockResolvedValue({
+        data: [
+          {
+            user: { login: "maintainer" },
+            performed_via_github_app: null,
+            body: "@hivemoot ready",
+          },
+        ],
+      });
+      const ctx = createCtx({ verb: "ready", octokit });
+      const result = await executeCommand(ctx);
+      expect(result.status).toBe("executed");
+      expect(result.message).toContain("1/3");
+      // Progress reply posted, not advisory
+      const commentCalls = octokit.rest.issues.createComment.mock.calls;
+      const replyBody = commentCalls[0][0].body;
+      expect(replyBody).toContain("1/3");
+      expect(replyBody).not.toContain("Discussion appears ready");
+    });
+
+    it("should post advisory comment when threshold is met", async () => {
+      const octokit = createMockOctokit();
+      octokit.rest.issues.listComments.mockResolvedValue({
+        data: [
+          { user: { login: "alice" }, performed_via_github_app: null, body: "@hivemoot ready" },
+          { user: { login: "bob" }, performed_via_github_app: null, body: "@hivemoot /ready" },
+          { user: { login: "maintainer" }, performed_via_github_app: null, body: "@hivemoot ready" },
+        ],
+      });
+      const ctx = createCtx({ verb: "ready", octokit });
+      const result = await executeCommand(ctx);
+      expect(result.status).toBe("executed");
+      expect(result.message).toContain("Readiness advisory posted");
+      const commentCalls = octokit.rest.issues.createComment.mock.calls;
+      const advisoryBody = commentCalls[0][0].body;
+      expect(advisoryBody).toContain("Discussion appears ready");
+      expect(advisoryBody).toContain("@alice");
+      expect(advisoryBody).toContain("@bob");
+      expect(advisoryBody).toContain("@maintainer");
+      expect(advisoryBody).toContain("@hivemoot vote");
+    });
+
+    it("should be idempotent — skip advisory if already posted", async () => {
+      const octokit = createMockOctokit();
+      octokit.rest.issues.listComments.mockResolvedValue({
+        data: [
+          { user: { login: "alice" }, performed_via_github_app: null, body: "@hivemoot ready" },
+          { user: { login: "bob" }, performed_via_github_app: null, body: "@hivemoot ready" },
+          { user: { login: "maintainer" }, performed_via_github_app: null, body: "@hivemoot ready" },
+          {
+            user: { login: "hivemoot[bot]" },
+            performed_via_github_app: { id: 12345, name: "Hivemoot" },
+            body: "# 🐝 Discussion appears ready\n\nSignaled by: @alice, @bob, @maintainer",
+          },
+        ],
+      });
+      const ctx = createCtx({ verb: "ready", octokit });
+      const result = await executeCommand(ctx);
+      expect(result.status).toBe("executed");
+      expect(result.message).toContain("already posted");
+      // No new advisory comment posted (only the progress reply from executeCommand reaction)
+      const commentCalls = octokit.rest.issues.createComment.mock.calls;
+      // createComment should not have been called with an advisory body
+      const advisoryCalls = commentCalls.filter(
+        (call: [{ body: string }]) => call[0].body?.includes("Discussion appears ready")
+      );
+      expect(advisoryCalls).toHaveLength(0);
+    });
+
+    it("should deduplicate endorsers — same user invokes /ready twice, counts once", async () => {
+      const octokit = createMockOctokit();
+      octokit.rest.issues.listComments.mockResolvedValue({
+        data: [
+          { user: { login: "alice" }, performed_via_github_app: null, body: "@hivemoot ready" },
+          { user: { login: "alice" }, performed_via_github_app: null, body: "@hivemoot ready" },
+          { user: { login: "maintainer" }, performed_via_github_app: null, body: "@hivemoot ready" },
+        ],
+      });
+      const ctx = createCtx({ verb: "ready", octokit });
+      const result = await executeCommand(ctx);
+      // alice counted once + maintainer = 2, still below threshold of 3
+      expect(result.status).toBe("executed");
+      expect(result.message).toContain("2/3");
+    });
+
+    it("should ignore /ready invocations in quoted lines and code blocks", async () => {
+      const octokit = createMockOctokit();
+      octokit.rest.issues.listComments.mockResolvedValue({
+        data: [
+          // Valid invocation
+          { user: { login: "alice" }, performed_via_github_app: null, body: "@hivemoot ready" },
+          // Quoted line — should be ignored by parseCommand
+          { user: { login: "bob" }, performed_via_github_app: null, body: "> @hivemoot ready\nSome comment" },
+          { user: { login: "maintainer" }, performed_via_github_app: null, body: "@hivemoot ready" },
+        ],
+      });
+      const ctx = createCtx({ verb: "ready", octokit });
+      const result = await executeCommand(ctx);
+      // alice + maintainer = 2 (bob's quoted /ready ignored), still below 3
+      expect(result.status).toBe("executed");
+      expect(result.message).toContain("2/3");
+    });
+
+    it("should paginate comments when thread is long", async () => {
+      const octokit = createMockOctokit();
+      // resolveAppBotLogin (in alreadyProcessed) also calls listComments before the handler.
+      // Account for it: first mock resolves bot identity (1 item → stops after page 1).
+      const botComment = {
+        user: { login: "hivemoot[bot]" },
+        performed_via_github_app: { id: 12345, name: "Hivemoot" },
+        body: "",
+      };
+      const handlerPage1 = Array.from({ length: 100 }, (_, i) => ({
+        user: { login: `user-${i}` },
+        performed_via_github_app: null,
+        body: "some discussion comment",
+      }));
+      const handlerPage2 = [
+        { user: { login: "alice" }, performed_via_github_app: null, body: "@hivemoot ready" },
+        { user: { login: "bob" }, performed_via_github_app: null, body: "@hivemoot ready" },
+        { user: { login: "maintainer" }, performed_via_github_app: null, body: "@hivemoot ready" },
+      ];
+      octokit.rest.issues.listComments
+        .mockResolvedValueOnce({ data: [botComment] }) // resolveAppBotLogin call
+        .mockResolvedValueOnce({ data: handlerPage1 }) // handler page 1
+        .mockResolvedValueOnce({ data: handlerPage2 }); // handler page 2
+
+      const ctx = createCtx({ verb: "ready", octokit });
+      const result = await executeCommand(ctx);
+      expect(result.status).toBe("executed");
+      expect(result.message).toContain("Readiness advisory posted");
+      // 1 (resolveAppBotLogin) + 2 (handler pagination) = 3 total calls
+      expect(octokit.rest.issues.listComments).toHaveBeenCalledTimes(3);
     });
   });
 });

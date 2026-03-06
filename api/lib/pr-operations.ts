@@ -81,6 +81,22 @@ export interface PRClient {
           created_at: string;
         }>;
       }>;
+
+      listFiles: (params: {
+        owner: string;
+        repo: string;
+        pull_number: number;
+        per_page?: number;
+        page?: number;
+      }) => Promise<{
+        data: Array<{
+          filename: string;
+          additions: number;
+          deletions: number;
+          changes: number;
+          status: string;
+        }>;
+      }>;
     };
     issues: {
       get: (params: {
@@ -307,6 +323,7 @@ export class PROperations {
   async removeGovernanceLabels(ref: PRRef): Promise<void> {
     await this.removeLabel(ref, LABELS.IMPLEMENTATION);
     await this.removeLabel(ref, LABELS.MERGE_READY);
+    await this.removeLabel(ref, LABELS.AUTOMERGE);
   }
 
   /**
@@ -557,6 +574,41 @@ export class PROperations {
       (comment) => new Date(comment.created_at),
       fallback
     );
+  }
+
+  /**
+   * List files changed in a PR with pagination and early exit.
+   * Fetches up to maxPages pages (100 files each). Stops early once
+   * the accumulated file count exceeds earlyExitThreshold, since the
+   * caller only needs to know "too many files" not the exact list.
+   */
+  async listFiles(
+    ref: PRRef,
+    opts?: { maxPages?: number; earlyExitThreshold?: number }
+  ): Promise<Array<{ filename: string; additions: number; deletions: number; changes: number; status: string; previous_filename?: string }>> {
+    const maxPages = opts?.maxPages ?? 3;
+    const threshold = opts?.earlyExitThreshold;
+    const allFiles: Array<{ filename: string; additions: number; deletions: number; changes: number; status: string; previous_filename?: string }> = [];
+    const perPage = 100;
+
+    for (let page = 1; page <= maxPages; page++) {
+      const { data } = await this.client.rest.pulls.listFiles({
+        owner: ref.owner,
+        repo: ref.repo,
+        pull_number: ref.prNumber,
+        per_page: perPage,
+        page,
+      });
+
+      if (data.length === 0) break;
+      allFiles.push(...data);
+
+      // Early exit when we know the PR exceeds the threshold
+      if (threshold !== undefined && allFiles.length > threshold) break;
+      if (data.length < perPage) break;
+    }
+
+    return allFiles;
   }
 
   /**

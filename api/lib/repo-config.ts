@@ -15,6 +15,7 @@ import {
   MAX_PRS_PER_ISSUE,
   PR_STALE_THRESHOLD_DAYS,
 } from "../config.js";
+import { getErrorStatus } from "./github-client.js";
 import { logger } from "./logger.js";
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -40,12 +41,28 @@ interface IntakeMethodApproval {
   minApprovals: number;
 }
 
-export type IntakeMethod = IntakeMethodUpdate | IntakeMethodApproval;
+interface IntakeMethodAuto {
+  method: "auto";
+}
+
+export type IntakeMethod = IntakeMethodUpdate | IntakeMethodApproval | IntakeMethodAuto;
 
 // ── Merge-Ready Config ──────────────────────────────────────────────────
 
 export interface MergeReadyConfig {
   minApprovals: number;
+}
+
+// ── Automerge Config ────────────────────────────────────────────────────
+
+export interface AutomergeConfig {
+  dryRun: boolean;
+  allowedPaths: string[];
+  denyPaths: string[];
+  maxFiles: number;
+  maxChangedLines: number;
+  minApprovals: number;
+  requireChecks: boolean;
 }
 
 // ── Standup Config ──────────────────────────────────────────────────────
@@ -118,12 +135,26 @@ export interface RepoConfigFile {
       trustedReviewers?: unknown;
       intake?: unknown;
       mergeReady?: unknown;
+      automerge?: unknown;
     };
   };
   standup?: {
     enabled?: boolean;
     category?: string;
   };
+}
+
+/**
+ * PR workflow configuration when explicitly enabled.
+ * Present only when the `pr:` section exists in the config file.
+ */
+export interface PRConfig {
+  staleDays: number;
+  maxPRsPerIssue: number;
+  trustedReviewers: string[];
+  intake: IntakeMethod[];
+  mergeReady: MergeReadyConfig | null;
+  automerge: AutomergeConfig | null;
 }
 
 /**
@@ -150,13 +181,8 @@ export interface EffectiveConfig {
         durationMs: number;
       };
     };
-    pr: {
-      staleDays: number;
-      maxPRsPerIssue: number;
-      trustedReviewers: string[];
-      intake: IntakeMethod[];
-      mergeReady: MergeReadyConfig | null;
-    };
+    /** null when `pr:` section is absent — all PR workflows disabled. */
+    pr: PRConfig | null;
   };
   standup: StandupConfig;
 }
@@ -725,8 +751,8 @@ function parseDiscussionExits(
   return autoExits;
 }
 
-const DEFAULT_INTAKE: IntakeMethod[] = [{ method: "update" }];
-const VALID_INTAKE_METHODS = new Set(["update", "approval"]);
+const DEFAULT_INTAKE: IntakeMethod[] = [{ method: "auto" }];
+const VALID_INTAKE_METHODS = new Set(["update", "approval", "auto"]);
 
 /**
  * Parse and validate trustedReviewers from config.
@@ -744,7 +770,7 @@ function parseTrustedReviewers(
  *
  * Each entry must have a known `method` field. Method-specific options
  * are validated per method. Invalid entries are filtered with warnings.
- * If the result is empty, falls back to default [{ method: "update" }].
+ * If the result is empty, falls back to default [{ method: "auto" }].
  */
 function parseIntakeMethods(
   value: unknown,
@@ -789,6 +815,11 @@ function parseIntakeMethods(
 
     if (method === "update") {
       methods.push({ method: "update" });
+      continue;
+    }
+
+    if (method === "auto") {
+      methods.push({ method: "auto" });
       continue;
     }
 
@@ -889,6 +920,189 @@ function parseMergeReadyConfig(
   return { minApprovals };
 }
 
+const DEFAULT_ALLOWED_PATHS = ["**/*.md", "**/*.txt", "docs/**"];
+const DEFAULT_DENY_PATHS = [
+  ".github/**",
+  "package.json",
+  "package-lock.json",
+  "*.lock",
+  "pnpm-lock.yaml",
+  "go.sum",
+  "bun.lockb",
+  "go.work.sum",
+];
+
+/**
+ * Validate and sanitize a path patterns array from config.
+ * Returns a string array clamped to maxPathPatterns entries.
+ * Non-string and empty entries are filtered with warnings.
+ */
+function parsePathPatterns(
+  value: unknown,
+  defaultPatterns: string[],
+  fieldName: string,
+  repoFullName: string
+): string[] {
+  if (value === undefined || value === null) {
+    return defaultPatterns;
+  }
+
+  if (!Array.isArray(value)) {
+    logger.warn(
+      `[${repoFullName}] Invalid ${fieldName}: expected array. Using defaults.`
+    );
+    return defaultPatterns;
+  }
+
+  const maxPatterns = CONFIG_BOUNDS.automerge.maxPathPatterns;
+  const result: string[] = [];
+
+  for (const entry of value) {
+    if (result.length >= maxPatterns) {
+      logger.info(
+        `[${repoFullName}] ${fieldName} truncated to ${maxPatterns} entries`
+      );
+      break;
+    }
+
+    if (typeof entry !== "string" || entry.trim().length === 0) {
+      logger.warn(
+        `[${repoFullName}] Invalid ${fieldName} entry: expected non-empty string. Skipping.`
+      );
+      continue;
+    }
+
+    result.push(entry.trim());
+  }
+
+  return result;
+}
+
+/**
+ * Parse and validate automerge config from the pr section.
+ *
+ * Returns null (feature disabled) when:
+ * - automerge is absent, null, or undefined
+ * - enabled is explicitly false
+ * - trustedReviewers is empty (can't satisfy approval requirement)
+ * - automerge is not a valid object
+ *
+ * dryRun defaults to true (label only, no merge).
+ * requireChecks defaults to true.
+ */
+function parseAutomergeConfig(
+  value: unknown,
+  trustedReviewers: string[],
+  repoFullName: string
+): AutomergeConfig | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+
+  if (typeof value !== "object" || Array.isArray(value)) {
+    logger.warn(
+      `[${repoFullName}] Invalid automerge: expected object. Disabling feature.`
+    );
+    return null;
+  }
+
+  const obj = value as {
+    enabled?: unknown;
+    dryRun?: unknown;
+    allowedPaths?: unknown;
+    denyPaths?: unknown;
+    maxFiles?: unknown;
+    maxChangedLines?: unknown;
+    minApprovals?: unknown;
+    requireChecks?: unknown;
+  };
+
+  // Check enabled flag — absent defaults to true (presence of section = opt-in)
+  if (obj.enabled !== undefined && obj.enabled !== null) {
+    if (typeof obj.enabled !== "boolean") {
+      logger.warn(
+        `[${repoFullName}] Invalid automerge.enabled: expected boolean. Disabling feature.`
+      );
+      return null;
+    }
+    if (!obj.enabled) {
+      return null;
+    }
+  }
+
+  if (trustedReviewers.length === 0) {
+    logger.warn(
+      `[${repoFullName}] automerge configured but trustedReviewers is empty. ` +
+      `Cannot satisfy approval requirement. Disabling feature.`
+    );
+    return null;
+  }
+
+  // Parse dryRun (default true for safe phased rollout)
+  let dryRun = true;
+  if (obj.dryRun !== undefined && obj.dryRun !== null) {
+    if (typeof obj.dryRun === "boolean") {
+      dryRun = obj.dryRun;
+    } else {
+      logger.warn(
+        `[${repoFullName}] Invalid automerge.dryRun: expected boolean. Using default (true).`
+      );
+    }
+  }
+
+  // Parse requireChecks (default true)
+  let requireChecks = true;
+  if (obj.requireChecks !== undefined && obj.requireChecks !== null) {
+    if (typeof obj.requireChecks === "boolean") {
+      requireChecks = obj.requireChecks;
+    } else {
+      logger.warn(
+        `[${repoFullName}] Invalid automerge.requireChecks: expected boolean. Using default (true).`
+      );
+    }
+  }
+
+  const allowedPaths = parsePathPatterns(obj.allowedPaths, DEFAULT_ALLOWED_PATHS, "automerge.allowedPaths", repoFullName);
+  const denyPaths = parsePathPatterns(obj.denyPaths, DEFAULT_DENY_PATHS, "automerge.denyPaths", repoFullName);
+
+  const maxFiles = parseIntValue(
+    obj.maxFiles,
+    CONFIG_BOUNDS.automerge.maxFiles,
+    "automerge.maxFiles",
+    repoFullName
+  );
+
+  const maxChangedLines = parseIntValue(
+    obj.maxChangedLines,
+    CONFIG_BOUNDS.automerge.maxChangedLines,
+    "automerge.maxChangedLines",
+    repoFullName
+  );
+
+  let minApprovals = parseIntValue(
+    obj.minApprovals,
+    CONFIG_BOUNDS.automerge.minApprovals,
+    "automerge.minApprovals",
+    repoFullName
+  );
+  // Clamp to trustedReviewers.length (can't require more than available)
+  minApprovals = clamp(
+    minApprovals,
+    CONFIG_BOUNDS.automerge.minApprovals.min,
+    Math.min(CONFIG_BOUNDS.automerge.minApprovals.max, trustedReviewers.length)
+  );
+
+  return {
+    dryRun,
+    allowedPaths,
+    denyPaths,
+    maxFiles,
+    maxChangedLines,
+    minApprovals,
+    requireChecks,
+  };
+}
+
 /**
  * Parse and validate standup config.
  * Opt-in feature — disabled by default.
@@ -969,11 +1183,29 @@ function parseRepoConfig(raw: unknown, repoFullName: string): EffectiveConfig {
   const discussionExitsRaw = config?.governance?.proposals?.discussion?.exits;
   const discussionExits = parseDiscussionExits(discussionExitsRaw, repoFullName);
 
-  // Resolve PR settings (trustedReviewers parsed first — needed for intake and mergeReady clamping)
-  const prConfig = config?.governance?.pr;
-  const trustedReviewers = parseTrustedReviewers(prConfig?.trustedReviewers, repoFullName);
-  const intake = parseIntakeMethods(prConfig?.intake, trustedReviewers, repoFullName);
-  const mergeReady = parseMergeReadyConfig(prConfig?.mergeReady, trustedReviewers, repoFullName);
+  // PR workflows: opt-in — absent `pr:` section means all PR workflows disabled.
+  // When the key is present (even as empty `pr: {}`), parse with defaults.
+  const governance = config?.governance;
+  const prConfigRaw = config?.governance?.pr;
+  const hasPrSection = typeof governance === "object"
+    && governance !== null
+    && "pr" in (governance as object);
+
+  let pr: PRConfig | null = null;
+  if (hasPrSection) {
+    const trustedReviewers = parseTrustedReviewers(prConfigRaw?.trustedReviewers, repoFullName);
+    const intake = parseIntakeMethods(prConfigRaw?.intake, trustedReviewers, repoFullName);
+    const mergeReady = parseMergeReadyConfig(prConfigRaw?.mergeReady, trustedReviewers, repoFullName);
+    const automerge = parseAutomergeConfig(prConfigRaw?.automerge, trustedReviewers, repoFullName);
+    pr = {
+      staleDays: parseIntValue(prConfigRaw?.staleDays, PR_STALE_DAYS_BOUNDS, "pr.staleDays", repoFullName),
+      maxPRsPerIssue: parseIntValue(prConfigRaw?.maxPRsPerIssue, MAX_PRS_PER_ISSUE_BOUNDS, "pr.maxPRsPerIssue", repoFullName),
+      trustedReviewers,
+      intake,
+      mergeReady,
+      automerge,
+    };
+  }
 
   // Voting exits
   const exitsRaw = config?.governance?.proposals?.voting?.exits;
@@ -999,23 +1231,7 @@ function parseRepoConfig(raw: unknown, repoFullName: string): EffectiveConfig {
           durationMs: deriveVotingDurationMs(extendedExits),
         },
       },
-      pr: {
-        staleDays: parseIntValue(
-          prConfig?.staleDays,
-          PR_STALE_DAYS_BOUNDS,
-          "pr.staleDays",
-          repoFullName
-        ),
-        maxPRsPerIssue: parseIntValue(
-          prConfig?.maxPRsPerIssue,
-          MAX_PRS_PER_ISSUE_BOUNDS,
-          "pr.maxPRsPerIssue",
-          repoFullName
-        ),
-        trustedReviewers,
-        intake,
-        mergeReady,
-      },
+      pr,
     },
     standup: parseStandupConfig(config?.standup, repoFullName),
   };
@@ -1023,6 +1239,9 @@ function parseRepoConfig(raw: unknown, repoFullName: string): EffectiveConfig {
 
 /**
  * Get the default configuration (env-derived, clamped to CONFIG_BOUNDS).
+ *
+ * PR workflows default to null (disabled) — repos must explicitly opt in
+ * by adding a `pr:` section in their .github/hivemoot.yml.
  */
 export function getDefaultConfig(): EffectiveConfig {
   return {
@@ -1042,13 +1261,7 @@ export function getDefaultConfig(): EffectiveConfig {
           durationMs: 0,
         },
       },
-      pr: {
-        staleDays: PR_STALE_THRESHOLD_DAYS,
-        maxPRsPerIssue: MAX_PRS_PER_ISSUE,
-        trustedReviewers: [],
-        intake: [{ method: "update" }],
-        mergeReady: null,
-      },
+      pr: null,
     },
     standup: { enabled: false, category: "" },
   };
@@ -1060,16 +1273,24 @@ export function getDefaultConfig(): EffectiveConfig {
  * Fetches the config file from the repository using GitHub Contents API,
  * parses YAML, validates values, and clamps to safe boundaries.
  *
+ * Returns `null` when no config file exists (HTTP 404). Callers must treat
+ * `null` as "skip all automation" — the bot should not act on repos that
+ * have not opted in via a config file.
+ *
+ * Returns `EffectiveConfig` (with defaults for omitted fields) when the file
+ * exists but is empty, invalid YAML, or has an unexpected shape — this
+ * preserves automation for repos that have a file but made a config mistake.
+ *
  * @param octokit - GitHub client (Octokit or Probot context.octokit)
  * @param owner - Repository owner
  * @param repo - Repository name
- * @returns EffectiveConfig with validated settings
+ * @returns EffectiveConfig with validated settings, or null if no config file
  */
 export async function loadRepositoryConfig(
   octokit: RepoConfigClient,
   owner: string,
   repo: string
-): Promise<EffectiveConfig> {
+): Promise<EffectiveConfig | null> {
   const repoFullName = `${owner}/${repo}`;
 
   try {
@@ -1124,15 +1345,16 @@ export async function loadRepositoryConfig(
     logger.info(`[${repoFullName}] Loaded config from ${CONFIG_PATH}`);
     return parseRepoConfig(parsed, repoFullName);
   } catch (error) {
-    const status = (error as { status?: number }).status;
+    const status = getErrorStatus(error);
 
-    // 404 is expected when repo doesn't have a config file
+    // 404 means no config file — return null so callers skip all automation.
     if (status === 404) {
-      logger.debug(`[${repoFullName}] No ${CONFIG_PATH} found. Using defaults.`);
-      return getDefaultConfig();
+      logger.debug(`[${repoFullName}] No ${CONFIG_PATH} found. Skipping automation.`);
+      return null;
     }
 
-    // Policy: config load errors should not block processing; log and use defaults.
+    // For other errors (network, permissions, etc.) fall back to defaults so
+    // a transient API failure does not permanently silence the bot.
     const errorMessage = error instanceof Error ? error.message : String(error);
     const statusSuffix = status ? ` (status ${status})` : "";
     logger.warn(

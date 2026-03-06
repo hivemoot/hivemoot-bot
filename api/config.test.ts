@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { SIGNATURES, parseMetadata, NOTIFICATION_TYPES, type NotificationMetadata } from "./lib/bot-comments.js";
+import { isLabelMatch, getLabelQueryAliases, LEGACY_LABEL_MAP, LABELS } from "./config.js";
 
 /**
  * Tests for config.ts
@@ -132,7 +133,7 @@ describe("config", () => {
     it("should export READY_TO_IMPLEMENT label (not ACCEPTED)", async () => {
       const config = await import("./config.js");
 
-      expect(config.LABELS.READY_TO_IMPLEMENT).toBe("phase:ready-to-implement");
+      expect(config.LABELS.READY_TO_IMPLEMENT).toBe("hivemoot:ready-to-implement");
       expect((config.LABELS as Record<string, string>).ACCEPTED).toBeUndefined();
     });
 
@@ -140,12 +141,195 @@ describe("config", () => {
       const config = await import("./config.js");
 
       const labelNames = new Set(config.REQUIRED_REPOSITORY_LABELS.map((label) => label.name));
-      expect(labelNames).toEqual(new Set(Object.values(config.LABELS)));
+      const allLabels = new Set([...Object.values(config.LABELS), ...Object.values(config.PRIORITY_LABELS)]);
+      expect(labelNames).toEqual(allLabels);
 
       for (const label of config.REQUIRED_REPOSITORY_LABELS) {
         expect(label.color).toMatch(/^[0-9a-f]{6}$/);
         expect(label.description.length).toBeGreaterThan(0);
       }
+    });
+  });
+
+  describe("isLabelMatch", () => {
+    it("should match canonical label names exactly", () => {
+      expect(isLabelMatch("hivemoot:discussion", LABELS.DISCUSSION)).toBe(true);
+      expect(isLabelMatch("hivemoot:voting", LABELS.VOTING)).toBe(true);
+      expect(isLabelMatch("hivemoot:ready-to-implement", LABELS.READY_TO_IMPLEMENT)).toBe(true);
+      expect(isLabelMatch("hivemoot:candidate", LABELS.IMPLEMENTATION)).toBe(true);
+      expect(isLabelMatch("hivemoot:merge-ready", LABELS.MERGE_READY)).toBe(true);
+    });
+
+    it("should match legacy label names via LEGACY_LABEL_MAP", () => {
+      expect(isLabelMatch("phase:discussion", LABELS.DISCUSSION)).toBe(true);
+      expect(isLabelMatch("phase:voting", LABELS.VOTING)).toBe(true);
+      expect(isLabelMatch("phase:extended-voting", LABELS.EXTENDED_VOTING)).toBe(true);
+      expect(isLabelMatch("ready-to-implement", LABELS.READY_TO_IMPLEMENT)).toBe(true);
+      expect(isLabelMatch("phase:ready-to-implement", LABELS.READY_TO_IMPLEMENT)).toBe(true);
+      expect(isLabelMatch("rejected", LABELS.REJECTED)).toBe(true);
+      expect(isLabelMatch("inconclusive", LABELS.INCONCLUSIVE)).toBe(true);
+      expect(isLabelMatch("implementation", LABELS.IMPLEMENTATION)).toBe(true);
+      expect(isLabelMatch("stale", LABELS.STALE)).toBe(true);
+      expect(isLabelMatch("implemented", LABELS.IMPLEMENTED)).toBe(true);
+      expect(isLabelMatch("needs:human", LABELS.NEEDS_HUMAN)).toBe(true);
+      expect(isLabelMatch("merge-ready", LABELS.MERGE_READY)).toBe(true);
+    });
+
+    it("should return false for unrelated label names", () => {
+      expect(isLabelMatch("bug", LABELS.DISCUSSION)).toBe(false);
+      expect(isLabelMatch("enhancement", LABELS.VOTING)).toBe(false);
+      expect(isLabelMatch("random-label", LABELS.IMPLEMENTATION)).toBe(false);
+    });
+
+    it("should return false for undefined name", () => {
+      expect(isLabelMatch(undefined, LABELS.DISCUSSION)).toBe(false);
+    });
+
+    it("should return false when legacy name is compared against wrong canonical label", () => {
+      // "phase:discussion" maps to LABELS.DISCUSSION, not LABELS.VOTING
+      expect(isLabelMatch("phase:discussion", LABELS.VOTING)).toBe(false);
+      expect(isLabelMatch("implementation", LABELS.STALE)).toBe(false);
+    });
+  });
+
+  describe("getLabelQueryAliases", () => {
+    it("should return canonical label as the first element", () => {
+      const aliases = getLabelQueryAliases(LABELS.DISCUSSION);
+      expect(aliases[0]).toBe(LABELS.DISCUSSION);
+    });
+
+    it("should include all legacy aliases for a canonical label", () => {
+      const aliases = getLabelQueryAliases(LABELS.DISCUSSION);
+      expect(aliases).toContain("phase:discussion");
+      expect(aliases).toHaveLength(2); // canonical + one legacy
+    });
+
+    it("should include all legacy aliases for labels with multiple mappings", () => {
+      // READY_TO_IMPLEMENT has two legacy aliases: "ready-to-implement" and "phase:ready-to-implement"
+      const aliases = getLabelQueryAliases(LABELS.READY_TO_IMPLEMENT);
+      expect(aliases).toContain(LABELS.READY_TO_IMPLEMENT);
+      expect(aliases).toContain("ready-to-implement");
+      expect(aliases).toContain("phase:ready-to-implement");
+    });
+
+    it("should return just the canonical name when no legacy aliases exist", () => {
+      const aliases = getLabelQueryAliases("some-unknown-label");
+      expect(aliases).toEqual(["some-unknown-label"]);
+    });
+
+    it("should return aliases for every canonical label", () => {
+      for (const label of Object.values(LABELS)) {
+        const aliases = getLabelQueryAliases(label);
+        expect(aliases[0]).toBe(label);
+        expect(aliases.length).toBeGreaterThanOrEqual(1);
+      }
+    });
+  });
+
+  describe("LEGACY_LABEL_MAP", () => {
+    it("should map every legacy name to a valid LABELS value", () => {
+      const validLabelValues = new Set(Object.values(LABELS));
+
+      for (const [legacyName, canonicalName] of Object.entries(LEGACY_LABEL_MAP)) {
+        expect(validLabelValues.has(canonicalName as typeof LABELS[keyof typeof LABELS])).toBe(true);
+        // Sanity check: the legacy name must differ from the canonical name
+        // (otherwise it wouldn't need a mapping)
+        expect(legacyName).not.toBe(canonicalName);
+      }
+    });
+
+    it("should cover all known legacy label names", () => {
+      const expectedLegacyNames = [
+        "phase:discussion",
+        "phase:voting",
+        "phase:extended-voting",
+        "ready-to-implement",
+        "phase:ready-to-implement",
+        "rejected",
+        "inconclusive",
+        "implementation",
+        "stale",
+        "implemented",
+        "needs:human",
+        "merge-ready",
+      ];
+
+      for (const legacyName of expectedLegacyNames) {
+        expect(LEGACY_LABEL_MAP).toHaveProperty(legacyName);
+      }
+    });
+
+    it("should map to the correct canonical name for each legacy name", () => {
+      expect(LEGACY_LABEL_MAP["phase:discussion"]).toBe(LABELS.DISCUSSION);
+      expect(LEGACY_LABEL_MAP["phase:voting"]).toBe(LABELS.VOTING);
+      expect(LEGACY_LABEL_MAP["phase:extended-voting"]).toBe(LABELS.EXTENDED_VOTING);
+      expect(LEGACY_LABEL_MAP["ready-to-implement"]).toBe(LABELS.READY_TO_IMPLEMENT);
+      expect(LEGACY_LABEL_MAP["phase:ready-to-implement"]).toBe(LABELS.READY_TO_IMPLEMENT);
+      expect(LEGACY_LABEL_MAP["rejected"]).toBe(LABELS.REJECTED);
+      expect(LEGACY_LABEL_MAP["inconclusive"]).toBe(LABELS.INCONCLUSIVE);
+      expect(LEGACY_LABEL_MAP["implementation"]).toBe(LABELS.IMPLEMENTATION);
+      expect(LEGACY_LABEL_MAP["stale"]).toBe(LABELS.STALE);
+      expect(LEGACY_LABEL_MAP["implemented"]).toBe(LABELS.IMPLEMENTED);
+      expect(LEGACY_LABEL_MAP["needs:human"]).toBe(LABELS.NEEDS_HUMAN);
+      expect(LEGACY_LABEL_MAP["merge-ready"]).toBe(LABELS.MERGE_READY);
+    });
+  });
+
+  describe("MESSAGES.votingStart", () => {
+    it("should return basic voting message without priority", async () => {
+      const config = await import("./config.js");
+
+      const message = config.MESSAGES.votingStart();
+      expect(message).toContain("# 🐝 Voting Phase");
+      expect(message).not.toContain("PRIORITY");
+      expect(message).not.toContain("priority");
+      expect(message).toContain(SIGNATURES.VOTING);
+      expect(message).toContain("👍");
+      expect(message).toContain("👎");
+      expect(message).toContain("😕");
+      expect(message).toContain("👀");
+      expect(message).toContain(config.SIGNATURE);
+    });
+
+    it("should include HIGH PRIORITY header and reminder for high priority", async () => {
+      const config = await import("./config.js");
+
+      const message = config.MESSAGES.votingStart("high");
+      expect(message).toContain("# 🐝 Voting Phase (HIGH PRIORITY)");
+      expect(message).toContain("**high-priority**");
+      expect(message).toContain("timely vote is appreciated");
+      expect(message).toContain(config.SIGNATURE);
+    });
+
+    it("should include MEDIUM PRIORITY header and reminder for medium priority", async () => {
+      const config = await import("./config.js");
+
+      const message = config.MESSAGES.votingStart("medium");
+      expect(message).toContain("# 🐝 Voting Phase (MEDIUM PRIORITY)");
+      expect(message).toContain("**medium-priority**");
+      expect(message).toContain("timely vote is appreciated");
+      expect(message).toContain(config.SIGNATURE);
+    });
+
+    it("should include LOW PRIORITY header and reminder for low priority", async () => {
+      const config = await import("./config.js");
+
+      const message = config.MESSAGES.votingStart("low");
+      expect(message).toContain("# 🐝 Voting Phase (LOW PRIORITY)");
+      expect(message).toContain("**low-priority**");
+      expect(message).toContain("timely vote is appreciated");
+      expect(message).toContain(config.SIGNATURE);
+    });
+
+    it("should still include all voting reactions when priority is set", async () => {
+      const config = await import("./config.js");
+
+      const message = config.MESSAGES.votingStart("high");
+      expect(message).toContain("👍");
+      expect(message).toContain("👎");
+      expect(message).toContain("😕");
+      expect(message).toContain("👀");
+      expect(message).toContain(SIGNATURES.VOTING);
     });
   });
 
@@ -237,6 +421,32 @@ describe("config", () => {
       expect(message).toContain(config.SIGNATURE);
     });
 
+    it("should include priority in IMPLEMENTATION_WELCOME when provided", async () => {
+      const config = await import("./config.js");
+
+      const highMessage = config.PR_MESSAGES.IMPLEMENTATION_WELCOME(42, "high");
+      expect(highMessage).toContain("# 🐝 Implementation PR (HIGH PRIORITY)");
+      expect(highMessage).toContain("**high-priority**");
+      expect(highMessage).toContain("timely implementation and review");
+
+      const mediumMessage = config.PR_MESSAGES.IMPLEMENTATION_WELCOME(42, "medium");
+      expect(mediumMessage).toContain("# 🐝 Implementation PR (MEDIUM PRIORITY)");
+      expect(mediumMessage).toContain("**medium-priority**");
+
+      const lowMessage = config.PR_MESSAGES.IMPLEMENTATION_WELCOME(42, "low");
+      expect(lowMessage).toContain("# 🐝 Implementation PR (LOW PRIORITY)");
+      expect(lowMessage).toContain("**low-priority**");
+    });
+
+    it("should not include priority in IMPLEMENTATION_WELCOME when not provided", async () => {
+      const config = await import("./config.js");
+
+      const message = config.PR_MESSAGES.IMPLEMENTATION_WELCOME(42);
+      expect(message).not.toContain("PRIORITY");
+      expect(message).not.toContain("priority");
+      expect(message).toContain("# 🐝 Implementation PR");
+    });
+
     it("should embed notification metadata in issueNewPR", async () => {
       const config = await import("./config.js");
 
@@ -255,10 +465,10 @@ describe("config", () => {
       expect(message).toContain(config.SIGNATURE);
     });
 
-    it("should embed notification metadata in issueVotingPassed", async () => {
+    it("should embed notification metadata in issueReadyToImplement", async () => {
       const config = await import("./config.js");
 
-      const message = config.PR_MESSAGES.issueVotingPassed(42, "agent-alice");
+      const message = config.PR_MESSAGES.issueReadyToImplement(42, "agent-alice");
 
       // Should contain metadata tag
       expect(message).toContain("hivemoot-metadata:");
@@ -270,7 +480,7 @@ describe("config", () => {
       expect(metadata?.issueNumber).toBe(42);
 
       // Content should still be present
-      expect(message).toContain("passed voting");
+      expect(message).toContain("is ready for implementation");
       expect(message).toContain("@agent-alice");
       expect(message).toContain(config.SIGNATURE);
     });

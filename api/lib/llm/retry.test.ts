@@ -232,4 +232,100 @@ describe("withLLMRetry", () => {
     await expect(withLLMRetry(fn, { maxRetries: 0 })).rejects.toThrow();
     expect(fn).toHaveBeenCalledTimes(1);
   });
+
+  it("aborts when delay would exceed maxTotalElapsedMs budget", async () => {
+    const rateLimitError = makeAPICallError(429, {
+      message: "Please retry in 20.0s",
+    });
+
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(rateLimitError)
+      .mockResolvedValueOnce("should not reach");
+
+    const log = mockLogger();
+
+    // Budget of 10s, but server suggests 20s delay — should abort immediately
+    await expect(
+      withLLMRetry(fn, { maxRetries: 3, maxTotalElapsedMs: 10_000 }, log)
+    ).rejects.toThrow();
+
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining("budget")
+    );
+  });
+
+  it("allows retry when delay fits within maxTotalElapsedMs budget", async () => {
+    const rateLimitError = makeAPICallError(429, {
+      message: "Please retry in 2.0s",
+    });
+
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(rateLimitError)
+      .mockResolvedValueOnce("success");
+
+    const log = mockLogger();
+    const promise = withLLMRetry(
+      fn,
+      { maxRetries: 3, maxTotalElapsedMs: 10_000 },
+      log
+    );
+
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    const result = await promise;
+    expect(result).toBe("success");
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it("aborts mid-sequence when cumulative time exhausts budget", async () => {
+    vi.useRealTimers();
+
+    const rateLimitError = makeAPICallError(429, {
+      message: "Please retry in 0.05s",
+    });
+
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(rateLimitError)
+      .mockRejectedValueOnce(rateLimitError)
+      .mockRejectedValueOnce(rateLimitError)
+      .mockResolvedValueOnce("should not reach");
+
+    const log = mockLogger();
+
+    await expect(
+      withLLMRetry(fn, { maxRetries: 5, maxTotalElapsedMs: 100 }, log)
+    ).rejects.toThrow();
+
+    // Should have tried at most 2-3 times depending on timing
+    expect(fn.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(fn.mock.calls.length).toBeLessThanOrEqual(3);
+
+    vi.useFakeTimers();
+  });
+
+  it("ignores maxTotalElapsedMs when undefined", async () => {
+    const rateLimitError = makeAPICallError(429, {
+      message: "Please retry in 1.0s",
+    });
+
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(rateLimitError)
+      .mockResolvedValueOnce("ok");
+
+    const promise = withLLMRetry(
+      fn,
+      { maxRetries: 3, maxTotalElapsedMs: undefined },
+    );
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    const result = await promise;
+    expect(result).toBe("ok");
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
 });

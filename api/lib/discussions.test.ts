@@ -71,6 +71,27 @@ describe("getRepoDiscussionInfo", () => {
     expect(result.hasDiscussions).toBe(false);
     expect(result.categories).toEqual([]);
   });
+
+  it("should filter null discussion category nodes", async () => {
+    const client = createMockClient();
+    client.graphql.mockResolvedValueOnce({
+      repository: {
+        id: "R_789",
+        createdAt: "2024-02-01T00:00:00Z",
+        hasDiscussionsEnabled: true,
+        discussionCategories: {
+          nodes: [
+            null,
+            { id: "DC_3", name: "Announcements" },
+          ],
+        },
+      },
+    });
+
+    const result = await getRepoDiscussionInfo(client, "org", "repo");
+
+    expect(result.categories).toEqual([{ id: "DC_3", name: "Announcements" }]);
+  });
 });
 
 describe("findOrCreateColonyJournal", () => {
@@ -188,6 +209,31 @@ describe("findOrCreateColonyJournal", () => {
     );
 
     expect(result.discussionId).toBe("D_match");
+  });
+
+  it("should skip null discussion nodes when searching for existing journal", async () => {
+    const client = createMockClient();
+    client.graphql.mockResolvedValueOnce({
+      repository: {
+        discussions: {
+          nodes: [
+            null,
+            {
+              id: "D_match",
+              number: 8,
+              title: "Colony Journal",
+              locked: true,
+            },
+          ],
+        },
+      },
+    });
+
+    const result = await findOrCreateColonyJournal(
+      client, "R_123", "DC_2", "hivemoot", "colony"
+    );
+
+    expect(result).toEqual({ discussionId: "D_match", number: 8 });
   });
 });
 
@@ -323,6 +369,29 @@ describe("getLastStandupDate", () => {
     const result = await getLastStandupDate(client, "hivemoot", "colony", 1);
 
     expect(result).toBeNull();
+  });
+
+  it("should skip null comment nodes when scanning for standup metadata", async () => {
+    const client = createMockClient();
+    client.graphql.mockResolvedValueOnce({
+      repository: {
+        discussion: {
+          comments: {
+            nodes: [
+              null,
+              {
+                body: '<!-- hivemoot-metadata: {"version":1,"type":"standup","day":41,"date":"2026-02-06","repo":"hivemoot/colony","issueNumber":0,"createdAt":"2026-02-06T00:05:00Z"} -->',
+                createdAt: "2026-02-06T00:05:00Z",
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    const result = await getLastStandupDate(client, "hivemoot", "colony", 1);
+
+    expect(result).toBe("2026-02-06");
   });
 
   it("should return null when discussion has no comments", async () => {

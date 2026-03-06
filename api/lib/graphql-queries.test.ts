@@ -94,6 +94,37 @@ describe("getLinkedIssues", () => {
     expect(result).toEqual([]);
   });
 
+  it("should filter null nodes from closingIssuesReferences", async () => {
+    vi.mocked(mockClient.graphql).mockResolvedValue({
+      repository: {
+        pullRequest: {
+          closingIssuesReferences: {
+            nodes: [
+              null,
+              {
+                number: 123,
+                title: "Fix bug",
+                state: "OPEN",
+                labels: { nodes: [{ name: "bug" }] },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    const result = await getLinkedIssues(mockClient, "owner", "repo", 42);
+
+    expect(result).toEqual([
+      {
+        number: 123,
+        title: "Fix bug",
+        state: "OPEN",
+        labels: { nodes: [{ name: "bug" }] },
+      },
+    ]);
+  });
+
   it("should pass correct query variables", async () => {
     vi.mocked(mockClient.graphql).mockResolvedValue({
       repository: {
@@ -109,6 +140,25 @@ describe("getLinkedIssues", () => {
       expect.stringContaining("getLinkedIssues"),
       { owner: "test-owner", repo: "test-repo", pr: 123 }
     );
+  });
+
+  it("should propagate GraphQL network errors to caller", async () => {
+    vi.mocked(mockClient.graphql).mockRejectedValue(
+      new Error("request to https://api.github.com/graphql failed, reason: connect ECONNRESET")
+    );
+
+    await expect(
+      getLinkedIssues(mockClient, "owner", "repo", 42)
+    ).rejects.toThrow("ECONNRESET");
+  });
+
+  it("should propagate rate limit errors to caller", async () => {
+    const rateLimitError = Object.assign(new Error("API rate limit exceeded"), { status: 403 });
+    vi.mocked(mockClient.graphql).mockRejectedValue(rateLimitError);
+
+    await expect(
+      getLinkedIssues(mockClient, "owner", "repo", 42)
+    ).rejects.toThrow("API rate limit exceeded");
   });
 
   it("should handle issues with multiple labels", async () => {
@@ -226,6 +276,16 @@ describe("getPRBodyLastEditedAt", () => {
       expect.stringContaining("getPRBodyLastEdited"),
       { owner: "test-owner", repo: "test-repo", pr: 123 }
     );
+  });
+
+  it("should propagate GraphQL network errors to caller", async () => {
+    vi.mocked(mockClient.graphql).mockRejectedValue(
+      new Error("request to https://api.github.com/graphql failed, reason: connect ECONNRESET")
+    );
+
+    await expect(
+      getPRBodyLastEditedAt(mockClient, "owner", "repo", 42)
+    ).rejects.toThrow("ECONNRESET");
   });
 });
 
@@ -366,6 +426,42 @@ describe("getOpenPRsForIssue", () => {
                   { source: { number: 1, title: "PR 1", state: "OPEN", author: { login: "user1" } } },
                   { source: { title: "No number", state: "OPEN", author: { login: "user2" } } },
                   { source: { number: undefined, title: "Undefined", state: "OPEN", author: { login: "user3" } } },
+                ],
+              },
+            },
+          },
+        };
+      } else if (query.includes("getLinkedIssues")) {
+        return {
+          repository: {
+            pullRequest: {
+              closingIssuesReferences: {
+                nodes: [{ number: 123, title: "Issue", state: "OPEN", labels: { nodes: [] } }],
+              },
+            },
+          },
+        };
+      }
+      throw new Error(`Unexpected GraphQL query in test mock: ${query.slice(0, 80)}`);
+    });
+
+    const result = await getOpenPRsForIssue(mockClient, "owner", "repo", 123);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].number).toBe(1);
+  });
+
+  it("should skip null timeline nodes safely", async () => {
+    vi.mocked(mockClient.graphql).mockImplementation(async (query: string) => {
+      if (query.includes("getOpenPRsForIssue")) {
+        return {
+          repository: {
+            issue: {
+              timelineItems: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [
+                  null,
+                  { source: { number: 1, title: "PR 1", state: "OPEN", author: { login: "user1" } } },
                 ],
               },
             },
@@ -1003,6 +1099,16 @@ describe("getOpenPRsForIssue", () => {
     await expect(
       getOpenPRsForIssue(mockClient, "owner", "repo", 123)
     ).rejects.toThrow("All 2 PR closing-syntax verification(s) failed");
+  });
+
+  it("should propagate errors from initial cross-reference query", async () => {
+    vi.mocked(mockClient.graphql).mockRejectedValue(
+      new Error("502 Bad Gateway")
+    );
+
+    await expect(
+      getOpenPRsForIssue(mockClient, "owner", "repo", 123)
+    ).rejects.toThrow("502 Bad Gateway");
   });
 
   it("should return empty when candidates exist but none close the issue", async () => {

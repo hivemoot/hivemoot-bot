@@ -8,7 +8,8 @@
 import type { PRRef } from "./types.js";
 import { validateClient, PR_CLIENT_CHECKS } from "./client-validation.js";
 import { isNotificationComment } from "./bot-comments.js";
-import { LABELS } from "../config.js";
+import { LABELS, isLabelMatch, getLabelQueryAliases } from "../config.js";
+import { getErrorStatus } from "./github-client.js";
 
 /**
  * Minimal GitHub client interface for PR operations.
@@ -78,6 +79,22 @@ export interface PRClient {
         data: Array<{
           id: number;
           created_at: string;
+        }>;
+      }>;
+
+      listFiles: (params: {
+        owner: string;
+        repo: string;
+        pull_number: number;
+        per_page?: number;
+        page?: number;
+      }) => Promise<{
+        data: Array<{
+          filename: string;
+          additions: number;
+          deletions: number;
+          changes: number;
+          status: string;
         }>;
       }>;
     };
@@ -293,7 +310,7 @@ export class PROperations {
       });
     } catch (error) {
       // Label might not exist - ignore 404 errors
-      if ((error as { status?: number }).status !== 404) {
+      if (getErrorStatus(error) !== 404) {
         throw error;
       }
     }
@@ -306,6 +323,7 @@ export class PROperations {
   async removeGovernanceLabels(ref: PRRef): Promise<void> {
     await this.removeLabel(ref, LABELS.IMPLEMENTATION);
     await this.removeLabel(ref, LABELS.MERGE_READY);
+    await this.removeLabel(ref, LABELS.AUTOMERGE);
   }
 
   /**
@@ -334,15 +352,16 @@ export class PROperations {
   }
 
   /**
-   * Check if PR has a specific label
+   * Check if PR has a specific label (supports legacy label names)
    */
   hasLabel(pr: { labels: Array<{ name: string }> }, labelName: string): boolean {
-    return pr.labels.some((label) => label.name === labelName);
+    return pr.labels.some((label) => isLabelMatch(label.name, labelName));
   }
 
   /**
    * Find all open PRs with a specific label in a repository.
-   * Returns only actual PRs (not issues).
+   * Queries both canonical and legacy label names to catch entities
+   * carrying either old or new labels. Returns only actual PRs (not issues).
    */
   async findPRsWithLabel(
     owner: string,
@@ -356,41 +375,45 @@ export class PROperations {
       labels: Array<{ name: string }>;
     }>
   > {
+    const seen = new Set<number>();
     const allPRs: Array<{
       number: number;
       createdAt: Date;
       updatedAt: Date;
       labels: Array<{ name: string }>;
     }> = [];
-    let page = 1;
-    const perPage = 100;
 
-    while (true) {
-      const { data } = await this.client.rest.issues.listForRepo({
-        owner,
-        repo,
-        state: "open",
-        labels: labelName,
-        per_page: perPage,
-        page,
-      });
+    for (const alias of getLabelQueryAliases(labelName)) {
+      let page = 1;
+      const perPage = 100;
 
-      if (data.length === 0) break;
+      while (true) {
+        const { data } = await this.client.rest.issues.listForRepo({
+          owner,
+          repo,
+          state: "open",
+          labels: alias,
+          per_page: perPage,
+          page,
+        });
 
-      // Filter to only PRs (issues with pull_request property)
-      for (const item of data) {
-        if (item.pull_request !== undefined) {
-          allPRs.push({
-            number: item.number,
-            createdAt: new Date(item.created_at),
-            updatedAt: new Date(item.updated_at),
-            labels: item.labels,
-          });
+        if (data.length === 0) break;
+
+        for (const item of data) {
+          if (item.pull_request !== undefined && !seen.has(item.number)) {
+            seen.add(item.number);
+            allPRs.push({
+              number: item.number,
+              createdAt: new Date(item.created_at),
+              updatedAt: new Date(item.updated_at),
+              labels: item.labels,
+            });
+          }
         }
-      }
 
-      if (data.length < perPage) break;
-      page++;
+        if (data.length < perPage) break;
+        page++;
+      }
     }
 
     return allPRs;
@@ -551,6 +574,41 @@ export class PROperations {
       (comment) => new Date(comment.created_at),
       fallback
     );
+  }
+
+  /**
+   * List files changed in a PR with pagination and early exit.
+   * Fetches up to maxPages pages (100 files each). Stops early once
+   * the accumulated file count exceeds earlyExitThreshold, since the
+   * caller only needs to know "too many files" not the exact list.
+   */
+  async listFiles(
+    ref: PRRef,
+    opts?: { maxPages?: number; earlyExitThreshold?: number }
+  ): Promise<Array<{ filename: string; additions: number; deletions: number; changes: number; status: string; previous_filename?: string }>> {
+    const maxPages = opts?.maxPages ?? 3;
+    const threshold = opts?.earlyExitThreshold;
+    const allFiles: Array<{ filename: string; additions: number; deletions: number; changes: number; status: string; previous_filename?: string }> = [];
+    const perPage = 100;
+
+    for (let page = 1; page <= maxPages; page++) {
+      const { data } = await this.client.rest.pulls.listFiles({
+        owner: ref.owner,
+        repo: ref.repo,
+        pull_number: ref.prNumber,
+        per_page: perPage,
+        page,
+      });
+
+      if (data.length === 0) break;
+      allFiles.push(...data);
+
+      // Early exit when we know the PR exceeds the threshold
+      if (threshold !== undefined && allFiles.length > threshold) break;
+      if (data.length < perPage) break;
+    }
+
+    return allFiles;
   }
 
   /**

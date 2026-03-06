@@ -9,6 +9,7 @@
 import {
   LABELS,
   PR_MESSAGES,
+  isLabelMatch,
 } from "../config.js";
 import { NOTIFICATION_TYPES } from "./bot-comments.js";
 import {
@@ -25,6 +26,7 @@ import type { LinkedIssue, PRWithApprovals, PullRequest } from "./types.js";
 import { filterByLabel, hasLabel } from "./types.js";
 import { getAppId } from "./env-validation.js";
 import { logger } from "./logger.js";
+import { getIssuePriority } from "./priority.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -92,7 +94,7 @@ async function getImplementationPRsByIssue(params: {
 
   if (ensurePRNumber !== undefined && !candidateNumbers.has(ensurePRNumber)) {
     const labels = await prs.getLabels({ owner, repo, prNumber: ensurePRNumber });
-    if (labels.includes(LABELS.IMPLEMENTATION)) {
+    if (labels.some(l => isLabelMatch(l, LABELS.IMPLEMENTATION))) {
       candidateNumbers.add(ensurePRNumber);
       logger.debug(`ensurePR #${ensurePRNumber}: added via direct label check (not yet indexed)`);
     }
@@ -268,7 +270,7 @@ export async function processImplementationIntake(params: {
     maxPRsPerIssue,
   } = params;
   const trustedReviewers = params.trustedReviewers ?? [];
-  const intake: IntakeMethod[] = params.intake ?? [{ method: "update" }];
+  const intake: IntakeMethod[] = params.intake ?? [{ method: "auto" }];
 
   if (linkedIssues.length === 0) {
     return;
@@ -281,7 +283,7 @@ export async function processImplementationIntake(params: {
   ]);
 
   // Avoid re-processing PRs already accepted as implementations
-  if (prLabels.includes(LABELS.IMPLEMENTATION)) {
+  if (prLabels.some(l => isLabelMatch(l, LABELS.IMPLEMENTATION))) {
     return;
   }
 
@@ -307,7 +309,14 @@ export async function processImplementationIntake(params: {
   for (const linkedIssue of linkedIssues) {
     if (!hasLabel(linkedIssue, LABELS.READY_TO_IMPLEMENT)) {
       if (trigger === "opened") {
-        await prs.comment(prRef, PR_MESSAGES.issueNotReadyToImplement(linkedIssue.number));
+        const isTerminal =
+          hasLabel(linkedIssue, LABELS.REJECTED) ||
+          hasLabel(linkedIssue, LABELS.INCONCLUSIVE) ||
+          hasLabel(linkedIssue, LABELS.IMPLEMENTED);
+        const message = isTerminal
+          ? PR_MESSAGES.issueClosedNoTracking(linkedIssue.number)
+          : PR_MESSAGES.issueNotReadyToImplement(linkedIssue.number);
+        await prs.comment(prRef, message);
       }
       continue;
     }
@@ -330,6 +339,11 @@ export async function processImplementationIntake(params: {
         if (rule.method === "update") {
           // The timing guard already failed — this method cannot activate.
           continue;
+        }
+        if (rule.method === "auto") {
+          log.info(`PR #${prNumber} activated via auto intake for issue #${linkedIssue.number}`);
+          activated = true;
+          break;
         }
         if (rule.method === "approval") {
           const approverLogins = await prs.getApproverLogins(prRef);
@@ -390,7 +404,10 @@ export async function processImplementationIntake(params: {
         linkedIssue.number
       );
       if (!alreadyWelcomed) {
-        await prs.comment(prRef, PR_MESSAGES.IMPLEMENTATION_WELCOME(linkedIssue.number));
+        // Extract labels from LinkedIssue structure to match IssueWithLabels interface
+        const labels = linkedIssue.labels.nodes.filter((l): l is { name: string } => l !== null);
+        const priority = getIssuePriority({ labels });
+        await prs.comment(prRef, PR_MESSAGES.IMPLEMENTATION_WELCOME(linkedIssue.number, priority));
         welcomed = true;
       }
     }

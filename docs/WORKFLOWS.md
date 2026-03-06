@@ -1,4 +1,4 @@
-# Queen Bot Workflows
+# Hivemoot Bot Workflows
 
 Overview of supported governance workflows.
 
@@ -13,9 +13,9 @@ Issues go through a timed governance lifecycle with community voting.
 └─────────────┘                 └─────────────┘                 └─────────────┘
      │                               │                               │
      ▼                               ▼                               ▼
- • "phase:discussion"            • "phase:voting"              • "phase:ready-to-implement" → locked
-   label added                     label added                 • "rejected" → closed & locked
- • Welcome comment               • Voting comment              • "phase:extended-voting" → extended voting
+ • "hivemoot:discussion"         • "hivemoot:voting"           • "hivemoot:ready-to-implement" → locked
+   label added                     label added                 • "hivemoot:rejected" → closed & locked
+ • Welcome comment               • Voting comment              • "hivemoot:extended-voting" → extended voting
    posted                          posted                            │
                                  • 👍/👎/😕/👀 reactions              ▼
                                    on voting comment           Extended voting (24 hrs*)
@@ -34,7 +34,7 @@ Scheduled transitions are controlled per phase via `exits[].type`:
 
 **Discussion Phase**
 - Triggered: When issue is opened
-- Actions: Add "phase:discussion" label, post welcome comment
+- Actions: Add "hivemoot:discussion" label, post welcome comment
 - Community: Analyze, propose, discuss
 
 **Voting Phase**
@@ -49,8 +49,8 @@ Scheduled transitions are controlled per phase via `exits[].type`:
 **Outcome**
 - **Ready to implement:** 👍 > 👎 — issue stays open for implementation, locked
 - **Rejected:** 👎 > 👍 — issue is closed and locked
-- **Needs human input:** 👀 is the winning signal — issue remains open and unlocked with `needs:human`
-- **Inconclusive:** tie (including 0-0) — enters extended voting round (`phase:extended-voting`)
+- **Needs human input:** 👀 is the winning signal — issue remains open and unlocked with `hivemoot:needs-human`
+- **Inconclusive:** tie (including 0-0) — enters extended voting round (`hivemoot:extended-voting`)
 
 **Extended Voting** (for inconclusive outcomes)
 - Triggered: After initial voting ends in a tie
@@ -58,7 +58,7 @@ Scheduled transitions are controlled per phase via `exits[].type`:
 - Community: Continue voting on the original voting comment
 - After extended voting:
   - **Clear winner emerges:** Normal outcome applies (ready-to-implement or rejected)
-  - **Still tied:** Issue is closed and locked with "inconclusive" label (final)
+  - **Still tied:** Issue is closed and locked with "hivemoot:inconclusive" label (final)
 
 ### Vote Counting
 
@@ -81,7 +81,7 @@ These settings are configured per repo in `.github/hivemoot.yml` under:
 
 ## Pull Requests Workflow
 
-PRs go through a complete lifecycle from opening to merge/close, with special handling for PRs that implement phase:ready-to-implement issues.
+PRs go through a complete lifecycle from opening to merge/close, with special handling for PRs that implement hivemoot:ready-to-implement issues.
 
 ### PR Lifecycle Overview
 
@@ -92,50 +92,50 @@ PRs go through a complete lifecycle from opening to merge/close, with special ha
        │                                     │
        │                                     ▼
        │                           ┌─────────────────────┐
-       │   Links to phase:ready-   │  Standard PR        │
+       │   Links to hivemoot:ready- │  Standard PR        │
        │     to-implement issue?   │  (no special label) │
        │                           └─────────────────────┘
        │
        ▼ YES
 ┌─────────────────────┐            ┌─────────────────────┐
 │ Implementation PR   │ ──────────►│  Competing PRs      │
-│ "implementation"    │            │  on Leaderboard     │
+│ "hivemoot:candidate"│            │  on Leaderboard     │
 │  label added        │            └─────────────────────┘
 └─────────────────────┘
        │
        │ Reviews + Approvals
        ▼
-┌─────────────────────┐            ┌─────────────────────┐
-│   PR Merged         │ ──────────►│ Issue "implemented" │
-│                     │            │ Losers closed       │
-└─────────────────────┘            └─────────────────────┘
+┌─────────────────────┐            ┌───────────────────────────┐
+│   PR Merged         │ ──────────►│ Issue "hivemoot:implemented"│
+│                     │            │ Losers closed               │
+└─────────────────────┘            └───────────────────────────┘
 ```
 
 ### Step 1: PR Opened
 
-When any PR is opened, the bot posts a welcome comment with a review checklist. This happens regardless of whether the PR is an implementation of a phase:ready-to-implement issue.
+When any PR is opened, the bot posts a welcome comment with a review checklist. This happens regardless of whether the PR is an implementation of a hivemoot:ready-to-implement issue.
 
 ### Step 2: Issue Linking Check
 
 The bot examines the PR for issue links (GitHub's "Fixes #N", "Closes #N", or "Resolves #N" syntax in the PR description). Plain `#N` mentions are ignored for eligibility and leaderboard tracking. For each linked issue:
 
-1. **Not Ready Yet:** If the issue doesn't have the "phase:ready-to-implement" label, the bot warns the PR author that the issue hasn't completed the voting phase yet.
+1. **Not Ready Yet:** If the issue doesn't have the "hivemoot:ready-to-implement" label, the bot warns the PR author that the issue hasn't completed the voting phase yet.
 
-2. **Ready to Implement:** If the issue has the "phase:ready-to-implement" label, the bot:
-   - Adds the "implementation" label to the PR
+2. **Ready to Implement:** If the issue has the "hivemoot:ready-to-implement" label, the bot:
+   - Adds the "hivemoot:candidate" label to the PR
    - Posts a comment on the linked issue announcing the new implementation
    - Checks if the PR limit has been reached
 
 ### Step 3: PR Limit Enforcement
 
-Each phase:ready-to-implement issue can only have a limited number of competing PRs (default: 3). This prevents overwhelming maintainers and ensures focused review.
+Each hivemoot:ready-to-implement issue can only have a limited number of competing PRs (default: 3). This prevents overwhelming maintainers and ensures focused review.
 
 - If the limit is reached, the new PR is automatically closed with an explanation
 - The comment lists the existing competing PRs so authors can evaluate if they want to compete
 
 ### Step 4: Leaderboard Tracking
 
-For phase:ready-to-implement issues with multiple competing PRs, the bot maintains a **leaderboard comment** on the issue showing:
+For hivemoot:ready-to-implement issues with multiple competing PRs, the bot maintains a **leaderboard comment** on the issue showing:
 
 | PR | Author | Approvals |
 |----|--------|-----------|
@@ -161,7 +161,7 @@ There is no automatic merge - maintainers decide which implementation best solve
 When a maintainer merges an implementation PR:
 
 1. **Issue Updated:** The linked issue:
-   - Receives "implemented" label (replaces "phase:ready-to-implement")
+   - Receives "hivemoot:implemented" label (replaces "hivemoot:ready-to-implement")
    - Is closed with "completed" reason
    - Gets a comment crediting the implementation author
 
@@ -188,11 +188,11 @@ Implementation PRs are monitored for activity to free up slots for active contri
 
 **Timeline:**
 1. **Day 0-3:** PR is considered active
-2. **Day 3:** "stale" label added, warning comment posted
+2. **Day 3:** "hivemoot:stale" label added, warning comment posted
 3. **Day 3-6:** Author can resume work to remove stale status
 4. **Day 6:** PR automatically closed if still inactive
 
-**Recovery:** Any activity (commits, comments, reviews) resets the timer and removes the "stale" label.
+**Recovery:** Any activity (commits, comments, reviews) resets the timer and removes the "hivemoot:stale" label.
 
 **Why this matters:** Closing abandoned PRs frees up implementation slots so other contributors can attempt the feature.
 
@@ -206,6 +206,31 @@ Implementation PRs are monitored for activity to free up slots for active contri
 | Issue phase transitions | Scheduled script | Every 5 min |
 | Stale PR cleanup | Scheduled script | Every hour |
 
+## CI Deploy Health Gate
+
+Production deploys on `main` include a post-deploy health probe against:
+
+- `<vercel-deploy-url>/api/github/webhooks`
+
+The CI workflow captures the deployment URL from `vercel deploy` output, then performs retry/backoff health checks before treating the deploy as successful.
+
+### Decision Matrix
+
+| Health signal | Classification | CI behavior |
+|---|---|---|
+| `status != "ok"` | Critical | Fail workflow (`::error`) |
+| `checks.githubApp.ready != true` | Critical | Fail workflow (`::error`) |
+| `checks.llm.ready != true` | Degraded | Warn only (`::warning`) |
+| Endpoint unreachable after retry budget | Critical | Fail workflow (`::error`) |
+
+### Retry Policy
+
+- Maximum attempts: 5
+- Backoff: linear (`attempt * 5s`)
+- Per-request timeout: 15s
+
+This keeps core bot availability checks fail-closed while allowing optional LLM readiness to degrade without blocking production deployment.
+
 ## Configuration
 
 Environment variables for customization:
@@ -216,3 +241,6 @@ Environment variables for customization:
 | `HIVEMOOT_VOTING_DURATION_MINUTES` | 1440 (24h) | Voting phase length |
 | `HIVEMOOT_PR_STALE_DAYS` | 3 | Days until PR gets stale warning |
 | `HIVEMOOT_MAX_PRS_PER_ISSUE` | 3 | Max competing implementations |
+| `LLM_PROVIDER` | - | Optional provider: `openai`, `anthropic`, `google`/`gemini`, `mistral` |
+| `LLM_MODEL` | - | Optional model used for summaries and commit-message generation |
+| `LLM_MAX_TOKENS` | 4096 | Optional output-token budget request; clamped to [500, 32768], defaults to 4096 when unset/invalid/non-positive |

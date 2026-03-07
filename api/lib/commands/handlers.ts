@@ -83,6 +83,7 @@ export interface CommandOctokit {
         data: Array<{
           id: number;
           body?: string;
+          created_at: string;
           user: { login: string } | null;
           performed_via_github_app?: { id: number; name: string } | null;
         }>;
@@ -1472,6 +1473,7 @@ async function handleDoctor(ctx: CommandContext): Promise<CommandResult> {
 async function getAllIssueComments(ctx: CommandContext): Promise<Array<{
   id: number;
   body?: string;
+  created_at: string;
   user: { login: string } | null;
   performed_via_github_app?: { id: number; name: string } | null;
 }>> {
@@ -1480,6 +1482,7 @@ async function getAllIssueComments(ctx: CommandContext): Promise<Array<{
   const all: Array<{
     id: number;
     body?: string;
+    created_at: string;
     user: { login: string } | null;
     performed_via_github_app?: { id: number; name: string } | null;
   }> = [];
@@ -1569,6 +1572,16 @@ async function handleReady(ctx: CommandContext): Promise<CommandResult> {
     };
   }
 
+  // Scope endorsements to the current discussion cycle.
+  // After a needs-more-discussion round-trip, hivemoot:discussion is removed
+  // and re-added, so getLabelAddedTime returns the start of the *current* cycle.
+  // /ready comments from a prior cycle must not count toward the new threshold.
+  const issues = createIssueOperations(ctx.octokit, { appId: ctx.appId });
+  const discussionStartedAt = await issues.getLabelAddedTime(
+    { owner: ctx.owner, repo: ctx.repo, issueNumber: ctx.issueNumber },
+    LABELS.DISCUSSION,
+  );
+
   // Scan all thread comments for /ready invocations, deduplicated by username.
   // Include the current sender even if their comment hasn't been stored yet.
   let allComments: Awaited<ReturnType<typeof getAllIssueComments>>;
@@ -1584,6 +1597,10 @@ async function handleReady(ctx: CommandContext): Promise<CommandResult> {
 
   for (const comment of allComments) {
     if (!comment.body || !comment.user) continue;
+    // If the discussion label was re-added (needs-more-discussion cycle),
+    // skip /ready comments that predate the current cycle's start.
+    // Null fallback: timeline API hasn't caught up — count all comments.
+    if (discussionStartedAt && comment.created_at < discussionStartedAt.toISOString()) continue;
     const parsed = parseCommand(comment.body);
     if (parsed?.verb === "ready") {
       signalers.add(comment.user.login.toLowerCase());

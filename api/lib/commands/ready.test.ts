@@ -43,8 +43,10 @@ const READINESS_CONFIG = {
   standup: { enabled: false, category: "" },
 };
 
+const mockGetLabelAddedTime = vi.fn().mockResolvedValue(null);
+
 vi.mock("../index.js", () => ({
-  createIssueOperations: vi.fn(() => ({})),
+  createIssueOperations: vi.fn(() => ({ getLabelAddedTime: mockGetLabelAddedTime })),
   createGovernanceService: vi.fn(() => ({})),
   createRepositoryLabelService: vi.fn(() => ({})),
   createPROperations: vi.fn(() => ({})),
@@ -77,15 +79,17 @@ vi.mock("../merge-readiness.js", () => ({
 /**
  * Build a mock comment that contains @hivemoot ready from the given user.
  */
-function makeReadyComment(id: number, login: string, appId?: number): {
+function makeReadyComment(id: number, login: string, appId?: number, createdAt = "2026-01-02T00:00:00.000Z"): {
   id: number;
   body: string;
+  created_at: string;
   user: { login: string };
   performed_via_github_app: { id: number; name: string } | null;
 } {
   return {
     id,
     body: "@hivemoot ready",
+    created_at: createdAt,
     user: { login },
     performed_via_github_app: appId !== undefined ? { id: appId, name: "hivemoot" } : null,
   };
@@ -94,9 +98,10 @@ function makeReadyComment(id: number, login: string, appId?: number): {
 /**
  * Build a mock readiness advisory comment (posted by the bot).
  */
-function makeAdvisoryComment(id: number, issueNumber: number, botAppId: number): {
+function makeAdvisoryComment(id: number, issueNumber: number, botAppId: number, createdAt = "2026-01-02T00:00:00.000Z"): {
   id: number;
   body: string;
+  created_at: string;
   user: { login: string };
   performed_via_github_app: { id: number; name: string };
 } {
@@ -109,6 +114,7 @@ function makeAdvisoryComment(id: number, issueNumber: number, botAppId: number):
   return {
     id,
     body: `<!-- hivemoot-metadata: ${metadata} -->\n🐝 **Discussion appears ready**`,
+    created_at: createdAt,
     user: { login: "hivemoot[bot]" },
     performed_via_github_app: { id: botAppId, name: "hivemoot" },
   };
@@ -164,6 +170,8 @@ function createCtx(overrides: Partial<CommandContext> = {}): CommandContext {
 describe("/ready command", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default: no prior discussion cycle (null = count all comments)
+    mockGetLabelAddedTime.mockResolvedValue(null);
   });
 
   it("rejects on pull requests", async () => {
@@ -314,5 +322,29 @@ describe("/ready command", () => {
     expect(result.status).toBe("executed");
     // Should update the existing comment (not threshold met but advisory exists)
     expect(octokit.rest.issues.updateComment).toHaveBeenCalled();
+  });
+
+  it("does not count /ready signals from a prior discussion cycle after needs-more-discussion", async () => {
+    // Scenario: discussion -> voting -> needs-more-discussion -> discussion
+    // Three users signaled /ready in the *first* cycle (before 2026-01-10).
+    // The issue re-entered discussion at 2026-01-10T00:00:00Z.
+    // Only the current sender (alice) has signaled in the new cycle — threshold not yet met.
+    const cycleStart = new Date("2026-01-10T00:00:00.000Z");
+    mockGetLabelAddedTime.mockResolvedValue(cycleStart);
+
+    const oldTimestamp = "2026-01-09T23:59:59.000Z"; // before cycle restart
+    const comments = [
+      makeReadyComment(1, "alice", undefined, oldTimestamp),  // stale
+      makeReadyComment(2, "bob", undefined, oldTimestamp),    // stale
+      makeReadyComment(3, "carol", undefined, oldTimestamp),  // stale
+    ];
+    const octokit = createMockOctokit("write", comments);
+    // alice is the current sender and triggers /ready again in the new cycle
+    const ctx = createCtx({ octokit: octokit as unknown as CommandContext["octokit"], senderLogin: "alice" });
+    const result = await executeCommand(ctx);
+    expect(result.status).toBe("executed");
+    // Threshold not met (only 1 signaler in current cycle) — no advisory posted
+    expect((result as { status: "executed"; message: string }).message).toMatch(/1\/3/);
+    expect(octokit.rest.issues.createComment).not.toHaveBeenCalled();
   });
 });

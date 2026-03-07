@@ -5,6 +5,7 @@ import {
   MAX_PRS_PER_ISSUE,
   PR_STALE_THRESHOLD_DAYS,
 } from "../config.js";
+import { logger } from "./logger.js";
 
 /**
  * Tests for repo-config.ts
@@ -1479,6 +1480,34 @@ governance:
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
         expect(config.governance.pr).toBeNull();
+      });
+
+      it.each([
+        ["string", "\"not-an-object\""],
+        ["numeric", "42"],
+        ["boolean", "true"],
+      ])("should return pr: null without warnings when governance is a %s scalar", async (_type, governanceValue) => {
+        const configYaml = `
+governance: ${governanceValue}
+`;
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(configYaml),
+            encoding: "base64",
+          },
+        });
+        const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+
+        try {
+          const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
+          expect(config).not.toBeNull();
+          expect(config?.governance.pr).toBeNull();
+          expect(warnSpy).not.toHaveBeenCalled();
+        } finally {
+          warnSpy.mockRestore();
+        }
       });
 
       it("should return pr with defaults when pr: section is present but empty", async () => {

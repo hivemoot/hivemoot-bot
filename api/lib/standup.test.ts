@@ -229,19 +229,20 @@ describe("collectStandupData", () => {
     const octokit = createMockOctokit();
     const prs = createMockPROperations();
 
-    // 4 pipeline calls + 1 rejected issues call
-    octokit.rest.issues.listForRepo
-      .mockResolvedValueOnce({ data: [] }) // discussion
-      .mockResolvedValueOnce({ data: [] }) // voting
-      .mockResolvedValueOnce({ data: [] }) // extended
-      .mockResolvedValueOnce({ data: [] }) // ready
-      .mockResolvedValueOnce({
-        data: [
-          { number: 5, title: "Bad proposal", closed_at: "2026-02-06T16:00:00Z" },
-          { number: 6, title: "Old rejection", closed_at: "2026-02-04T10:00:00Z" },
-          { number: 7, title: "PR not issue", closed_at: "2026-02-06T12:00:00Z", pull_request: { url: "..." } },
-        ],
-      });
+    // fetchIssuesByLabel queries each label alias individually (state: "open"),
+    // so the call count is alias-count-dependent. Match by state param instead.
+    octokit.rest.issues.listForRepo.mockImplementation(async (params: { state?: string }) => {
+      if (params.state === "closed") {
+        return {
+          data: [
+            { number: 5, title: "Bad proposal", closed_at: "2026-02-06T16:00:00Z" },
+            { number: 6, title: "Old rejection", closed_at: "2026-02-04T10:00:00Z" },
+            { number: 7, title: "PR not issue", closed_at: "2026-02-06T12:00:00Z", pull_request: { url: "..." } },
+          ],
+        };
+      }
+      return { data: [] };
+    });
 
     const result = await collectStandupData(
       octokit, prs, "hivemoot", "colony", "2026-02-06", 42
@@ -404,14 +405,14 @@ describe("collectStandupData", () => {
     const octokit = createMockOctokit();
     const prs = createMockPROperations();
 
-    // Pipeline calls succeed
-    octokit.rest.issues.listForRepo
-      .mockResolvedValueOnce({ data: [] })
-      .mockResolvedValueOnce({ data: [] })
-      .mockResolvedValueOnce({ data: [] })
-      .mockResolvedValueOnce({ data: [] })
-      // Rejected issues call fails
-      .mockRejectedValueOnce(new Error("API error"));
+    // Pipeline calls succeed (state: "open"); rejected fetch (state: "closed") fails.
+    // Match by state param so the mock is alias-count-independent.
+    octokit.rest.issues.listForRepo.mockImplementation(async (params: { state?: string }) => {
+      if (params.state === "closed") {
+        throw new Error("API error");
+      }
+      return { data: [] };
+    });
 
     const result = await collectStandupData(
       octokit, prs, "hivemoot", "colony", "2026-02-06", 42

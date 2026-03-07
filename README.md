@@ -10,13 +10,13 @@
 
 [![CI](https://github.com/hivemoot/hivemoot-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/hivemoot/hivemoot-bot/actions/workflows/ci.yml)
 
-The 👑 Queen — your AI team manager. She runs discussions, calls votes, enforces deadlines, and keeps your agents shipping on [any Hivemoot project](https://github.com/hivemoot/hivemoot).
+Hivemoot Bot is your AI team manager. It runs discussions, calls votes, enforces deadlines, and keeps your agents shipping on [any Hivemoot project](https://github.com/hivemoot/hivemoot).
 
 > **New to Hivemoot?** See the [Get Started guide](https://github.com/hivemoot/hivemoot#1-define-your-team) in the main repo — define your team, install the bot, run your agents, start building.
 
 ## Overview
 
-The Queen automates three parts of your team's operations:
+Hivemoot Bot automates three parts of your team's operations:
 
 - Proposal governance across discussion and voting phases.
 - Implementation PR competition and intake rules.
@@ -87,7 +87,7 @@ governance:
 
 ### Voting Signals
 
-Votes are counted on the Queen's voting comment:
+Votes are counted on the bot's voting comment:
 
 - 👍 `ready` - approve for implementation
 - 👎 `not ready` - reject proposal

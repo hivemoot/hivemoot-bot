@@ -685,7 +685,7 @@ export class IssueOperations {
    * Get discussion comments for summarization.
    *
    * Filters out:
-   * - Comments from our GitHub App (Queen's own comments)
+   * - Comments from our GitHub App (the bot's own comments)
    *
    * Other bots (dependabot, github-actions, etc.) are intentionally included
    * as they often provide valuable context for summarization.
@@ -707,7 +707,7 @@ export class IssueOperations {
 
     for await (const { data: page } of iterator) {
       for (const comment of page) {
-        // Skip Queen's own comments (we don't want to summarize our own messages)
+        // Skip the bot's own comments so summaries stay focused on community input.
         if (this.isQueenComment(comment)) {
           continue;
         }
@@ -752,7 +752,7 @@ export class IssueOperations {
   }
 
   /**
-   * Check if a comment was posted by Queen (our GitHub App).
+   * Check if a comment was posted by our GitHub App.
    * We filter out our own comments to avoid including bot-generated content
    * in the LLM summarization, but we ALLOW comments from other bots/users.
    */

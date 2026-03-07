@@ -324,6 +324,17 @@ describe("/ready command", () => {
     expect(octokit.rest.issues.updateComment).toHaveBeenCalled();
   });
 
+  it("re-throws when comment listing fails", async () => {
+    const octokit = createMockOctokit("write");
+    octokit.rest.issues.listComments = vi.fn().mockRejectedValue(new Error("API unavailable"));
+    const ctx = createCtx({ octokit: octokit as unknown as CommandContext["octokit"] });
+    await expect(executeCommand(ctx)).rejects.toThrow("API unavailable");
+    expect(ctx.log.error).toHaveBeenCalledWith(
+      expect.objectContaining({ issue: ctx.issueNumber }),
+      expect.stringContaining("Failed to list comments"),
+    );
+  });
+
   it("does not count /ready signals from a prior discussion cycle after needs-more-discussion", async () => {
     // Scenario: discussion -> voting -> needs-more-discussion -> discussion
     // Three users signaled /ready in the *first* cycle (before 2026-01-10).

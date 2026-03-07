@@ -87,6 +87,11 @@ describe("repo-config", () => {
       const defaults = getDefaultConfig();
       expect(defaults.governance.pr).toBeNull();
     });
+
+    it("should return null for readinessSignal (disabled by default)", () => {
+      const defaults = getDefaultConfig();
+      expect(defaults.governance.proposals.discussion.readinessSignal).toBeNull();
+    });
   });
 
   describe("loadRepositoryConfig", () => {
@@ -2522,6 +2527,184 @@ governance:
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
         expect(config!.governance.pr!.automerge).toBeNull();
+      });
+    });
+
+    describe("readinessSignal config parsing", () => {
+      it("should return null when readinessSignal is absent", async () => {
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(`
+governance:
+  proposals:
+    discussion:
+      exits:
+        - type: manual
+`),
+          },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config!.governance.proposals.discussion.readinessSignal).toBeNull();
+      });
+
+      it("should return null when readinessSignal is explicitly null", async () => {
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(`
+governance:
+  proposals:
+    discussion:
+      readinessSignal: null
+`),
+          },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config!.governance.proposals.discussion.readinessSignal).toBeNull();
+      });
+
+      it("should return null and warn when readinessSignal is a non-object", async () => {
+        const warnSpy = vi.spyOn(logger, "warn");
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(`
+governance:
+  proposals:
+    discussion:
+      readinessSignal: "yes"
+`),
+          },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config!.governance.proposals.discussion.readinessSignal).toBeNull();
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("Invalid readinessSignal"));
+      });
+
+      it("should return null when enabled is false", async () => {
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(`
+governance:
+  proposals:
+    discussion:
+      readinessSignal:
+        enabled: false
+`),
+          },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config!.governance.proposals.discussion.readinessSignal).toBeNull();
+      });
+
+      it("should return null and warn when enabled is non-boolean", async () => {
+        const warnSpy = vi.spyOn(logger, "warn");
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(`
+governance:
+  proposals:
+    discussion:
+      readinessSignal:
+        enabled: "yes"
+`),
+          },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config!.governance.proposals.discussion.readinessSignal).toBeNull();
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("Invalid readinessSignal.enabled"));
+      });
+
+      it("should enable with default minEndorsements when section present and no enabled flag", async () => {
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(`
+governance:
+  proposals:
+    discussion:
+      readinessSignal:
+        minEndorsements: 5
+`),
+          },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config!.governance.proposals.discussion.readinessSignal).toEqual({
+          enabled: true,
+          minEndorsements: 5,
+        });
+      });
+
+      it("should use default minEndorsements when omitted", async () => {
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(`
+governance:
+  proposals:
+    discussion:
+      readinessSignal:
+        enabled: true
+`),
+          },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config!.governance.proposals.discussion.readinessSignal).toEqual({
+          enabled: true,
+          minEndorsements: CONFIG_BOUNDS.readinessSignal.minEndorsements.default,
+        });
+      });
+
+      it("should clamp minEndorsements below min to 1", async () => {
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(`
+governance:
+  proposals:
+    discussion:
+      readinessSignal:
+        enabled: true
+        minEndorsements: 0
+`),
+          },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config!.governance.proposals.discussion.readinessSignal!.minEndorsements).toBe(
+          CONFIG_BOUNDS.readinessSignal.minEndorsements.min
+        );
+      });
+
+      it("should clamp minEndorsements above max to 50", async () => {
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(`
+governance:
+  proposals:
+    discussion:
+      readinessSignal:
+        enabled: true
+        minEndorsements: 999
+`),
+          },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config!.governance.proposals.discussion.readinessSignal!.minEndorsements).toBe(
+          CONFIG_BOUNDS.readinessSignal.minEndorsements.max
+        );
       });
     });
   });

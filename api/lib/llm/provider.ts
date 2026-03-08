@@ -17,6 +17,7 @@ import { createAnthropic } from "@ai-sdk/anthropic";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createMistral } from "@ai-sdk/mistral";
 import { createOpenAI } from "@ai-sdk/openai";
+import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import type { LanguageModelV1 } from "ai";
 
 import type { LLMConfig, LLMProvider, LLMReadiness } from "./types.js";
@@ -67,9 +68,9 @@ const API_KEY_VARS: Readonly<Record<LLMProvider, readonly string[]>> = {
   openrouter: ["OPENROUTER_API_KEY"],
 };
 
-const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const OPENROUTER_HEADERS = {
   "HTTP-Referer": "https://github.com/hivemoot/hivemoot-bot",
+  "X-OpenRouter-Title": "Hivemoot Bot",
   "X-Title": "Hivemoot Bot",
 } as const;
 
@@ -158,16 +159,12 @@ function createModelWithApiKey(config: LLMConfig, apiKey: string): LanguageModel
     }
 
     case "openrouter": {
-      const openrouter = createOpenAI({
+      const openrouter = createOpenRouter({
         apiKey,
-        baseURL: OPENROUTER_BASE_URL,
+        compatibility: "strict",
         headers: OPENROUTER_HEADERS,
-        compatibility: "compatible",
       });
-      // OpenRouter fronts heterogeneous model backends. On the current ai@4
-      // baseline, forcing prompt-injected JSON instructions is safer than
-      // sending OpenAI's native json_schema payloads to arbitrary upstreams.
-      return openrouter(config.model, { structuredOutputs: false });
+      return openrouter.chat(config.model);
     }
 
     case "google": {

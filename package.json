@@ -24,6 +24,7 @@
     "@ai-sdk/google": "^1.0.0",
     "@ai-sdk/mistral": "^1.0.0",
     "@ai-sdk/openai": "^1.0.0",
+    "@openrouter/ai-sdk-provider": "^0.7.5",
     "ai": "^4.0.0",
     "js-yaml": "^4.1.1",
     "minimatch": "10.2.4",

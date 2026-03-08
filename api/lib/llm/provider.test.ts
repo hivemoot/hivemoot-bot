@@ -1,15 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createCipheriv, randomBytes } from "node:crypto";
-import { createOpenAI } from "@ai-sdk/openai";
+import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { isLLMConfigured, getLLMConfig, createModel, createModelFromEnv, getLLMReadiness } from "./provider.js";
 import { _resetMasterKeysCache } from "./byok.js";
 import type { LLMConfig, LLMProvider } from "./types.js";
 
-vi.mock("@ai-sdk/openai", async () => {
-  const actual = await vi.importActual<typeof import("@ai-sdk/openai")>("@ai-sdk/openai");
+vi.mock("@openrouter/ai-sdk-provider", async () => {
+  const actual = await vi.importActual<typeof import("@openrouter/ai-sdk-provider")>("@openrouter/ai-sdk-provider");
   return {
     ...actual,
-    createOpenAI: vi.fn(actual.createOpenAI),
+    createOpenRouter: vi.fn(actual.createOpenRouter),
   };
 });
 
@@ -380,7 +380,7 @@ describe("LLM Provider", () => {
       expect(model.modelId).toBe("mistral-small");
     });
 
-    it("should create OpenRouter model with compatible routing, attribution headers, and prompt-injected structured outputs", () => {
+    it("should create OpenRouter model with official routing, attribution headers, and tool-based object generation", () => {
       process.env.OPENROUTER_API_KEY = "openrouter-test-key";
       const config: LLMConfig = {
         provider: "openrouter",
@@ -392,14 +392,13 @@ describe("LLM Provider", () => {
 
       expect(model).toBeDefined();
       expect(model.modelId).toBe("openai/gpt-4o-mini");
-      expect(model.supportsStructuredOutputs).toBe(false);
       expect(model.defaultObjectGenerationMode).toBe("tool");
-      expect(createOpenAI).toHaveBeenCalledWith({
+      expect(createOpenRouter).toHaveBeenCalledWith({
         apiKey: "openrouter-test-key",
-        baseURL: "https://openrouter.ai/api/v1",
-        compatibility: "compatible",
+        compatibility: "strict",
         headers: {
           "HTTP-Referer": "https://github.com/hivemoot/hivemoot-bot",
+          "X-OpenRouter-Title": "Hivemoot Bot",
           "X-Title": "Hivemoot Bot",
         },
       });
@@ -598,7 +597,7 @@ describe("LLM Provider", () => {
       );
     });
 
-    it("should route installation-scoped OpenRouter BYOK config through the OpenAI-compatible client", async () => {
+    it("should route installation-scoped OpenRouter BYOK config through the official provider", async () => {
       const masterKey = randomBytes(32);
       const { ciphertext, iv, tag } = encryptPayload(
         { apiKey: "sk-openrouter", provider: "openrouter", model: "openai/gpt-4o-mini" },
@@ -627,14 +626,13 @@ describe("LLM Provider", () => {
       expect(result?.config.provider).toBe("openrouter");
       expect(result?.config.model).toBe("openai/gpt-4o-mini");
       expect(result?.model.modelId).toBe("openai/gpt-4o-mini");
-      expect(result?.model.supportsStructuredOutputs).toBe(false);
       expect(result?.model.defaultObjectGenerationMode).toBe("tool");
-      expect(createOpenAI).toHaveBeenCalledWith({
+      expect(createOpenRouter).toHaveBeenCalledWith({
         apiKey: "sk-openrouter",
-        baseURL: "https://openrouter.ai/api/v1",
-        compatibility: "compatible",
+        compatibility: "strict",
         headers: {
           "HTTP-Referer": "https://github.com/hivemoot/hivemoot-bot",
+          "X-OpenRouter-Title": "Hivemoot Bot",
           "X-Title": "Hivemoot Bot",
         },
       });

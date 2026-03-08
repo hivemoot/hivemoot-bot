@@ -138,6 +138,11 @@ export class GovernanceService {
    * Defaults to the voting-mode welcome text unless a caller provides an override.
    */
   async startDiscussion(ref: IssueRef, welcomeMessage = MESSAGES.ISSUE_WELCOME_VOTING): Promise<void> {
+    const exists = await this.issues.hasNotificationComment(ref, "welcome");
+    if (exists) {
+      this.logger.info(`Welcome comment already exists for issue #${ref.issueNumber}, skipping`);
+      return;
+    }
     const commentBody = buildDiscussionComment(welcomeMessage, ref.issueNumber);
     await Promise.all([
       this.issues.addLabels(ref, [LABELS.DISCUSSION]),

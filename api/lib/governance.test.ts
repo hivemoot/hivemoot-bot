@@ -45,6 +45,7 @@ describe("GovernanceService", () => {
       getValidatedVoteCounts: vi.fn().mockResolvedValue({ votes: { thumbsUp: 0, thumbsDown: 0, confused: 0, eyes: 0 }, voters: [], participants: [] }),
       countVotingComments: vi.fn().mockResolvedValue(0),
       hasHumanHelpComment: vi.fn().mockResolvedValue(false),
+      hasNotificationComment: vi.fn().mockResolvedValue(false),
       getLabelAddedTime: vi.fn().mockResolvedValue(new Date()),
       transition: vi.fn().mockResolvedValue(undefined),
       pinComment: vi.fn().mockResolvedValue(undefined),
@@ -92,6 +93,16 @@ describe("GovernanceService", () => {
 
       // If run in parallel, it should be close to delayMs, not roughly 2 * delayMs.
       expect(elapsed).toBeLessThan(90);
+    });
+
+    it("should skip when welcome comment already exists (replay-safe)", async () => {
+      vi.mocked(mockIssues.hasNotificationComment).mockResolvedValue(true);
+
+      await governance.startDiscussion(testRef);
+
+      expect(mockIssues.hasNotificationComment).toHaveBeenCalledWith(testRef, "welcome");
+      expect(mockIssues.addLabels).not.toHaveBeenCalled();
+      expect(mockIssues.comment).not.toHaveBeenCalled();
     });
   });
 

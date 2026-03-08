@@ -1,8 +1,5 @@
 import { createOnboardingService } from "../lib/index.js";
-import {
-  hasInstallationRepoListClient,
-  listAccessibleInstallationRepositories,
-} from "./installation-repos.js";
+import { listAccessibleInstallationRepositories } from "./installation-repos.js";
 import type { InstallationPayload, InstallationRepoPayload } from "./installation-repos.js";
 import type { Handler, HandlerEvent } from "./types.js";
 

@@ -8,11 +8,12 @@ import type { HandlerEvent } from "./types.js";
 function createOnboardingOctokit(options?: {
   archived?: boolean;
   configExists?: boolean;
-  existingPR?: { number: number; html_url: string } | null;
+  existingPR?: { number: number; html_url: string; state?: string } | null;
   headSha?: string;
   createRefError?: { status: number };
   createFileError?: { status: number };
   createPRResult?: { number: number; html_url: string };
+  fallbackRepositories?: Array<{ name: string; full_name: string; owner?: { login?: string } | null }>;
 }) {
   const archived = options?.archived ?? false;
   const configExists = options?.configExists ?? false;
@@ -21,6 +22,7 @@ function createOnboardingOctokit(options?: {
   const createRefError = options?.createRefError ?? null;
   const createFileError = options?.createFileError ?? null;
   const createPRResult = options?.createPRResult ?? { number: 99, html_url: "https://github.com/o/r/pull/99" };
+  const fallbackRepositories = options?.fallbackRepositories ?? [];
 
   return {
     rest: {
@@ -42,6 +44,11 @@ function createOnboardingOctokit(options?: {
       pulls: {
         list: vi.fn().mockResolvedValue({ data: existingPR ? [existingPR] : [] }),
         create: vi.fn().mockResolvedValue({ data: createPRResult }),
+      },
+      apps: {
+        listReposAccessibleToInstallation: vi.fn().mockResolvedValue({
+          data: { repositories: fallbackRepositories },
+        }),
       },
     },
   };
@@ -104,8 +111,9 @@ describe("onboarding handlers", () => {
     );
   });
 
-  it("skips when payload has no repositories", async () => {
-    const octokit = createOnboardingOctokit();
+  it("fetches installation repos via fallback when installation.created has no repositories", async () => {
+    const fallbackRepo = { owner: { login: "acme" }, name: "fallback", full_name: "acme/fallback" };
+    const octokit = createOnboardingOctokit({ fallbackRepositories: [fallbackRepo] });
     const log = { info: vi.fn(), error: vi.fn() };
 
     await installationCreatedOnboardingHandler.handle(
@@ -113,8 +121,46 @@ describe("onboarding handlers", () => {
       {},
     );
 
-    expect(octokit.rest.repos.get).not.toHaveBeenCalled();
+    expect(octokit.rest.apps.listReposAccessibleToInstallation).toHaveBeenCalledOnce();
+    expect(octokit.rest.pulls.create).toHaveBeenCalledOnce();
+    expect(octokit.rest.pulls.create).toHaveBeenCalledWith(
+      expect.objectContaining({ owner: "acme", repo: "fallback" }),
+    );
+    expect(log.info).toHaveBeenCalledWith(
+      expect.stringContaining("Repository list missing from payload; fetching installation repositories"),
+    );
+  });
+
+  it("fetches installation repos via fallback when installation_repositories.added has empty repositories_added", async () => {
+    const fallbackRepo = { owner: { login: "acme" }, name: "fallback2", full_name: "acme/fallback2" };
+    const octokit = createOnboardingOctokit({ fallbackRepositories: [fallbackRepo] });
+    const log = { info: vi.fn(), error: vi.fn() };
+
+    await installationRepositoriesAddedOnboardingHandler.handle(
+      createEvent("installation_repositories.added", { repositories_added: [] }, octokit, log),
+      {},
+    );
+
+    expect(octokit.rest.apps.listReposAccessibleToInstallation).toHaveBeenCalledOnce();
+    expect(octokit.rest.pulls.create).toHaveBeenCalledOnce();
+    expect(octokit.rest.pulls.create).toHaveBeenCalledWith(
+      expect.objectContaining({ owner: "acme", repo: "fallback2" }),
+    );
+  });
+
+  it("skips with log when fallback returns no repositories", async () => {
+    const octokit = createOnboardingOctokit({ fallbackRepositories: [] });
+    const log = { info: vi.fn(), error: vi.fn() };
+
+    await installationCreatedOnboardingHandler.handle(
+      createEvent("installation.created", {}, octokit, log),
+      {},
+    );
+
     expect(octokit.rest.pulls.create).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith(
+      expect.stringContaining("No installation repositories available; skipping onboarding PR creation"),
+    );
   });
 
   it("skips archived repositories", async () => {

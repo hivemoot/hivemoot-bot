@@ -380,7 +380,7 @@ describe("LLM Provider", () => {
       expect(model.modelId).toBe("mistral-small");
     });
 
-    it("should create OpenRouter model with OpenAI-compatible routing and attribution headers", () => {
+    it("should create OpenRouter model with compatible routing, attribution headers, and prompt-injected structured outputs", () => {
       process.env.OPENROUTER_API_KEY = "openrouter-test-key";
       const config: LLMConfig = {
         provider: "openrouter",
@@ -392,9 +392,12 @@ describe("LLM Provider", () => {
 
       expect(model).toBeDefined();
       expect(model.modelId).toBe("openai/gpt-4o-mini");
+      expect(model.supportsStructuredOutputs).toBe(false);
+      expect(model.defaultObjectGenerationMode).toBe("tool");
       expect(createOpenAI).toHaveBeenCalledWith({
         apiKey: "openrouter-test-key",
         baseURL: "https://openrouter.ai/api/v1",
+        compatibility: "compatible",
         headers: {
           "HTTP-Referer": "https://github.com/hivemoot/hivemoot-bot",
           "X-Title": "Hivemoot Bot",
@@ -624,9 +627,12 @@ describe("LLM Provider", () => {
       expect(result?.config.provider).toBe("openrouter");
       expect(result?.config.model).toBe("openai/gpt-4o-mini");
       expect(result?.model.modelId).toBe("openai/gpt-4o-mini");
+      expect(result?.model.supportsStructuredOutputs).toBe(false);
+      expect(result?.model.defaultObjectGenerationMode).toBe("tool");
       expect(createOpenAI).toHaveBeenCalledWith({
         apiKey: "sk-openrouter",
         baseURL: "https://openrouter.ai/api/v1",
+        compatibility: "compatible",
         headers: {
           "HTTP-Referer": "https://github.com/hivemoot/hivemoot-bot",
           "X-Title": "Hivemoot Bot",

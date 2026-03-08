@@ -162,8 +162,12 @@ function createModelWithApiKey(config: LLMConfig, apiKey: string): LanguageModel
         apiKey,
         baseURL: OPENROUTER_BASE_URL,
         headers: OPENROUTER_HEADERS,
+        compatibility: "compatible",
       });
-      return openrouter(config.model);
+      // OpenRouter fronts heterogeneous model backends. On the current ai@4
+      // baseline, forcing prompt-injected JSON instructions is safer than
+      // sending OpenAI's native json_schema payloads to arbitrary upstreams.
+      return openrouter(config.model, { structuredOutputs: false });
     }
 
     case "google": {

@@ -5,9 +5,9 @@
  * Supports multiple providers via environment configuration.
  *
  * Environment Variables:
- * - LLM_PROVIDER: openai | anthropic | google | gemini | mistral
+ * - LLM_PROVIDER: openai | anthropic | google | gemini | mistral | openrouter
  *     ("gemini" is accepted as an alias for "google")
- * - LLM_MODEL: Model name (e.g., claude-3-haiku-20240307, gpt-4o-mini)
+ * - LLM_MODEL: Model name (e.g., claude-3-haiku-20240307, gpt-4o-mini, openai/gpt-4o-mini)
  * - ANTHROPIC_API_KEY / OPENAI_API_KEY / etc: Provider-specific API keys
  *     (Google accepts GOOGLE_API_KEY or GOOGLE_GENERATIVE_AI_API_KEY)
  * - LLM_MAX_TOKENS: Optional requested output budget, defaults to 4096
@@ -39,6 +39,7 @@ const PROVIDER_ALIASES: Readonly<Record<string, LLMProvider>> = {
   google: "google",
   gemini: "google",
   mistral: "mistral",
+  openrouter: "openrouter",
 };
 
 function normalizeProvider(provider: string | undefined): LLMProvider | undefined {
@@ -63,7 +64,14 @@ const API_KEY_VARS: Readonly<Record<LLMProvider, readonly string[]>> = {
   openai: ["OPENAI_API_KEY"],
   google: ["GOOGLE_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY"],
   mistral: ["MISTRAL_API_KEY"],
+  openrouter: ["OPENROUTER_API_KEY"],
 };
+
+const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+const OPENROUTER_HEADERS = {
+  "HTTP-Referer": "https://github.com/hivemoot/hivemoot-bot",
+  "X-Title": "Hivemoot Bot",
+} as const;
 
 function parseRequestedMaxTokensFromEnv(): number {
   const rawMaxTokens = normalizeEnvString(process.env.LLM_MAX_TOKENS, "LLM_MAX_TOKENS");
@@ -149,6 +157,15 @@ function createModelWithApiKey(config: LLMConfig, apiKey: string): LanguageModel
       return openai(config.model);
     }
 
+    case "openrouter": {
+      const openrouter = createOpenAI({
+        apiKey,
+        baseURL: OPENROUTER_BASE_URL,
+        headers: OPENROUTER_HEADERS,
+      });
+      return openrouter(config.model);
+    }
+
     case "google": {
       const google = createGoogleGenerativeAI({ apiKey });
       // Disable Gemini's native responseSchema so the SDK injects the JSON
@@ -220,6 +237,13 @@ function getApiKeyFromEnv(provider: LLMProvider): string {
       const apiKey = normalizeEnvString(process.env.MISTRAL_API_KEY, "MISTRAL_API_KEY");
       if (!apiKey) {
         throw new Error("MISTRAL_API_KEY environment variable is not set");
+      }
+      return apiKey;
+    }
+    case "openrouter": {
+      const apiKey = normalizeEnvString(process.env.OPENROUTER_API_KEY, "OPENROUTER_API_KEY");
+      if (!apiKey) {
+        throw new Error("OPENROUTER_API_KEY environment variable is not set");
       }
       return apiKey;
     }

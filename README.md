@@ -192,13 +192,14 @@ The bot supports optional AI-powered discussion summarization via the [Vercel AI
 
 | Variable                                          | Default     | Description                                                                                          |
 | ------------------------------------------------- | ----------- | ---------------------------------------------------------------------------------------------------- |
-| `LLM_PROVIDER`                                    | -           | LLM provider: `anthropic`, `openai`, `google`/`gemini`, or `mistral`                                 |
+| `LLM_PROVIDER`                                    | -           | LLM provider: `anthropic`, `openai`, `google`/`gemini`, `mistral`, or `openrouter`                   |
 | `LLM_MODEL`                                       | -           | Model name (e.g. `claude-3-haiku-20240307`, `gpt-4o-mini`)                                           |
 | `LLM_MAX_TOKENS`                                  | `4096`      | Output-token budget; clamped to `[500, 32768]`, falls back to `4096` when unset/invalid/non-positive |
 | `ANTHROPIC_API_KEY`                               | -           | API key (required when provider is `anthropic`)                                                      |
 | `OPENAI_API_KEY`                                  | -           | API key (required when provider is `openai`)                                                         |
 | `GOOGLE_API_KEY` / `GOOGLE_GENERATIVE_AI_API_KEY` | -           | API key (required when provider is `google`; `GOOGLE_API_KEY` takes priority)                        |
 | `MISTRAL_API_KEY`                                 | -           | API key (required when provider is `mistral`)                                                        |
+| `OPENROUTER_API_KEY`                              | -           | API key (required when provider is `openrouter`)                                                     |
 | `HIVEMOOT_REDIS_REST_URL`                         | -           | Redis REST URL for installation-scoped BYOK envelopes (`hive:byok:<installationId>`)                 |
 | `HIVEMOOT_REDIS_REST_TOKEN`                       | -           | Redis REST bearer token for BYOK envelope lookup                                                     |
 | `BYOK_MASTER_KEYS`                                | -           | JSON map of key-version to hex AES-256 keys (64-char hex strings) used to decrypt BYOK envelopes     |

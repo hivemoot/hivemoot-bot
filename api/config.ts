@@ -42,6 +42,12 @@ export const CONFIG_BOUNDS = {
   mergeReady: {
     minApprovals: { min: 1, max: 20, default: 1 },
   },
+  automerge: {
+    maxFiles: { min: 1, max: 50, default: 5 },
+    maxChangedLines: { min: 1, max: 1000, default: 80 },
+    maxPathPatterns: 50,
+    minApprovals: { min: 1, max: 20, default: 2 },
+  },
   llmMaxTokens: {
     min: 500,
     max: 32_768,
@@ -334,6 +340,7 @@ export const LABELS = {
   IMPLEMENTED: "hivemoot:implemented",
   NEEDS_HUMAN: "hivemoot:needs-human",
   MERGE_READY: "hivemoot:merge-ready",
+  AUTOMERGE: "hivemoot:automerge",
 } as const;
 
 export const PRIORITY_LABELS = {
@@ -454,6 +461,11 @@ export const REQUIRED_REPOSITORY_LABELS: readonly RepositoryLabelDefinition[] = 
     name: LABELS.MERGE_READY,
     color: "2ea043",
     description: "Implementation PR meets merge-readiness checks.",
+  },
+  {
+    name: LABELS.AUTOMERGE,
+    color: "7057ff",
+    description: "PR qualifies for automatic merge.",
   },
   {
     name: PRIORITY_LABELS.HIGH,
@@ -590,13 +602,22 @@ This PR isn't tracked yet. Try again after a slot opens.${SIGNATURE}`,
 Issue #${issueNumber} hasn't passed voting. This PR won't be tracked until it does.${SIGNATURE}`,
 
   /**
+   * Posted to a PR when it links to an issue in a terminal closed state
+   * (rejected, inconclusive, or already implemented).
+   */
+  issueClosedNoTracking: (issueNumber: number) =>
+    `# 🐝 Issue Closed ❌\n\nIssue #${issueNumber} is closed — this PR won't be tracked.${SIGNATURE}`,
+
+  /**
    * Posted to a PR when the issue is ready but the PR needs a post-approval update.
    */
   issueReadyNeedsUpdate: (issueNumber: number) =>
     `# 🐝 Update Needed ⏳
 
-Issue #${issueNumber} is approved, but this PR was opened before approval.
-Add a new commit or leave a comment to activate it for implementation tracking.${SIGNATURE}`,
+Issue #${issueNumber} passed voting, but this PR was opened before approval and was not automatically activated for implementation tracking.
+
+Pre-ready PRs require a fresh post-vote signal so implementation tracking reflects the approved proposal.
+Depending on this repo's intake rules, activate by adding a new commit/comment or by meeting trusted-reviewer approval requirements.${SIGNATURE}`,
 
   /**
    * Posted to a PR when it becomes stale (no activity for threshold days).

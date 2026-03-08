@@ -23,6 +23,7 @@ import type { LLMConfig, LLMProvider, LLMReadiness } from "./types.js";
 import { resolveInstallationBYOKConfig } from "./byok.js";
 import { LLM_DEFAULTS } from "./types.js";
 import { CONFIG_BOUNDS } from "../../config.js";
+import { normalizeEnvString } from "./env.js";
 
 export interface ModelResolutionOptions {
   installationId?: number;
@@ -39,30 +40,6 @@ const PROVIDER_ALIASES: Readonly<Record<string, LLMProvider>> = {
   gemini: "google",
   mistral: "mistral",
 };
-
-function normalizeEnvString(value: string | undefined, name?: string): string | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-
-  let normalized = value.trim();
-  if (normalized.length === 0) {
-    return undefined;
-  }
-
-  const hasMatchingQuotes =
-    (normalized.startsWith("\"") && normalized.endsWith("\"")) ||
-    (normalized.startsWith("'") && normalized.endsWith("'"));
-  if (hasMatchingQuotes) {
-    normalized = normalized.slice(1, -1).trim();
-  }
-
-  if (normalized !== value && name) {
-    console.warn(`[llm] env var ${name} was normalized (whitespace/quotes removed)`);
-  }
-
-  return normalized.length > 0 ? normalized : undefined;
-}
 
 function normalizeProvider(provider: string | undefined): LLMProvider | undefined {
   const normalized = normalizeEnvString(provider, "LLM_PROVIDER")?.toLowerCase();

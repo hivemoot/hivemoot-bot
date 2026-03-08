@@ -270,7 +270,7 @@ export async function processImplementationIntake(params: {
     maxPRsPerIssue,
   } = params;
   const trustedReviewers = params.trustedReviewers ?? [];
-  const intake: IntakeMethod[] = params.intake ?? [{ method: "update" }];
+  const intake: IntakeMethod[] = params.intake ?? [{ method: "auto" }];
 
   if (linkedIssues.length === 0) {
     return;
@@ -309,7 +309,14 @@ export async function processImplementationIntake(params: {
   for (const linkedIssue of linkedIssues) {
     if (!hasLabel(linkedIssue, LABELS.READY_TO_IMPLEMENT)) {
       if (trigger === "opened") {
-        await prs.comment(prRef, PR_MESSAGES.issueNotReadyToImplement(linkedIssue.number));
+        const isTerminal =
+          hasLabel(linkedIssue, LABELS.REJECTED) ||
+          hasLabel(linkedIssue, LABELS.INCONCLUSIVE) ||
+          hasLabel(linkedIssue, LABELS.IMPLEMENTED);
+        const message = isTerminal
+          ? PR_MESSAGES.issueClosedNoTracking(linkedIssue.number)
+          : PR_MESSAGES.issueNotReadyToImplement(linkedIssue.number);
+        await prs.comment(prRef, message);
       }
       continue;
     }
@@ -332,6 +339,11 @@ export async function processImplementationIntake(params: {
         if (rule.method === "update") {
           // The timing guard already failed — this method cannot activate.
           continue;
+        }
+        if (rule.method === "auto") {
+          log.info(`PR #${prNumber} activated via auto intake for issue #${linkedIssue.number}`);
+          activated = true;
+          break;
         }
         if (rule.method === "approval") {
           const approverLogins = await prs.getApproverLogins(prRef);

@@ -557,10 +557,38 @@ describe("executeCommand", () => {
       expect(result.status).toBe("rejected");
     });
 
-    it("should reject /implement when no recognized phase label exists", async () => {
+    it("should fast-track unlabeled issues to ready-to-implement", async () => {
       const ctx = createCtx({
         verb: "implement",
         issueLabels: [],
+      });
+      const result = await executeCommand(ctx);
+
+      expect(result.status).toBe("executed");
+      expect(mockIssueOps.transition).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          addLabel: LABELS.READY_TO_IMPLEMENT,
+        }),
+      );
+      const transitionCall = mockIssueOps.transition.mock.calls[0];
+      expect(transitionCall[1].removeLabel).toBeUndefined();
+    });
+
+    it("should reject /implement when inconclusive", async () => {
+      const ctx = createCtx({
+        verb: "implement",
+        issueLabels: [{ name: LABELS.INCONCLUSIVE }],
+      });
+      const result = await executeCommand(ctx);
+
+      expect(result.status).toBe("rejected");
+    });
+
+    it("should reject /implement when already implemented", async () => {
+      const ctx = createCtx({
+        verb: "implement",
+        issueLabels: [{ name: LABELS.IMPLEMENTED }],
       });
       const result = await executeCommand(ctx);
 
@@ -690,6 +718,32 @@ describe("executeCommand", () => {
       const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
       expect(commentArgs.body).toContain("**Labels**: Check failed: boom");
       expect(commentArgs.body).toContain("**Config**");
+    });
+
+    it("should report PR Workflow as disabled and config intake as disabled when pr is null", async () => {
+      const { loadRepositoryConfig } = await import("../index.js");
+      vi.mocked(loadRepositoryConfig).mockResolvedValueOnce({
+        version: 1,
+        governance: {
+          proposals: {
+            discussion: { exits: [{ type: "manual" }], durationMs: 0 },
+            voting: { exits: [{ type: "manual" }], durationMs: 0 },
+            extendedVoting: { exits: [{ type: "manual" }], durationMs: 0 },
+          },
+          pr: null,
+        },
+        standup: {
+          enabled: false,
+          category: "",
+        },
+      });
+
+      const ctx = createCtx({ verb: "doctor" });
+      await executeCommand(ctx);
+
+      const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
+      expect(commentArgs.body).toContain("**PR Workflow**: Disabled");
+      expect(commentArgs.body).toContain("PR workflows: disabled");
     });
 
     it("should report advisory PR workflow and validate enabled standup category", async () => {

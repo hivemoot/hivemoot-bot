@@ -72,6 +72,7 @@ Before opening or updating a PR:
 - Add or update tests for any behavior changes.
 - Address all review comments before requesting re-review.
 - Keep changes focused and reviewable — one concern per PR.
+- Include a before/after example showing the outcome (the PR template will guide you).
 
 ## GitHub CLI Compatibility Notes
 

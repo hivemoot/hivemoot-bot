@@ -36,6 +36,7 @@ vi.mock("../../lib/index.js", () => ({
   loadRepositoryConfig: mocks.loadRepositoryConfig,
   getOpenPRsForIssue: vi.fn(),
   evaluateMergeReadiness: vi.fn(),
+  evaluateAutomerge: vi.fn(),
 }));
 
 vi.mock("../../lib/implementation-intake.js", () => ({

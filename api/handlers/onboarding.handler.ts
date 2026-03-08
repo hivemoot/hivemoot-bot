@@ -1,31 +1,10 @@
 import { createOnboardingService } from "../lib/index.js";
+import {
+  hasInstallationRepoListClient,
+  listAccessibleInstallationRepositories,
+} from "./installation-repos.js";
+import type { InstallationPayload, InstallationRepoPayload } from "./installation-repos.js";
 import type { Handler, HandlerEvent } from "./types.js";
-
-interface InstallationRepoPayload {
-  owner?: { login?: string } | null;
-  name: string;
-  full_name: string;
-}
-
-interface InstallationPayload {
-  repositories?: readonly InstallationRepoPayload[];
-  repositories_added?: readonly InstallationRepoPayload[];
-}
-
-interface InstallationRepoListClient {
-  rest: {
-    apps: {
-      listReposAccessibleToInstallation: (params: {
-        per_page?: number;
-        page?: number;
-      }) => Promise<{
-        data: {
-          repositories?: InstallationRepoPayload[];
-        };
-      }>;
-    };
-  };
-}
 
 interface OnboardingWebhookContext {
   octokit: unknown;
@@ -36,8 +15,6 @@ interface OnboardingWebhookContext {
   payload: InstallationPayload;
 }
 
-const INSTALLATION_REPO_PAGE_SIZE = 100;
-
 function getOnboardingWebhookContext(event: HandlerEvent): OnboardingWebhookContext {
   return event.context as OnboardingWebhookContext;
 }
@@ -45,51 +22,6 @@ function getOnboardingWebhookContext(event: HandlerEvent): OnboardingWebhookCont
 function getOwner(repository: InstallationRepoPayload): string {
   const ownerFromFullName = repository.full_name.split("/")[0];
   return repository.owner?.login ?? ownerFromFullName ?? "";
-}
-
-function hasInstallationRepoListClient(octokit: unknown): octokit is InstallationRepoListClient {
-  if (typeof octokit !== "object" || octokit === null) {
-    return false;
-  }
-  const client = octokit as {
-    rest?: {
-      apps?: {
-        listReposAccessibleToInstallation?: unknown;
-      };
-    };
-  };
-  return typeof client.rest?.apps?.listReposAccessibleToInstallation === "function";
-}
-
-async function listAccessibleInstallationRepositories(
-  octokit: unknown,
-  eventName: string,
-): Promise<InstallationRepoPayload[]> {
-  if (!hasInstallationRepoListClient(octokit)) {
-    throw new Error(
-      `[${eventName}] Unable to list installation repositories: missing apps.listReposAccessibleToInstallation`,
-    );
-  }
-
-  const repositories: InstallationRepoPayload[] = [];
-  let page = 1;
-
-  while (true) {
-    const { data } = await octokit.rest.apps.listReposAccessibleToInstallation({
-      per_page: INSTALLATION_REPO_PAGE_SIZE,
-      page,
-    });
-
-    const pageRepositories = Array.isArray(data.repositories) ? data.repositories : [];
-    repositories.push(...pageRepositories);
-
-    if (pageRepositories.length < INSTALLATION_REPO_PAGE_SIZE) {
-      break;
-    }
-    page += 1;
-  }
-
-  return repositories;
 }
 
 async function createOnboardingForRepositories(

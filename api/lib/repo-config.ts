@@ -55,6 +55,8 @@ export interface MergeReadyConfig {
 
 // ── Automerge Config ────────────────────────────────────────────────────
 
+export type MergeMethod = "squash" | "merge" | "rebase";
+
 export interface AutomergeConfig {
   dryRun: boolean;
   allowedPaths: string[];
@@ -63,6 +65,8 @@ export interface AutomergeConfig {
   maxChangedLines: number;
   minApprovals: number;
   requireChecks: boolean;
+  /** Merge method used when enabling GitHub native auto-merge. Default: "squash". */
+  mergeMethod: MergeMethod;
 }
 
 // ── Standup Config ──────────────────────────────────────────────────────
@@ -1097,6 +1101,7 @@ function parseAutomergeConfig(
     maxChangedLines?: unknown;
     minApprovals?: unknown;
     requireChecks?: unknown;
+    mergeMethod?: unknown;
   };
 
   // Check enabled flag — absent defaults to true (presence of section = opt-in)
@@ -1174,6 +1179,20 @@ function parseAutomergeConfig(
     Math.min(CONFIG_BOUNDS.automerge.minApprovals.max, trustedReviewers.length)
   );
 
+  // Parse mergeMethod (default "squash")
+  const VALID_MERGE_METHODS: MergeMethod[] = ["squash", "merge", "rebase"];
+  let mergeMethod: MergeMethod = "squash";
+  if (obj.mergeMethod !== undefined && obj.mergeMethod !== null) {
+    if (typeof obj.mergeMethod === "string" && VALID_MERGE_METHODS.includes(obj.mergeMethod as MergeMethod)) {
+      mergeMethod = obj.mergeMethod as MergeMethod;
+    } else {
+      logger.warn(
+        `[${repoFullName}] Invalid automerge.mergeMethod: "${String(obj.mergeMethod)}". ` +
+        `Expected "squash", "merge", or "rebase". Using default ("squash").`
+      );
+    }
+  }
+
   return {
     dryRun,
     allowedPaths,
@@ -1182,6 +1201,7 @@ function parseAutomergeConfig(
     maxChangedLines,
     minApprovals,
     requireChecks,
+    mergeMethod,
   };
 }
 

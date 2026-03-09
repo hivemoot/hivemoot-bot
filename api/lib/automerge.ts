@@ -22,6 +22,11 @@ import type { PRRef } from "./types.js";
 import type { PROperations } from "./pr-operations.js";
 import type { AutomergeConfig } from "./repo-config.js";
 import { isCIPassing } from "./merge-readiness.js";
+import type { GraphQLClient } from "./graphql-queries.js";
+import {
+  enablePullRequestAutoMerge,
+  disablePullRequestAutoMerge,
+} from "./graphql-queries.js";
 
 // ───────────────────────────────────────────────────────────────────────────────
 // Types
@@ -51,7 +56,13 @@ export interface AutomergeParams {
   draft?: boolean;
   /** Mergeable state from webhook payload. False → skip; null = unknown (GitHub still computing). */
   mergeable?: boolean | null;
-  log?: { info: (msg: string) => void };
+  log?: { info: (msg: string) => void; warn?: (msg: string) => void };
+  /**
+   * GraphQL client for Phase 2 (dryRun: false).
+   * Required when config.dryRun is false — used to call
+   * enablePullRequestAutoMerge / disablePullRequestAutoMerge mutations.
+   */
+  graphql?: GraphQLClient;
 }
 
 /** Shape of a file entry from PROperations.listFiles */
@@ -184,11 +195,24 @@ export async function evaluateAutomerge(
   const labels = params.currentLabels ?? await prs.getLabels(ref);
   const hasAutomerge = labels.some(l => isLabelMatch(l, LABELS.AUTOMERGE));
 
-  // Helper to remove label if present
+  // Helper: remove label and, when Phase 2 is active, disable native auto-merge
   const removeIfLabeled = async (reason: string): Promise<AutomergeResult> => {
     if (hasAutomerge) {
       await prs.removeLabel(ref, LABELS.AUTOMERGE);
       log?.info(`[PR #${ref.prNumber}] Removed automerge: ${reason}`);
+
+      // Phase 2: disable GitHub native auto-merge when dryRun is false
+      if (!config.dryRun && params.graphql) {
+        try {
+          const pr = await prs.get(ref);
+          await disablePullRequestAutoMerge(params.graphql, pr.nodeId);
+          log?.info(`[PR #${ref.prNumber}] Disabled GitHub native auto-merge`);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          log?.warn?.(`[PR #${ref.prNumber}] Failed to disable GitHub auto-merge: ${msg}`);
+        }
+      }
+
       return { action: "unlabeled", reason };
     }
     return { action: "noop", labeled: false };
@@ -238,6 +262,20 @@ export async function evaluateAutomerge(
   if (!hasAutomerge) {
     await prs.addLabels(ref, [LABELS.AUTOMERGE]);
     log?.info(`[PR #${ref.prNumber}] Added automerge label`);
+
+    // Phase 2: enable GitHub native auto-merge when dryRun is false
+    if (!config.dryRun && params.graphql) {
+      try {
+        const pr = await prs.get(ref);
+        await enablePullRequestAutoMerge(params.graphql, pr.nodeId, config.mergeMethod);
+        log?.info(`[PR #${ref.prNumber}] Enabled GitHub native auto-merge (${config.mergeMethod})`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log?.warn?.(`[PR #${ref.prNumber}] Failed to enable GitHub auto-merge: ${msg}. ` +
+          `Verify the repository has branch protection rules configured.`);
+      }
+    }
+
     return { action: "labeled" };
   }
 

@@ -329,6 +329,37 @@ describe("PROperations", () => {
     });
   });
 
+  describe("getCombinedStatus", () => {
+    it("returns the combined state, count, and legacy status contexts", async () => {
+      vi.mocked(mockClient.rest.repos.getCombinedStatusForRef).mockResolvedValueOnce({
+        data: {
+          state: "pending",
+          total_count: 2,
+          statuses: [
+            { state: "pending", context: "legacy / build" },
+            { state: "success", context: "legacy / lint" },
+          ],
+        },
+      });
+
+      const result = await prOps.getCombinedStatus("test-org", "test-repo", "abc123");
+
+      expect(result).toEqual({
+        state: "pending",
+        totalCount: 2,
+        statuses: [
+          { state: "pending", context: "legacy / build" },
+          { state: "success", context: "legacy / lint" },
+        ],
+      });
+      expect(mockClient.rest.repos.getCombinedStatusForRef).toHaveBeenCalledWith({
+        owner: "test-org",
+        repo: "test-repo",
+        ref: "abc123",
+      });
+    });
+  });
+
   describe("addLabels", () => {
     it("should call issues.addLabels with correct parameters", async () => {
       await prOps.addLabels(testRef, ["bug", "hivemoot:candidate"]);

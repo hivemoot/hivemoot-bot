@@ -16,6 +16,7 @@ function makeConfig(overrides?: Partial<AutomergeConfig>): AutomergeConfig {
     maxChangedLines: 80,
     minApprovals: 2,
     requireChecks: true,
+    mergeMethod: "squash",
     ...overrides,
   };
 }
@@ -689,7 +690,36 @@ describe("evaluateAutomerge — Phase 2 (dryRun: false)", () => {
     expect(prs.addLabels).toHaveBeenCalledWith(baseRef, [LABELS.AUTOMERGE]);
     expect(mockGraphQL.graphql).toHaveBeenCalledWith(
       expect.stringContaining("enablePullRequestAutoMerge"),
-      { pullRequestId: "PR_kwNode123", mergeMethod: "SQUASH" }
+      { pullRequestId: "PR_kwNode123", mergeMethod: "SQUASH", commitHeadline: null, commitBody: null }
+    );
+  });
+
+  it("passes commitHeadline and commitBody to the mutation when configured", async () => {
+    const config = makeConfig({
+      dryRun: false,
+      mergeMethod: "squash",
+      commitHeadline: "chore: auto-merge",
+      commitBody: "Auto-merged.",
+    });
+    const prs = makeEligiblePROperations();
+    const mockGraphQL = { graphql: vi.fn().mockResolvedValue({}) };
+
+    await evaluateAutomerge({
+      prs,
+      ref: baseRef,
+      config,
+      trustedReviewers,
+      graphql: mockGraphQL,
+    });
+
+    expect(mockGraphQL.graphql).toHaveBeenCalledWith(
+      expect.stringContaining("enablePullRequestAutoMerge"),
+      {
+        pullRequestId: "PR_kwNode123",
+        mergeMethod: "SQUASH",
+        commitHeadline: "chore: auto-merge",
+        commitBody: "Auto-merged.",
+      }
     );
   });
 
@@ -708,7 +738,7 @@ describe("evaluateAutomerge — Phase 2 (dryRun: false)", () => {
 
     expect(mockGraphQL.graphql).toHaveBeenCalledWith(
       expect.stringContaining("enablePullRequestAutoMerge"),
-      { pullRequestId: "PR_kwNode123", mergeMethod: "REBASE" }
+      { pullRequestId: "PR_kwNode123", mergeMethod: "REBASE", commitHeadline: null, commitBody: null }
     );
   });
 

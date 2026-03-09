@@ -417,10 +417,17 @@ const MERGE_METHOD_MAP: Record<MergeMethod, string> = {
 };
 
 const ENABLE_AUTO_MERGE_MUTATION = `
-  mutation enableAutoMerge($pullRequestId: ID!, $mergeMethod: PullRequestMergeMethod!) {
+  mutation enableAutoMerge(
+    $pullRequestId: ID!,
+    $mergeMethod: PullRequestMergeMethod!,
+    $commitHeadline: String,
+    $commitBody: String
+  ) {
     enablePullRequestAutoMerge(input: {
       pullRequestId: $pullRequestId,
-      mergeMethod: $mergeMethod
+      mergeMethod: $mergeMethod,
+      commitHeadline: $commitHeadline,
+      commitBody: $commitBody
     }) {
       pullRequest {
         number
@@ -443,6 +450,13 @@ interface EnableAutoMergeResponse {
   };
 }
 
+export interface EnableAutoMergeOptions {
+  /** Custom commit headline. Only applies to SQUASH and MERGE; ignored for REBASE. */
+  commitHeadline?: string;
+  /** Custom commit body. Only applies to SQUASH and MERGE; ignored for REBASE. */
+  commitBody?: string;
+}
+
 /**
  * Enable GitHub native auto-merge on a PR.
  *
@@ -456,15 +470,19 @@ interface EnableAutoMergeResponse {
  * @param client - GraphQL client
  * @param pullRequestId - PR node ID (e.g. "PR_kwABCDEF")
  * @param mergeMethod - How to merge when conditions are met
+ * @param options - Optional commit message overrides (SQUASH/MERGE only)
  */
 export async function enablePullRequestAutoMerge(
   client: GraphQLClient,
   pullRequestId: string,
-  mergeMethod: MergeMethod
+  mergeMethod: MergeMethod,
+  options?: EnableAutoMergeOptions
 ): Promise<void> {
   await client.graphql<EnableAutoMergeResponse>(ENABLE_AUTO_MERGE_MUTATION, {
     pullRequestId,
     mergeMethod: MERGE_METHOD_MAP[mergeMethod],
+    commitHeadline: options?.commitHeadline ?? null,
+    commitBody: options?.commitBody ?? null,
   });
 }
 

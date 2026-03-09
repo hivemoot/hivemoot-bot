@@ -67,6 +67,18 @@ export interface AutomergeConfig {
   requireChecks: boolean;
   /** Merge method used when enabling GitHub native auto-merge. Default: "squash". */
   mergeMethod: MergeMethod;
+  /**
+   * Custom commit headline for the auto-merge commit.
+   * Only applies to SQUASH and MERGE methods; ignored for REBASE.
+   * When absent, GitHub uses its default (PR title for squash, standard merge message for merge).
+   */
+  commitHeadline?: string;
+  /**
+   * Custom commit body for the auto-merge commit.
+   * Only applies to SQUASH and MERGE methods; ignored for REBASE.
+   * When absent, GitHub uses its default.
+   */
+  commitBody?: string;
 }
 
 // ── Standup Config ──────────────────────────────────────────────────────
@@ -1102,6 +1114,8 @@ function parseAutomergeConfig(
     minApprovals?: unknown;
     requireChecks?: unknown;
     mergeMethod?: unknown;
+    commitHeadline?: unknown;
+    commitBody?: unknown;
   };
 
   // Check enabled flag — absent defaults to true (presence of section = opt-in)
@@ -1193,6 +1207,10 @@ function parseAutomergeConfig(
     }
   }
 
+  // Parse optional commit message fields (only used when dryRun: false and mergeMethod is squash/merge)
+  const commitHeadline = typeof obj.commitHeadline === "string" ? obj.commitHeadline : undefined;
+  const commitBody = typeof obj.commitBody === "string" ? obj.commitBody : undefined;
+
   return {
     dryRun,
     allowedPaths,
@@ -1202,6 +1220,8 @@ function parseAutomergeConfig(
     minApprovals,
     requireChecks,
     mergeMethod,
+    commitHeadline,
+    commitBody,
   };
 }
 

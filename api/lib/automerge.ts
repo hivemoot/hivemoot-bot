@@ -267,7 +267,10 @@ export async function evaluateAutomerge(
     if (!config.dryRun && params.graphql) {
       try {
         const pr = await prs.get(ref);
-        await enablePullRequestAutoMerge(params.graphql, pr.nodeId, config.mergeMethod);
+        await enablePullRequestAutoMerge(params.graphql, pr.nodeId, config.mergeMethod, {
+          commitHeadline: config.commitHeadline,
+          commitBody: config.commitBody,
+        });
         log?.info(`[PR #${ref.prNumber}] Enabled GitHub native auto-merge (${config.mergeMethod})`);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

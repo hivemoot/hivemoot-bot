@@ -19,6 +19,8 @@ vi.mock("../index.js", () => ({
   createGovernanceService: vi.fn(() => ({})),
   createPROperations: vi.fn(() => ({
     get: vi.fn().mockResolvedValue({ number: 42, state: "open", merged: false, headSha: "abc123", mergeable: true }),
+    addLabels: vi.fn().mockResolvedValue(undefined),
+    removeLabel: vi.fn().mockResolvedValue(undefined),
   })),
   loadRepositoryConfig: vi.fn().mockResolvedValue({
     governance: {
@@ -208,6 +210,46 @@ describe("/squash command", () => {
     expect(body).toContain("blocked");
   });
 
+  it("queues squash when CI is the only pending hard check", async () => {
+    const { createPROperations } = await import("../index.js");
+    const { evaluatePreflightChecks } = await import("../merge-readiness.js");
+    const mockPrs = {
+      get: vi.fn().mockResolvedValue({ number: 42, state: "open", merged: false, headSha: "abc123", mergeable: true }),
+      addLabels: vi.fn().mockResolvedValue(undefined),
+      removeLabel: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.mocked(createPROperations).mockReturnValueOnce(mockPrs as any);
+    vi.mocked(evaluatePreflightChecks).mockResolvedValueOnce({
+      checks: [
+        { name: "PR is open", passed: true, severity: "hard", detail: "PR is open" },
+        { name: "Approved by trusted reviewers", passed: true, severity: "hard", detail: "1/1 trusted approvals (alice)" },
+        { name: "No merge conflicts", passed: true, severity: "hard", detail: "Branch is mergeable" },
+        {
+          name: "CI checks passing",
+          passed: false,
+          severity: "hard",
+          detail: "Still running: CI / build, CI / test",
+          pendingTargets: ["CI / build", "CI / test"],
+        },
+      ],
+      allHardChecksPassed: false,
+    } as any);
+    const ctx = createPRCtx();
+
+    const result = await executeCommand(ctx);
+
+    expect(result).toEqual({ status: "executed", message: "Squash queued." });
+    expect(mockPrs.addLabels).toHaveBeenCalledWith(
+      expect.objectContaining({ prNumber: 42 }),
+      [LABELS.SQUASH_QUEUED],
+    );
+    expect(ctx.octokit.rest.pulls.merge).not.toHaveBeenCalled();
+    const body = (ctx.octokit.rest.issues.createComment.mock.calls[0][0] as { body: string }).body;
+    expect(body).toContain("Squash queued");
+    expect(body).toContain("CI / build, CI / test");
+    expect(body).toContain("retry automatically");
+  });
+
   it("fails closed when commit message generation is unavailable", async () => {
     const { CommitMessageGenerator } = await import("../llm/commit-message.js");
     vi.mocked(CommitMessageGenerator).mockImplementationOnce(
@@ -254,14 +296,20 @@ describe("/squash command", () => {
     expect(body).toContain("Retry `/squash` after the generator is healthy");
   });
 
-  it("blocks merge when final verification changes before merge", async () => {
+  it("queues squash when final verification is waiting on CI", async () => {
     const { evaluatePreflightChecks } = await import("../merge-readiness.js");
     vi.mocked(evaluatePreflightChecks)
       .mockResolvedValueOnce(DEFAULT_PREFLIGHT as any)
       .mockResolvedValueOnce({
         checks: [
           { name: "PR is open", passed: true, severity: "hard", detail: "PR is open" },
-          { name: "CI checks passing", passed: false, severity: "hard", detail: "1 check run(s) still in progress" },
+          {
+            name: "CI checks passing",
+            passed: false,
+            severity: "hard",
+            detail: "Still running: CI / build",
+            pendingTargets: ["CI / build"],
+          },
         ],
         allHardChecksPassed: false,
       } as any);
@@ -269,11 +317,11 @@ describe("/squash command", () => {
 
     const result = await executeCommand(ctx);
 
-    expect(result.status).toBe("rejected");
+    expect(result).toEqual({ status: "executed", message: "Squash queued." });
     expect(ctx.octokit.rest.pulls.merge).not.toHaveBeenCalled();
     const body = (ctx.octokit.rest.issues.createComment.mock.calls[0][0] as { body: string }).body;
     expect(body).toContain("final verification");
-    expect(body).toContain("blocked");
+    expect(body).toContain("Squash queued");
   });
 
   it("refreshes a behind branch before final verification and merge", async () => {

@@ -269,6 +269,7 @@ Useful scripts:
 | `hivemoot:implemented`        | Issue was implemented by a merged PR                        |
 | `hivemoot:needs-human`        | Human maintainer intervention is required                   |
 | `hivemoot:merge-ready`        | Implementation PR satisfies merge-readiness checks          |
+| `hivemoot:squash-queued`      | PR is queued for automatic squash retry after CI completes  |
 
 All labels above are automatically bootstrapped when the app is installed (or when repositories are added to an existing installation), with predefined colors and descriptions.
 

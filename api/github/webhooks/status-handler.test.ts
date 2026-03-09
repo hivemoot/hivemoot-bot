@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => {
     loadRepositoryConfig: vi.fn(),
     evaluateMergeReadiness: vi.fn(),
     evaluateAutomerge: vi.fn(),
+    retryQueuedSquash: vi.fn(),
   };
 });
 
@@ -37,6 +38,12 @@ vi.mock("../../lib/graphql-queries.js", () => ({
 vi.mock("../../lib/implementation-intake.js", () => ({
   processImplementationIntake: vi.fn(),
   recalculateLeaderboardForPR: vi.fn(),
+}));
+
+vi.mock("../../lib/commands/index.js", () => ({
+  parseCommand: vi.fn(),
+  executeCommand: vi.fn(),
+  retryQueuedSquash: mocks.retryQueuedSquash,
 }));
 
 import { app as registerWebhookApp } from "./index.js";
@@ -126,6 +133,9 @@ function createCheckContext(options?: {
 describe("status webhook handler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.createPROperations.mockReturnValue({
+      getLabels: vi.fn().mockResolvedValue([]),
+    });
     mocks.loadRepositoryConfig.mockResolvedValue({
       governance: {
         pr: {
@@ -307,6 +317,46 @@ describe("status webhook handler", () => {
         repo: "hivemoot/hivemoot-bot",
       }),
       "Failed to evaluate merge-readiness after check_run"
+    );
+  });
+
+  it("retries queued squash for pull requests carrying the squash-queued label", async () => {
+    const { handlers } = createWebhookHarness();
+    const handler = handlers.get("check_run.completed");
+    expect(handler).toBeDefined();
+
+    const getLabels = vi
+      .fn()
+      .mockResolvedValueOnce(["hivemoot:candidate", "hivemoot:squash-queued"])
+      .mockResolvedValueOnce(["hivemoot:candidate"]);
+    mocks.createPROperations.mockReturnValue({ getLabels });
+
+    const context = createCheckContext({
+      event: "check_run.completed",
+      headSha: "run-sha",
+      pullRequests: [{ number: 55 }, { number: 89 }],
+    });
+
+    await handler!(context);
+
+    expect(getLabels).toHaveBeenNthCalledWith(1, {
+      owner: "hivemoot",
+      repo: "hivemoot-bot",
+      prNumber: 55,
+    });
+    expect(getLabels).toHaveBeenNthCalledWith(2, {
+      owner: "hivemoot",
+      repo: "hivemoot-bot",
+      prNumber: 89,
+    });
+    expect(mocks.retryQueuedSquash).toHaveBeenCalledTimes(1);
+    expect(mocks.retryQueuedSquash).toHaveBeenCalledWith(
+      expect.objectContaining({
+        issueNumber: 55,
+        issueLabels: [{ name: "hivemoot:candidate" }, { name: "hivemoot:squash-queued" }],
+        isPullRequest: true,
+      }),
+      "run-sha"
     );
   });
 });

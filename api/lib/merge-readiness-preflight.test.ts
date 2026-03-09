@@ -228,14 +228,15 @@ describe("evaluatePreflightChecks", () => {
       const prs = createMockPrs({
         getCheckRunsForRef: vi.fn().mockResolvedValue({
           totalCount: 1,
-          checkRuns: [{ id: 1, status: "in_progress", conclusion: null }],
+          checkRuns: [{ id: 1, name: "CI / build", status: "in_progress", conclusion: null }],
         }),
       });
       const result = await evaluatePreflightChecks(buildParams({ prs }));
 
       const check = findCheck(result, "CI checks passing");
       expect(check?.passed).toBe(false);
-      expect(check?.detail).toContain("in progress");
+      expect(check?.detail).toContain("Still running: CI / build");
+      expect(check?.pendingTargets).toEqual(["CI / build"]);
     });
 
     it("should fail when check runs have failed conclusion", async () => {

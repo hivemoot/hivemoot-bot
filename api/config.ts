@@ -341,6 +341,7 @@ export const LABELS = {
   NEEDS_HUMAN: "hivemoot:needs-human",
   MERGE_READY: "hivemoot:merge-ready",
   AUTOMERGE: "hivemoot:automerge",
+  SQUASH_QUEUED: "hivemoot:squash-queued",
 } as const;
 
 export const PRIORITY_LABELS = {
@@ -466,6 +467,11 @@ export const REQUIRED_REPOSITORY_LABELS: readonly RepositoryLabelDefinition[] = 
     name: LABELS.AUTOMERGE,
     color: "7057ff",
     description: "PR qualifies for automatic merge.",
+  },
+  {
+    name: LABELS.SQUASH_QUEUED,
+    color: "bf8700",
+    description: "Squash merge is queued until CI completes.",
   },
   {
     name: PRIORITY_LABELS.HIGH,

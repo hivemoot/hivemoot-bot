@@ -158,6 +158,7 @@ describe("config", () => {
       expect(isLabelMatch("hivemoot:ready-to-implement", LABELS.READY_TO_IMPLEMENT)).toBe(true);
       expect(isLabelMatch("hivemoot:candidate", LABELS.IMPLEMENTATION)).toBe(true);
       expect(isLabelMatch("hivemoot:merge-ready", LABELS.MERGE_READY)).toBe(true);
+      expect(isLabelMatch("hivemoot:squash-queued", LABELS.SQUASH_QUEUED)).toBe(true);
     });
 
     it("should match legacy label names via LEGACY_LABEL_MAP", () => {

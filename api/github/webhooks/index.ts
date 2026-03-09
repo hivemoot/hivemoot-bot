@@ -25,7 +25,7 @@ import {
   processImplementationIntake,
   recalculateLeaderboardForPR,
 } from "../../lib/implementation-intake.js";
-import { parseCommand, executeCommand } from "../../lib/commands/index.js";
+import { parseCommand, executeCommand, retryQueuedSquash } from "../../lib/commands/index.js";
 import { getLLMReadiness } from "../../lib/llm/provider.js";
 import { registerHandlerDispatcher } from "../../handlers/dispatcher.js";
 import { handlerEventMap } from "../../handlers/registry.js";
@@ -261,8 +261,19 @@ export function app(probotApp: Probot): void {
 
       // New commits invalidate CI — optimistically remove merge-ready and automerge labels
       const prRef = { owner, repo, prNumber: number };
+      const hadQueuedSquash = context.payload.pull_request.labels?.some(
+        (label: { name: string }) => isLabelMatch(label.name, LABELS.SQUASH_QUEUED),
+      ) ?? false;
       await prs.removeLabel(prRef, LABELS.MERGE_READY);
       await prs.removeLabel(prRef, LABELS.AUTOMERGE);
+      await prs.removeLabel(prRef, LABELS.SQUASH_QUEUED);
+
+      if (hadQueuedSquash) {
+        await prs.comment(
+          prRef,
+          "## 🐝 Queued squash canceled\n\nQueued `/squash` was canceled because new commits were pushed. Run `/squash` again after CI finishes."
+        );
+      }
 
       if (repoConfig.governance.pr) {
         await processImplementationIntake({
@@ -745,6 +756,15 @@ export function app(probotApp: Probot): void {
             config: repoConfig.governance.pr.automerge,
             trustedReviewers: repoConfig.governance.pr.trustedReviewers,
             headSha,
+            log: context.log,
+          });
+          await retryQueuedSquash({
+            octokit: context.octokit as Parameters<typeof retryQueuedSquash>[0]["octokit"],
+            owner,
+            repo,
+            issueNumber: pr.number,
+            installationId: context.payload.installation?.id,
+            appId,
             log: context.log,
           });
         } catch (error) {

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { executeCommand, type CommandContext } from "./handlers.js";
+import { executeCommand, retryQueuedSquash, type CommandContext } from "./handlers.js";
 import { LABELS } from "../../config.js";
 
 const DEFAULT_PREFLIGHT = {
@@ -17,8 +17,32 @@ const DEFAULT_PREFLIGHT = {
 vi.mock("../index.js", () => ({
   createIssueOperations: vi.fn(() => ({})),
   createGovernanceService: vi.fn(() => ({})),
-  createPROperations: vi.fn(() => ({
+  createPROperations: vi.fn((octokit: any) => ({
     get: vi.fn().mockResolvedValue({ number: 42, state: "open", merged: false, headSha: "abc123", mergeable: true }),
+    addLabels: vi.fn(async (ref: { owner: string; repo: string; prNumber: number }, labels: string[]) => {
+      await octokit.rest.issues.addLabels({
+        owner: ref.owner,
+        repo: ref.repo,
+        issue_number: ref.prNumber,
+        labels,
+      });
+    }),
+    removeLabel: vi.fn(async (ref: { owner: string; repo: string; prNumber: number }, label: string) => {
+      await octokit.rest.issues.removeLabel({
+        owner: ref.owner,
+        repo: ref.repo,
+        issue_number: ref.prNumber,
+        name: label,
+      });
+    }),
+    getLabels: vi.fn(async (ref: { owner: string; repo: string; prNumber: number }) => {
+      const { data } = await octokit.rest.issues.get({
+        owner: ref.owner,
+        repo: ref.repo,
+        issue_number: ref.prNumber,
+      });
+      return data.labels.map((label: { name: string }) => label.name);
+    }),
   })),
   loadRepositoryConfig: vi.fn().mockResolvedValue({
     governance: {
@@ -82,6 +106,9 @@ function createMockOctokit(permission = "admin") {
         listForIssueComment: vi.fn().mockResolvedValue({ data: [] }),
       },
       issues: {
+        get: vi.fn().mockResolvedValue({ data: { labels: [{ name: LABELS.IMPLEMENTATION }] } }),
+        addLabels: vi.fn().mockResolvedValue({}),
+        removeLabel: vi.fn().mockResolvedValue({}),
         createComment: vi.fn().mockResolvedValue({}),
       },
       pulls: {
@@ -208,6 +235,35 @@ describe("/squash command", () => {
     expect(body).toContain("blocked");
   });
 
+  it("queues /squash when CI is the only hard blocker", async () => {
+    const { evaluatePreflightChecks } = await import("../merge-readiness.js");
+    vi.mocked(evaluatePreflightChecks).mockResolvedValueOnce({
+      checks: [
+        { name: "PR is open", passed: true, severity: "hard", detail: "PR is open" },
+        { name: "Approved by trusted reviewers", passed: true, severity: "hard", detail: "1/1 trusted approvals (alice)" },
+        { name: "No merge conflicts", passed: true, severity: "hard", detail: "Branch is mergeable" },
+        { name: "CI checks passing", passed: false, severity: "hard", detail: "2 check run(s) still in progress" },
+      ],
+      allHardChecksPassed: false,
+    } as any);
+    const ctx = createPRCtx();
+
+    const result = await executeCommand(ctx);
+
+    expect(result).toEqual({ status: "executed", message: "Squash merge queued." });
+    expect(ctx.octokit.rest.issues.addLabels).toHaveBeenCalledWith({
+      owner: "test-org",
+      repo: "test-repo",
+      issue_number: 42,
+      labels: [LABELS.SQUASH_QUEUED],
+    });
+    expect(ctx.octokit.rest.pulls.listCommits).not.toHaveBeenCalled();
+    expect(ctx.octokit.rest.pulls.merge).not.toHaveBeenCalled();
+    const body = (ctx.octokit.rest.issues.createComment.mock.calls[0][0] as { body: string }).body;
+    expect(body).toContain("Squash merge is queued");
+    expect(body).toContain("retry automatically when CI completes");
+  });
+
   it("fails closed when commit message generation is unavailable", async () => {
     const { CommitMessageGenerator } = await import("../llm/commit-message.js");
     vi.mocked(CommitMessageGenerator).mockImplementationOnce(
@@ -269,11 +325,17 @@ describe("/squash command", () => {
 
     const result = await executeCommand(ctx);
 
-    expect(result.status).toBe("rejected");
+    expect(result).toEqual({ status: "executed", message: "Squash merge queued." });
     expect(ctx.octokit.rest.pulls.merge).not.toHaveBeenCalled();
     const body = (ctx.octokit.rest.issues.createComment.mock.calls[0][0] as { body: string }).body;
+    expect(ctx.octokit.rest.issues.addLabels).toHaveBeenCalledWith({
+      owner: "test-org",
+      repo: "test-repo",
+      issue_number: 42,
+      labels: [LABELS.SQUASH_QUEUED],
+    });
     expect(body).toContain("final verification");
-    expect(body).toContain("blocked");
+    expect(body).toContain("Squash merge is queued");
   });
 
   it("refreshes a behind branch before final verification and merge", async () => {
@@ -532,5 +594,82 @@ describe("/squash command", () => {
     expect(result.status).toBe("rejected");
     const body = (octokit.rest.issues.createComment.mock.calls[0][0] as { body: string }).body;
     expect(body).toContain("Squash merge failed due to a GitHub merge API error");
+  });
+
+  it("retries a queued squash when CI finishes", async () => {
+    const octokit = createMockOctokit();
+    octokit.rest.issues.get.mockResolvedValueOnce({
+      data: { labels: [{ name: LABELS.SQUASH_QUEUED }, { name: LABELS.IMPLEMENTATION }] },
+    });
+
+    const result = await retryQueuedSquash({
+      octokit,
+      owner: "test-org",
+      repo: "test-repo",
+      issueNumber: 42,
+      installationId: 99,
+      appId: 12345,
+      log: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+    });
+
+    expect(result).toBe("completed");
+    expect(octokit.rest.pulls.merge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pull_number: 42,
+        merge_method: "squash",
+      }),
+    );
+    expect(octokit.rest.issues.removeLabel).toHaveBeenCalledWith({
+      owner: "test-org",
+      repo: "test-repo",
+      issue_number: 42,
+      name: LABELS.SQUASH_QUEUED,
+    });
+    const body = (octokit.rest.issues.createComment.mock.calls[0][0] as { body: string }).body;
+    expect(body).toContain("Squash merge completed successfully");
+  });
+
+  it("clears queued squash intent when a non-CI blocker appears during retry", async () => {
+    const { evaluatePreflightChecks } = await import("../merge-readiness.js");
+    vi.mocked(evaluatePreflightChecks).mockResolvedValueOnce({
+      checks: [
+        { name: "PR is open", passed: true, severity: "hard", detail: "PR is open" },
+        { name: "Approved by trusted reviewers", passed: false, severity: "hard", detail: "0/1 trusted approvals" },
+      ],
+      allHardChecksPassed: false,
+    } as any);
+    const octokit = createMockOctokit();
+    octokit.rest.issues.get.mockResolvedValueOnce({
+      data: { labels: [{ name: LABELS.SQUASH_QUEUED }, { name: LABELS.IMPLEMENTATION }] },
+    });
+
+    const result = await retryQueuedSquash({
+      octokit,
+      owner: "test-org",
+      repo: "test-repo",
+      issueNumber: 42,
+      installationId: 99,
+      appId: 12345,
+      log: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+    });
+
+    expect(result).toBe("blocked");
+    expect(octokit.rest.issues.removeLabel).toHaveBeenCalledWith({
+      owner: "test-org",
+      repo: "test-repo",
+      issue_number: 42,
+      name: LABELS.SQUASH_QUEUED,
+    });
+    expect(octokit.rest.pulls.merge).not.toHaveBeenCalled();
+    const body = (octokit.rest.issues.createComment.mock.calls[0][0] as { body: string }).body;
+    expect(body).toContain("Queued squash was canceled");
   });
 });

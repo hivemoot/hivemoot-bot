@@ -324,6 +324,7 @@ export class PROperations {
     await this.removeLabel(ref, LABELS.IMPLEMENTATION);
     await this.removeLabel(ref, LABELS.MERGE_READY);
     await this.removeLabel(ref, LABELS.AUTOMERGE);
+    await this.removeLabel(ref, LABELS.SQUASH_QUEUED);
   }
 
   /**

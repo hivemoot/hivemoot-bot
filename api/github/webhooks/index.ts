@@ -4,7 +4,6 @@ import {
   LABELS,
   MESSAGES,
   PR_MESSAGES,
-  isLabelMatch,
 } from "../../config.js";
 import {
   createIssueOperations,
@@ -262,7 +261,7 @@ export function app(probotApp: Probot): void {
       // New commits invalidate CI — optimistically remove merge-ready and automerge labels
       const prRef = { owner, repo, prNumber: number };
       const currentLabels = context.payload.pull_request.labels?.map((label: { name?: string }) => label.name ?? "") ?? [];
-      const hadQueuedSquash = currentLabels.some((label) => isLabelMatch(label, LABELS.SQUASH_QUEUED));
+      const hadQueuedSquash = currentLabels.some((label) => label === LABELS.SQUASH_QUEUED);
       await prs.removeLabel(prRef, LABELS.MERGE_READY);
       await prs.removeLabel(prRef, LABELS.SQUASH_QUEUED);
       await prs.removeLabel(prRef, LABELS.AUTOMERGE);
@@ -622,7 +621,7 @@ export function app(probotApp: Probot): void {
    * Adding `implementation` may qualify the PR; removing it should strip `merge-ready`.
    */
   probotApp.on(["pull_request.labeled", "pull_request.unlabeled"], async (context) => {
-    if (!isLabelMatch(context.payload.label?.name, LABELS.IMPLEMENTATION)) return;
+    if (context.payload.label?.name !== LABELS.IMPLEMENTATION) return;
 
     const { number } = context.payload.pull_request;
     const { owner, repo, fullName } = getRepoContext(context.payload.repository);
@@ -761,7 +760,7 @@ export function app(probotApp: Probot): void {
             log: context.log,
           });
 
-          if (currentLabels.some((label) => isLabelMatch(label, LABELS.SQUASH_QUEUED))) {
+          if (currentLabels.some((label) => label === LABELS.SQUASH_QUEUED)) {
             context.log.info(`Retrying queued squash for PR #${pr.number} after check_run in ${fullName}`);
             await retryQueuedSquash({
               octokit: context.octokit as Parameters<typeof retryQueuedSquash>[0]["octokit"],
@@ -852,7 +851,7 @@ export function app(probotApp: Probot): void {
             log: context.log,
           });
 
-          if (currentLabels.some((label) => isLabelMatch(label, LABELS.SQUASH_QUEUED))) {
+          if (currentLabels.some((label) => label === LABELS.SQUASH_QUEUED)) {
             context.log.info(`Retrying queued squash for PR #${pr.number} after status event in ${fullName}`);
             await retryQueuedSquash({
               octokit: context.octokit as Parameters<typeof retryQueuedSquash>[0]["octokit"],
@@ -898,7 +897,7 @@ export function app(probotApp: Probot): void {
    */
   probotApp.on("issues.labeled", async (context) => {
     const { label, issue, sender } = context.payload;
-    if (!isLabelMatch(label?.name, LABELS.VOTING)) return;
+    if (label?.name !== LABELS.VOTING) return;
     if (sender.type === "Bot") return;
 
     const { owner, repo, fullName } = getRepoContext(context.payload.repository);

@@ -1294,16 +1294,6 @@ describe("executeCommand", () => {
     });
   });
 
-  describe("legacy label support", () => {
-    it("should recognize legacy label names via isLabelMatch", async () => {
-      const ctx = createCtx({
-        issueLabels: [{ name: "phase:discussion" }],
-      });
-      const result = await executeCommand(ctx);
-      expect(result.status).toBe("executed");
-    });
-  });
-
   describe("idempotency guard", () => {
     it("should skip execution when bot already reacted with eyes", async () => {
       const octokit = createMockOctokit();

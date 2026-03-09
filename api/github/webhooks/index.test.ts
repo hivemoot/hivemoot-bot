@@ -1918,6 +1918,39 @@ describe("Queen Bot", () => {
       );
     });
 
+    it("should cancel queued squash on pull_request.synchronize when the label is present", async () => {
+      const { handlers } = createWebhookHarness();
+      vi.mocked(getLinkedIssues).mockResolvedValue([]);
+      vi.mocked(loadRepositoryConfig).mockResolvedValue(prConfig as any);
+      const octokit = mkOctokit();
+
+      await handlers.get("pull_request.synchronize")!({
+        octokit,
+        log: mkLog(),
+        payload: {
+          pull_request: {
+            number: 1,
+            base: { ref: "main" },
+            labels: [{ name: "hivemoot:squash-queued" }],
+          },
+          repository: testRepo,
+        },
+      });
+
+      expect(octokit.rest.issues.removeLabel).toHaveBeenCalledWith(
+        expect.objectContaining({
+          issue_number: 1,
+          name: "hivemoot:squash-queued",
+        }),
+      );
+      expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          issue_number: 1,
+          body: "Queued squash cancelled because new commits were pushed. Run `/squash` again when the branch is ready.",
+        }),
+      );
+    });
+
     it("should call processImplementationIntake on pull_request.edited", async () => {
       const { handlers } = createWebhookHarness();
       vi.mocked(getLinkedIssues).mockResolvedValue([]);

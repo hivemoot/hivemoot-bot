@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { executeCommand, type CommandContext } from "./handlers.js";
+import { executeCommand, retryQueuedSquash, type CommandContext } from "./handlers.js";
 import { LABELS } from "../../config.js";
 
 const DEFAULT_PREFLIGHT = {
@@ -580,5 +580,58 @@ describe("/squash command", () => {
     expect(result.status).toBe("rejected");
     const body = (octokit.rest.issues.createComment.mock.calls[0][0] as { body: string }).body;
     expect(body).toContain("Squash merge failed due to a GitHub merge API error");
+  });
+
+  it("cancels queued retry when the PR head SHA has changed", async () => {
+    const { createPROperations } = await import("../index.js");
+    const headCheckPrs = {
+      get: vi.fn().mockResolvedValue({ number: 42, state: "open", merged: false, headSha: "def456", mergeable: true }),
+      removeLabel: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.mocked(createPROperations).mockReturnValueOnce(headCheckPrs as any);
+    const ctx = createPRCtx();
+
+    await retryQueuedSquash(ctx, "abc123");
+
+    expect(headCheckPrs.removeLabel).toHaveBeenCalledWith(
+      expect.objectContaining({ prNumber: 42 }),
+      LABELS.SQUASH_QUEUED,
+    );
+    expect(ctx.octokit.rest.issues.createComment).not.toHaveBeenCalled();
+  });
+
+  it("posts a cancellation comment when queued retry is no longer mergeable", async () => {
+    const { createPROperations } = await import("../index.js");
+    const { evaluatePreflightChecks } = await import("../merge-readiness.js");
+    const headCheckPrs = {
+      get: vi.fn().mockResolvedValue({ number: 42, state: "open", merged: false, headSha: "abc123", mergeable: true }),
+      removeLabel: vi.fn().mockResolvedValue(undefined),
+    };
+    const runPrs = {
+      get: vi.fn().mockResolvedValue({ number: 42, state: "open", merged: false, headSha: "abc123", mergeable: true }),
+      addLabels: vi.fn().mockResolvedValue(undefined),
+      removeLabel: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.mocked(createPROperations)
+      .mockReturnValueOnce(headCheckPrs as any)
+      .mockReturnValueOnce(runPrs as any);
+    vi.mocked(evaluatePreflightChecks).mockResolvedValueOnce({
+      checks: [
+        { name: "PR is open", passed: true, severity: "hard", detail: "PR is open" },
+        { name: "Approved by trusted reviewers", passed: false, severity: "hard", detail: "0/1 trusted approvals" },
+      ],
+      allHardChecksPassed: false,
+    } as any);
+    const ctx = createPRCtx();
+
+    await retryQueuedSquash(ctx, "abc123");
+
+    expect(runPrs.removeLabel).toHaveBeenCalledWith(
+      expect.objectContaining({ prNumber: 42 }),
+      LABELS.SQUASH_QUEUED,
+    );
+    const body = (ctx.octokit.rest.issues.createComment.mock.calls[0][0] as { body: string }).body;
+    expect(body).toContain("Queued squash was cancelled");
+    expect(body).toContain("Run `/squash` again after resolving the failing checks");
   });
 });

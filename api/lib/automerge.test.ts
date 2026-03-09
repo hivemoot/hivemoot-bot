@@ -844,4 +844,166 @@ describe("evaluateAutomerge — Phase 2 (dryRun: false)", () => {
       expect.stringContaining("Failed to enable GitHub auto-merge")
     );
   });
+
+  it("includes branch protection hint only for PullRequestAutoMergeNotAllowed", async () => {
+    const config = makeConfig({ dryRun: false });
+    const prs = makeEligiblePROperations();
+    const warnLog = vi.fn();
+
+    // Rate limit error — should NOT get branch protection hint
+    const mockGraphQL = {
+      graphql: vi.fn().mockRejectedValue(new Error("API rate limit exceeded")),
+    };
+
+    await evaluateAutomerge({
+      prs,
+      ref: baseRef,
+      config,
+      trustedReviewers,
+      graphql: mockGraphQL,
+      log: { info: vi.fn(), warn: warnLog },
+    });
+
+    expect(warnLog).toHaveBeenCalledWith(
+      expect.not.stringContaining("branch protection")
+    );
+  });
+
+  it("calls enablePullRequestAutoMerge even when hivemoot:automerge label already present (reconciliation)", async () => {
+    const config = makeConfig({ dryRun: false, mergeMethod: "squash" });
+    // PR already has the label (was labeled during dryRun: true)
+    const prs = makeEligiblePROperations({
+      getLabels: vi.fn().mockResolvedValue([LABELS.AUTOMERGE]),
+    });
+    const mockGraphQL = { graphql: vi.fn().mockResolvedValue({}) };
+
+    const result = await evaluateAutomerge({
+      prs,
+      ref: baseRef,
+      config,
+      trustedReviewers,
+      graphql: mockGraphQL,
+    });
+
+    // Returns noop (label already present), but Phase 2 mutation must still fire
+    expect(result).toEqual({ action: "noop", labeled: true });
+    expect(prs.addLabels).not.toHaveBeenCalled();
+    expect(mockGraphQL.graphql).toHaveBeenCalledWith(
+      expect.stringContaining("enablePullRequestAutoMerge"),
+      expect.objectContaining({ pullRequestId: "PR_kwNode123", mergeMethod: "SQUASH" })
+    );
+  });
+
+  it("reuses nodeId from requireChecks prs.get() call — no duplicate fetch on Phase 2", async () => {
+    const config = makeConfig({ dryRun: false, requireChecks: true });
+    const getPRMock = vi.fn().mockResolvedValue({
+      headSha: "abc123",
+      nodeId: "PR_kwNode123",
+      state: "open",
+      merged: false,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      author: "alice",
+      mergeable: true,
+    });
+    const prs = makeEligiblePROperations({
+      get: getPRMock,
+      getCheckRunsForRef: vi.fn().mockResolvedValue({
+        totalCount: 1,
+        checkRuns: [{ name: "CI", conclusion: "success", status: "completed" }],
+      }),
+    });
+    const mockGraphQL = { graphql: vi.fn().mockResolvedValue({}) };
+
+    await evaluateAutomerge({
+      prs,
+      ref: baseRef,
+      config,
+      trustedReviewers,
+      graphql: mockGraphQL,
+      // headSha NOT pre-fetched, so prs.get() must be called for CI check
+    });
+
+    // prs.get() should be called exactly once (for headSha + nodeId capture in step 4)
+    expect(getPRMock).toHaveBeenCalledTimes(1);
+    expect(mockGraphQL.graphql).toHaveBeenCalledWith(
+      expect.stringContaining("enablePullRequestAutoMerge"),
+      expect.objectContaining({ pullRequestId: "PR_kwNode123" })
+    );
+  });
+
+  it("uses pre-fetched nodeId from params without calling prs.get()", async () => {
+    const config = makeConfig({ dryRun: false, requireChecks: false });
+    const getPRMock = vi.fn();
+    const prs = makeEligiblePROperations({ get: getPRMock });
+    const mockGraphQL = { graphql: vi.fn().mockResolvedValue({}) };
+
+    await evaluateAutomerge({
+      prs,
+      ref: baseRef,
+      config,
+      trustedReviewers,
+      graphql: mockGraphQL,
+      nodeId: "PR_kwPreFetched",
+    });
+
+    expect(getPRMock).not.toHaveBeenCalled();
+    expect(mockGraphQL.graphql).toHaveBeenCalledWith(
+      expect.stringContaining("enablePullRequestAutoMerge"),
+      expect.objectContaining({ pullRequestId: "PR_kwPreFetched" })
+    );
+  });
+
+  it("swallows PullRequestAutoMergeNotEnabled when disabling — idempotent no-op", async () => {
+    const config = makeConfig({ dryRun: false });
+    const prs = createMockPROperations({
+      listFiles: vi.fn().mockResolvedValue([makeFile("src/main.ts", 5)]),
+      getLabels: vi.fn().mockResolvedValue([LABELS.AUTOMERGE]),
+    });
+    const warnLog = vi.fn();
+    const mockGraphQL = {
+      graphql: vi.fn().mockRejectedValue(new Error("PullRequestAutoMergeNotEnabled")),
+    };
+
+    const result = await evaluateAutomerge({
+      prs,
+      ref: baseRef,
+      config,
+      trustedReviewers,
+      graphql: mockGraphQL,
+      log: { info: vi.fn(), warn: warnLog },
+    });
+
+    // Label was removed — action is correct
+    expect(result).toEqual({ action: "unlabeled", reason: "file not allowed: src/main.ts" });
+    expect(prs.removeLabel).toHaveBeenCalledWith(baseRef, LABELS.AUTOMERGE);
+    // No warning logged for the expected idempotent case
+    expect(warnLog).not.toHaveBeenCalled();
+  });
+
+  it("warns when disablePullRequestAutoMerge fails with unexpected error", async () => {
+    const config = makeConfig({ dryRun: false });
+    const prs = createMockPROperations({
+      listFiles: vi.fn().mockResolvedValue([makeFile("src/main.ts", 5)]),
+      getLabels: vi.fn().mockResolvedValue([LABELS.AUTOMERGE]),
+    });
+    const warnLog = vi.fn();
+    const mockGraphQL = {
+      graphql: vi.fn().mockRejectedValue(new Error("GraphQL network error")),
+    };
+
+    const result = await evaluateAutomerge({
+      prs,
+      ref: baseRef,
+      config,
+      trustedReviewers,
+      graphql: mockGraphQL,
+      log: { info: vi.fn(), warn: warnLog },
+    });
+
+    expect(result).toEqual({ action: "unlabeled", reason: "file not allowed: src/main.ts" });
+    expect(warnLog).toHaveBeenCalledWith(
+      expect.stringContaining("Failed to disable GitHub auto-merge")
+    );
+  });
 });

@@ -1635,7 +1635,7 @@ const COMMAND_HANDLERS: Record<string, (ctx: CommandContext) => Promise<CommandR
  * 5. React with ✅ on success, post error comment on rejection
  */
 export async function executeCommand(ctx: CommandContext): Promise<CommandResult> {
-  const handler = COMMAND_HANDLERS[ctx.verb];
+  const handler = Object.hasOwn(COMMAND_HANDLERS, ctx.verb) ? COMMAND_HANDLERS[ctx.verb] : undefined;
   if (!handler) {
     // Unknown command — silent ignore (not a command we handle)
     return { status: "ignored" };

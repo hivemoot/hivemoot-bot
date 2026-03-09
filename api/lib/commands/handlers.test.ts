@@ -308,6 +308,16 @@ describe("executeCommand", () => {
       const result = await executeCommand(createCtx({ verb: "unknown" }));
       expect(result).toEqual({ status: "ignored" });
     });
+
+    it("should ignore inherited Object.prototype property names", async () => {
+      // Regression: COMMAND_HANDLERS[ctx.verb] traverses the prototype chain,
+      // so verbs like "constructor" or "hasOwnProperty" would resolve to Object
+      // built-ins (truthy), causing the bot to react with 👀 and call Object(ctx).
+      for (const verb of ["constructor", "hasOwnProperty", "toString", "valueOf"]) {
+        const result = await executeCommand(createCtx({ verb }));
+        expect(result).toEqual({ status: "ignored" });
+      }
+    });
   });
 
   describe("/vote command", () => {

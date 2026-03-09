@@ -819,7 +819,11 @@ function findQueuedCiCheck(preflight: PreflightResult): PreflightCheckItem | nul
   }
 
   const [failedCheck] = failedHardChecks;
-  if (failedCheck.name !== "CI checks passing" || !failedCheck.pendingTargets?.length) {
+  if (failedCheck.name !== "CI checks passing") {
+    return null;
+  }
+
+  if (!failedCheck.pendingTargets?.length && !failedCheck.detail.startsWith("Still running:")) {
     return null;
   }
 
@@ -827,7 +831,9 @@ function findQueuedCiCheck(preflight: PreflightResult): PreflightCheckItem | nul
 }
 
 function formatQueuedSquashMessage(pendingTargets: string[]): string {
-  const waitingFor = pendingTargets.join(", ");
+  const waitingFor = pendingTargets.length > 0
+    ? pendingTargets.join(", ")
+    : "legacy status checks";
   return [
     "### Queue",
     "",

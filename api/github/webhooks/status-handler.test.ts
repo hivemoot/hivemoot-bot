@@ -148,17 +148,14 @@ describe("status webhook handler", () => {
     });
   });
 
-  it("skips processing when merge-ready config is disabled", async () => {
+  it("skips processing when PR automation config is disabled", async () => {
     const { handlers } = createWebhookHarness();
     const handler = handlers.get("status");
     expect(handler).toBeDefined();
 
     mocks.loadRepositoryConfig.mockResolvedValueOnce({
       governance: {
-        pr: {
-          mergeReady: null,
-          trustedReviewers: [],
-        },
+        pr: null,
       },
     });
 
@@ -317,6 +314,48 @@ describe("status webhook handler", () => {
         repo: "hivemoot/hivemoot-bot",
       }),
       "Failed to evaluate merge-readiness after check_run"
+    );
+  });
+
+  it("retries queued squash for pull requests carrying the squash-queued label after status events", async () => {
+    const { handlers } = createWebhookHarness();
+    const handler = handlers.get("status");
+    expect(handler).toBeDefined();
+
+    const getLabels = vi
+      .fn()
+      .mockResolvedValueOnce(["hivemoot:candidate", "hivemoot:squash-queued"])
+      .mockResolvedValueOnce(["hivemoot:candidate"]);
+    mocks.createPROperations.mockReturnValue({ getLabels });
+
+    const context = createStatusContext({
+      sha: "abc123",
+      pullRequests: [
+        { number: 11, head: { sha: "abc123" } },
+        { number: 13, head: { sha: "abc123" } },
+      ],
+    });
+
+    await handler!(context);
+
+    expect(getLabels).toHaveBeenNthCalledWith(1, {
+      owner: "hivemoot",
+      repo: "hivemoot-bot",
+      prNumber: 11,
+    });
+    expect(getLabels).toHaveBeenNthCalledWith(2, {
+      owner: "hivemoot",
+      repo: "hivemoot-bot",
+      prNumber: 13,
+    });
+    expect(mocks.retryQueuedSquash).toHaveBeenCalledTimes(1);
+    expect(mocks.retryQueuedSquash).toHaveBeenCalledWith(
+      expect.objectContaining({
+        issueNumber: 11,
+        issueLabels: [{ name: "hivemoot:candidate" }, { name: "hivemoot:squash-queued" }],
+        isPullRequest: true,
+      }),
+      "abc123"
     );
   });
 

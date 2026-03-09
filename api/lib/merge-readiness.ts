@@ -249,13 +249,31 @@ async function evaluateCI(
     };
   }
 
+  const pendingStatuses = (statusResult.statuses ?? [])
+    .filter((status) => status.state === "pending")
+    .map((status) => status.context)
+    .filter((context) => context.length > 0);
+
+  if (pendingStatuses.length > 0) {
+    return {
+      name: "CI checks passing",
+      passed: false,
+      severity: "hard",
+      detail: `Still running: ${pendingStatuses.join(", ")}`,
+      pendingTargets: pendingStatuses,
+    };
+  }
+
   // Legacy Status API
   if (statusResult.totalCount > 0 && statusResult.state !== "success") {
     return {
       name: "CI checks passing",
       passed: false,
       severity: "hard",
-      detail: `Legacy status: ${statusResult.state}`,
+      detail: statusResult.state === "pending"
+        ? "Still running: legacy status checks"
+        : `Legacy status: ${statusResult.state}`,
+      pendingTargets: statusResult.state === "pending" ? ["legacy status checks"] : undefined,
     };
   }
 

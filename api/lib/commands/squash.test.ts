@@ -324,6 +324,32 @@ describe("/squash command", () => {
     expect(body).toContain("Squash queued");
   });
 
+  it("queues squash when legacy status checks are still pending without explicit targets", async () => {
+    const { evaluatePreflightChecks } = await import("../merge-readiness.js");
+    vi.mocked(evaluatePreflightChecks).mockResolvedValueOnce({
+      checks: [
+        { name: "PR is open", passed: true, severity: "hard", detail: "PR is open" },
+        { name: "Approved by trusted reviewers", passed: true, severity: "hard", detail: "1/1 trusted approvals (alice)" },
+        { name: "No merge conflicts", passed: true, severity: "hard", detail: "Branch is mergeable" },
+        {
+          name: "CI checks passing",
+          passed: false,
+          severity: "hard",
+          detail: "Still running: legacy status checks",
+        },
+      ],
+      allHardChecksPassed: false,
+    } as any);
+    const ctx = createPRCtx();
+
+    const result = await executeCommand(ctx);
+
+    expect(result).toEqual({ status: "executed", message: "Squash queued." });
+    const body = (ctx.octokit.rest.issues.createComment.mock.calls[0][0] as { body: string }).body;
+    expect(body).toContain("Squash queued");
+    expect(body).toContain("legacy status checks");
+  });
+
   it("refreshes a behind branch before final verification and merge", async () => {
     const octokit = createMockOctokit();
     let pullsGetCalls = 0;

@@ -645,13 +645,17 @@ export class PROperations {
   ): Promise<{
     state: string;
     totalCount: number;
+    statuses: Array<{
+      state: string;
+      context: string;
+    }>;
   }> {
     const { data } = await this.client.rest.repos.getCombinedStatusForRef({
       owner,
       repo,
       ref,
     });
-    return { state: data.state, totalCount: data.total_count };
+    return { state: data.state, totalCount: data.total_count, statuses: data.statuses };
   }
 
   /**

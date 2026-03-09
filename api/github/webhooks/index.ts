@@ -813,7 +813,7 @@ export function app(probotApp: Probot): void {
         context.log.debug(`No config in ${fullName}; skipping status automation`);
         return;
       }
-      if (!repoConfig.governance.pr?.mergeReady && !repoConfig.governance.pr?.automerge) return;
+      if (!repoConfig.governance.pr) return;
 
       // Find open PRs with this commit SHA via search
       const { data } = await context.octokit.rest.pulls.list({
@@ -832,11 +832,13 @@ export function app(probotApp: Probot): void {
       for (const pr of matchingPRs) {
         try {
           context.log.info(`Evaluating merge-readiness for PR #${pr.number} after status event in ${fullName}`);
+          const currentLabels = await prs.getLabels({ owner, repo, prNumber: pr.number });
           await evaluateMergeReadiness({
             prs,
             ref: { owner, repo, prNumber: pr.number },
             config: repoConfig.governance.pr.mergeReady,
             trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+            currentLabels,
             headSha: sha,
             log: context.log,
           });
@@ -845,9 +847,29 @@ export function app(probotApp: Probot): void {
             ref: { owner, repo, prNumber: pr.number },
             config: repoConfig.governance.pr.automerge,
             trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+            currentLabels,
             headSha: sha,
             log: context.log,
           });
+
+          if (currentLabels.some((label) => isLabelMatch(label, LABELS.SQUASH_QUEUED))) {
+            context.log.info(`Retrying queued squash for PR #${pr.number} after status event in ${fullName}`);
+            await retryQueuedSquash({
+              octokit: context.octokit as Parameters<typeof retryQueuedSquash>[0]["octokit"],
+              owner,
+              repo,
+              issueNumber: pr.number,
+              installationId: context.payload.installation?.id,
+              commentId: 0,
+              senderLogin: "hivemoot",
+              verb: "squash",
+              freeText: undefined,
+              issueLabels: currentLabels.map((label) => ({ name: label })),
+              isPullRequest: true,
+              appId,
+              log: context.log,
+            }, sha);
+          }
         } catch (error) {
           context.log.error({ err: error, pr: pr.number, repo: fullName }, "Failed to evaluate merge-readiness after status event");
           errors.push(error as Error);

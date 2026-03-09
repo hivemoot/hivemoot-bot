@@ -20,7 +20,7 @@ function createMockPrs(overrides: Partial<Record<keyof PROperations, unknown>> =
     getApproverLogins: vi.fn().mockResolvedValue(new Set(["alice"])),
     get: vi.fn().mockResolvedValue({ headSha: "abc123", mergeable: true, state: "open", merged: false }),
     getCheckRunsForRef: vi.fn().mockResolvedValue({ totalCount: 0, checkRuns: [] }),
-    getCombinedStatus: vi.fn().mockResolvedValue({ state: "pending", totalCount: 0 }),
+    getCombinedStatus: vi.fn().mockResolvedValue({ state: "pending", totalCount: 0, statuses: [] }),
     addLabels: vi.fn().mockResolvedValue(undefined),
     removeLabel: vi.fn().mockResolvedValue(undefined),
     ...overrides,
@@ -239,6 +239,25 @@ describe("evaluatePreflightChecks", () => {
       expect(check?.pendingTargets).toEqual(["CI / build"]);
     });
 
+    it("should fail when legacy status contexts are pending", async () => {
+      const prs = createMockPrs({
+        getCombinedStatus: vi.fn().mockResolvedValue({
+          state: "pending",
+          totalCount: 2,
+          statuses: [
+            { state: "pending", context: "legacy / build" },
+            { state: "pending", context: "legacy / test" },
+          ],
+        }),
+      });
+      const result = await evaluatePreflightChecks(buildParams({ prs }));
+
+      const check = findCheck(result, "CI checks passing");
+      expect(check?.passed).toBe(false);
+      expect(check?.detail).toContain("Still running: legacy / build, legacy / test");
+      expect(check?.pendingTargets).toEqual(["legacy / build", "legacy / test"]);
+    });
+
     it("should fail when check runs have failed conclusion", async () => {
       const prs = createMockPrs({
         getCheckRunsForRef: vi.fn().mockResolvedValue({
@@ -277,7 +296,11 @@ describe("evaluatePreflightChecks", () => {
 
     it("should fail when legacy status API reports failure", async () => {
       const prs = createMockPrs({
-        getCombinedStatus: vi.fn().mockResolvedValue({ state: "failure", totalCount: 1 }),
+        getCombinedStatus: vi.fn().mockResolvedValue({
+          state: "failure",
+          totalCount: 1,
+          statuses: [{ state: "failure", context: "legacy / build" }],
+        }),
       });
       const result = await evaluatePreflightChecks(buildParams({ prs }));
 

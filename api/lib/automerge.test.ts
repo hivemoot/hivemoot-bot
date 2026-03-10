@@ -954,6 +954,31 @@ describe("evaluateAutomerge — Phase 2 (dryRun: false)", () => {
     );
   });
 
+  it("warns and skips mutation when prs.get() fails during Phase 2 enable", async () => {
+    const config = makeConfig({ dryRun: false, requireChecks: false });
+    const warnLog = vi.fn();
+    const prs = makeEligiblePROperations({
+      get: vi.fn().mockRejectedValue(new Error("API timeout")),
+    });
+    const mockGraphQL = { graphql: vi.fn().mockResolvedValue({}) };
+
+    const result = await evaluateAutomerge({
+      prs,
+      ref: baseRef,
+      config,
+      trustedReviewers,
+      graphql: mockGraphQL,
+      log: { info: vi.fn(), warn: warnLog },
+    });
+
+    // Label was still added (automerge conditions met), but mutation was skipped
+    expect(result).toEqual({ action: "labeled" });
+    expect(warnLog).toHaveBeenCalledWith(
+      expect.stringContaining("Failed to fetch PR node ID for auto-merge")
+    );
+    expect(mockGraphQL.graphql).not.toHaveBeenCalled();
+  });
+
   it("swallows PullRequestAutoMergeNotEnabled when disabling — idempotent no-op", async () => {
     const config = makeConfig({ dryRun: false });
     const prs = createMockPROperations({

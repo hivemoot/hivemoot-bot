@@ -182,7 +182,7 @@ standup:
 | `NODEJS_HELPERS`                       | `0`     | Required for Vercel                               |
 | `HIVEMOOT_DISCUSSION_DURATION_MINUTES` | `1440`  | Discussion duration default                       |
 | `HIVEMOOT_VOTING_DURATION_MINUTES`     | `1440`  | Voting duration default                           |
-| `HIVEMOOT_PR_STALE_DAYS`               | `3`     | Fallback stale threshold when `governance.pr.staleDays` is set to an invalid value |
+| `HIVEMOOT_PR_STALE_DAYS`               | `3`     | Fallback stale threshold when `governance.pr.staleDays` is present but invalid or out of bounds |
 | `HIVEMOOT_MAX_PRS_PER_ISSUE`           | `3`     | Default max competing PRs per issue               |
 | `DEBUG`                                | -       | Enable debug logging (e.g. `DEBUG=*`)             |
 

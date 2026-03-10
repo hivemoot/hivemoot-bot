@@ -198,6 +198,13 @@ describe("resolveInstallationBYOKConfig", () => {
     });
   });
 
+  it("re-throws non-Error fetch failures unchanged", async () => {
+    setRedisEnv();
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue("socket closed") as unknown as typeof fetch);
+
+    await expect(resolveInstallationBYOKConfig(2)).rejects.toBe("socket closed");
+  });
+
   it("sends Authorization header with Bearer token", async () => {
     setRedisEnv();
     const fetchMock = stubRedisResponse({ result: null });
@@ -570,7 +577,7 @@ describe("resolveInstallationBYOKConfig", () => {
     );
   });
 
-  it("reuses one correlationId across all errors in a single resolution attempt", async () => {
+  it("generates a fresh correlationId for each resolution attempt", async () => {
     const masterKey = randomBytes(32);
     setRedisEnv();
     setMasterKeys({ v1: masterKey.toString("hex") });

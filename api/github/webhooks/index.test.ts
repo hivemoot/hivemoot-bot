@@ -1598,7 +1598,7 @@ describe("Queen Bot", () => {
     const createPRGuardOctokit = () => ({
       rest: {
         pulls: {
-          get: vi.fn().mockResolvedValue({ data: { number: 1, state: "open", merged: false, user: { login: "author" }, head: { sha: "abc123" } } }),
+          get: vi.fn().mockResolvedValue({ data: { number: 1, state: "open", merged: false, labels: [], user: { login: "author" }, head: { sha: "abc123" } } }),
           update: vi.fn().mockResolvedValue({}),
           listReviews: vi.fn().mockResolvedValue({ data: [] }),
           listCommits: vi.fn().mockResolvedValue({ data: [] }),
@@ -1607,7 +1607,7 @@ describe("Queen Bot", () => {
           list: vi.fn().mockResolvedValue({ data: [] }),
         },
         issues: {
-          get: vi.fn().mockResolvedValue({ data: {} }),
+          get: vi.fn().mockResolvedValue({ data: { labels: [] } }),
           addLabels: vi.fn().mockResolvedValue({}),
           removeLabel: vi.fn().mockResolvedValue({}),
           createComment: vi.fn().mockResolvedValue({}),
@@ -1940,6 +1940,7 @@ describe("Queen Bot", () => {
           merged: false,
           draft: true,
           mergeable: null,
+          labels: [],
           user: { login: "author" },
           head: { sha: "abc123" },
         },
@@ -1972,6 +1973,7 @@ describe("Queen Bot", () => {
           merged: false,
           draft: true,
           mergeable: null,
+          labels: [],
           user: { login: "author" },
           head: { sha: "abc123" },
         },

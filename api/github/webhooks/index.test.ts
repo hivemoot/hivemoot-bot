@@ -1305,6 +1305,7 @@ describe("Queen Bot", () => {
           ref: { owner: "hivemoot", repo: "test-repo", prNumber: 22 },
           config: repoConfig.governance.pr.automerge,
           trustedReviewers: ["maintainer-a"],
+          draft: false,
           log,
         })
       );
@@ -1356,6 +1357,15 @@ describe("Queen Bot", () => {
           log,
         })
       );
+      expect(evaluateAutomerge).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ref: { owner: "hivemoot", repo: "test-repo", prNumber: 40 },
+          config: repoConfig.governance.pr.automerge,
+          trustedReviewers: [],
+          draft: true,
+          log,
+        })
+      );
     });
 
     it("should recalculate leaderboard and re-evaluate on dismissed review", async () => {
@@ -1397,6 +1407,15 @@ describe("Queen Bot", () => {
         expect.objectContaining({
           ref: { owner: "hivemoot", repo: "test-repo", prNumber: 56 },
           config: repoConfig.governance.pr.mergeReady,
+          trustedReviewers: ["maintainer-b"],
+          draft: true,
+          log,
+        })
+      );
+      expect(evaluateAutomerge).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ref: { owner: "hivemoot", repo: "test-repo", prNumber: 56 },
+          config: repoConfig.governance.pr.automerge,
           trustedReviewers: ["maintainer-b"],
           draft: true,
           log,
@@ -1886,6 +1905,115 @@ describe("Queen Bot", () => {
 
       expect(evaluateMergeReadiness).not.toHaveBeenCalled();
     });
+
+    const automergeEnabledConfig = {
+      governance: {
+        proposals: { discussion: { exits: [{ type: "manual" }], durationMs: 0 } },
+        pr: {
+          maxPRsPerIssue: 3,
+          trustedReviewers: [],
+          intake: {},
+          mergeReady: null,
+          automerge: {
+            dryRun: true,
+            allowedPaths: ["**/*.md"],
+            denyPaths: [],
+            maxFiles: 5,
+            maxChangedLines: 80,
+            minApprovals: 1,
+            requireChecks: false,
+          },
+        },
+      },
+    };
+
+    it("threads draft state from prs.get() to evaluateAutomerge on check_suite.completed", async () => {
+      const { handlers } = createWebhookHarness();
+      const octokit = createPRGuardOctokit();
+      vi.mocked(loadRepositoryConfig).mockResolvedValue(automergeEnabledConfig as any);
+      vi.mocked(evaluateAutomerge).mockResolvedValue({ action: "unlabeled", reason: "PR is a draft" });
+
+      octokit.rest.pulls.get = vi.fn().mockResolvedValue({
+        data: {
+          number: 1,
+          state: "open",
+          merged: false,
+          draft: true,
+          mergeable: null,
+          user: { login: "author" },
+          head: { sha: "abc123" },
+        },
+      });
+
+      await handlers.get("check_suite.completed")!({
+        octokit,
+        log: mkLog(),
+        payload: {
+          check_suite: { pull_requests: [{ number: 1 }], head_sha: "abc123" },
+          repository: testRepo,
+        },
+      });
+
+      expect(evaluateAutomerge).toHaveBeenCalledWith(
+        expect.objectContaining({ draft: true, mergeable: null })
+      );
+    });
+
+    it("threads draft state from prs.get() to evaluateAutomerge on check_run.completed", async () => {
+      const { handlers } = createWebhookHarness();
+      const octokit = createPRGuardOctokit();
+      vi.mocked(loadRepositoryConfig).mockResolvedValue(automergeEnabledConfig as any);
+      vi.mocked(evaluateAutomerge).mockResolvedValue({ action: "unlabeled", reason: "PR is a draft" });
+
+      octokit.rest.pulls.get = vi.fn().mockResolvedValue({
+        data: {
+          number: 1,
+          state: "open",
+          merged: false,
+          draft: true,
+          mergeable: null,
+          user: { login: "author" },
+          head: { sha: "abc123" },
+        },
+      });
+
+      await handlers.get("check_run.completed")!({
+        octokit,
+        log: mkLog(),
+        payload: {
+          check_run: { pull_requests: [{ number: 1 }], head_sha: "abc123" },
+          repository: testRepo,
+        },
+      });
+
+      expect(evaluateAutomerge).toHaveBeenCalledWith(
+        expect.objectContaining({ draft: true, mergeable: null })
+      );
+    });
+
+    it("threads draft state from pulls.list to evaluateAutomerge on status", async () => {
+      const { handlers } = createWebhookHarness();
+      const octokit = createPRGuardOctokit();
+      vi.mocked(loadRepositoryConfig).mockResolvedValue(automergeEnabledConfig as any);
+      vi.mocked(evaluateAutomerge).mockResolvedValue({ action: "unlabeled", reason: "PR is a draft" });
+
+      octokit.rest.pulls.list = vi.fn().mockResolvedValue({
+        data: [{ number: 1, head: { sha: "abc123" }, draft: true }],
+      });
+
+      await handlers.get("status")!({
+        octokit,
+        log: mkLog(),
+        payload: {
+          sha: "abc123",
+          repository: testRepo,
+        },
+      });
+
+      expect(evaluateAutomerge).toHaveBeenCalledWith(
+        expect.objectContaining({ draft: true })
+      );
+    });
   });
 
   describe("PR workflow truthy paths (pr config present)", () => {
@@ -1967,13 +2095,25 @@ describe("Queen Bot", () => {
         octokit: mkOctokit(),
         log: mkLog(),
         payload: {
-          pull_request: { number: 1, body: "Closes #1", base: { ref: "main" } },
+          pull_request: {
+            number: 1,
+            body: "Closes #1",
+            base: { ref: "main" },
+            draft: false,
+            mergeable: true,
+          },
           repository: testRepo,
         },
       });
 
       expect(processImplementationIntake).toHaveBeenCalledWith(
         expect.objectContaining({ trigger: "opened" })
+      );
+      expect(evaluateAutomerge).toHaveBeenCalledWith(
+        expect.objectContaining({
+          draft: false,
+          mergeable: true,
+        })
       );
     });
 
@@ -1986,13 +2126,19 @@ describe("Queen Bot", () => {
         octokit: mkOctokit(),
         log: mkLog(),
         payload: {
-          pull_request: { number: 1, base: { ref: "main" } },
+          pull_request: { number: 1, base: { ref: "main" }, draft: false, mergeable: true },
           repository: testRepo,
         },
       });
 
       expect(processImplementationIntake).toHaveBeenCalledWith(
         expect.objectContaining({ trigger: "updated" })
+      );
+      expect(evaluateAutomerge).toHaveBeenCalledWith(
+        expect.objectContaining({
+          draft: false,
+          mergeable: true,
+        })
       );
     });
 
@@ -2062,6 +2208,7 @@ describe("Queen Bot", () => {
         expect.objectContaining({
           ref: { owner: "hivemoot", repo: "test-repo", prNumber: 2 },
           currentLabels: [LABELS.IMPLEMENTATION],
+          draft: false,
         })
       );
     });

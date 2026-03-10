@@ -220,6 +220,8 @@ export function app(probotApp: Probot): void {
           ref: { owner, repo, prNumber: number },
           config: repoConfig.governance.pr.automerge,
           trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+          draft: context.payload.pull_request.draft,
+          mergeable: context.payload.pull_request.mergeable,
           log: context.log,
         });
       }
@@ -285,6 +287,8 @@ export function app(probotApp: Probot): void {
           ref: prRef,
           config: repoConfig.governance.pr.automerge,
           trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+          draft: context.payload.pull_request.draft,
+          mergeable: context.payload.pull_request.mergeable,
           log: context.log,
         });
       }
@@ -335,6 +339,8 @@ export function app(probotApp: Probot): void {
           config: repoConfig.governance.pr.automerge,
           trustedReviewers: repoConfig.governance.pr.trustedReviewers,
           currentLabels,
+          draft: false,
+          mergeable: context.payload.pull_request.mergeable,
           log: context.log,
         });
       }
@@ -654,6 +660,8 @@ export function app(probotApp: Probot): void {
           ref: { owner, repo, prNumber: number },
           config: repoConfig.governance.pr.automerge,
           trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+          draft: context.payload.pull_request.draft,
+          // mergeable is omitted from SimplePullRequest review payloads.
           log: context.log,
         });
       }
@@ -698,6 +706,8 @@ export function app(probotApp: Probot): void {
           ref: { owner, repo, prNumber: number },
           config: repoConfig.governance.pr.automerge,
           trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+          draft: context.payload.pull_request.draft,
+          // mergeable is omitted from SimplePullRequest review payloads.
           log: context.log,
         });
       }
@@ -772,21 +782,31 @@ export function app(probotApp: Probot): void {
       const errors: Error[] = [];
       for (const pr of pull_requests) {
         try {
+          const prRef = { owner, repo, prNumber: pr.number };
           context.log.info(`Evaluating merge-readiness for PR #${pr.number} after check_suite in ${fullName}`);
           await evaluateMergeReadiness({
             prs,
-            ref: { owner, repo, prNumber: pr.number },
+            ref: prRef,
             config: repoConfig.governance.pr.mergeReady,
             trustedReviewers: repoConfig.governance.pr.trustedReviewers,
             headSha,
             log: context.log,
           });
+          let prDraft: boolean | undefined;
+          let prMergeable: boolean | null | undefined;
+          if (repoConfig.governance.pr.automerge) {
+            const prState = await prs.get(prRef);
+            prDraft = prState.draft;
+            prMergeable = prState.mergeable;
+          }
           await evaluateAutomerge({
             prs,
-            ref: { owner, repo, prNumber: pr.number },
+            ref: prRef,
             config: repoConfig.governance.pr.automerge,
             trustedReviewers: repoConfig.governance.pr.trustedReviewers,
             headSha,
+            draft: prDraft,
+            mergeable: prMergeable,
             log: context.log,
           });
         } catch (error) {
@@ -831,21 +851,31 @@ export function app(probotApp: Probot): void {
       const errors: Error[] = [];
       for (const pr of pull_requests) {
         try {
+          const prRef = { owner, repo, prNumber: pr.number };
           context.log.info(`Evaluating merge-readiness for PR #${pr.number} after check_run in ${fullName}`);
           await evaluateMergeReadiness({
             prs,
-            ref: { owner, repo, prNumber: pr.number },
+            ref: prRef,
             config: repoConfig.governance.pr.mergeReady,
             trustedReviewers: repoConfig.governance.pr.trustedReviewers,
             headSha,
             log: context.log,
           });
+          let prDraft: boolean | undefined;
+          let prMergeable: boolean | null | undefined;
+          if (repoConfig.governance.pr.automerge) {
+            const prState = await prs.get(prRef);
+            prDraft = prState.draft;
+            prMergeable = prState.mergeable;
+          }
           await evaluateAutomerge({
             prs,
-            ref: { owner, repo, prNumber: pr.number },
+            ref: prRef,
             config: repoConfig.governance.pr.automerge,
             trustedReviewers: repoConfig.governance.pr.trustedReviewers,
             headSha,
+            draft: prDraft,
+            mergeable: prMergeable,
             log: context.log,
           });
         } catch (error) {
@@ -894,8 +924,10 @@ export function app(probotApp: Probot): void {
         per_page: 100,
       });
 
-      // Filter to PRs whose HEAD matches the status event SHA
-      const matchingPRs = data.filter((pr: { head: { sha: string } }) => pr.head.sha === sha);
+      // Filter to PRs whose HEAD matches the status event SHA while preserving draft state.
+      const matchingPRs = data.filter(
+        (pr: { head: { sha: string }; draft?: boolean; number: number }) => pr.head.sha === sha
+      );
 
       const errors: Error[] = [];
       for (const pr of matchingPRs) {
@@ -915,6 +947,7 @@ export function app(probotApp: Probot): void {
             config: repoConfig.governance.pr.automerge,
             trustedReviewers: repoConfig.governance.pr.trustedReviewers,
             headSha: sha,
+            draft: pr.draft,
             log: context.log,
           });
         } catch (error) {

@@ -2,17 +2,19 @@
  * Automerge PR Classification
  *
  * Evaluates whether a PR qualifies for automatic merging based on:
- * 1. File paths pass allowlist/denylist filtering
- * 2. File count within maxFiles threshold
- * 3. Total changed lines within maxChangedLines threshold
- * 4. Minimum approvals from trusted reviewers
- * 5. CI checks passing (when requireChecks is true)
+ * 1. PR state: not a draft and no merge conflicts
+ * 2. File paths pass allowlist/denylist filtering
+ * 3. File count within maxFiles threshold
+ * 4. Total changed lines within maxChangedLines threshold
+ * 5. Minimum approvals from trusted reviewers
+ * 6. CI checks passing (when requireChecks is true)
  *
  * All conditions must pass before the `hivemoot:automerge` label is applied.
  * Phase 1 (dryRun: true) = label only, no merge action.
  *
  * Short-circuit order optimized by API cost:
- * config → files (cheapest, already fetched) → approvals (1 call) → CI (2 calls)
+ * config → draft/mergeable gates (zero cost from webhook payload) → files
+ * → approvals (1 call) → CI (2 calls)
  */
 
 import { minimatch } from "minimatch";
@@ -46,6 +48,10 @@ export interface AutomergeParams {
   headSha?: string;
   /** Pre-fetched labels from webhook payload to avoid extra API call. */
   currentLabels?: string[];
+  /** Draft state from webhook payload. True → skip classification. */
+  draft?: boolean;
+  /** Mergeable state from webhook payload. False → skip; null = unknown. */
+  mergeable?: boolean | null;
   log?: { info: (msg: string) => void };
 }
 
@@ -157,10 +163,11 @@ export function classifyFiles(
  *
  * Orchestrates all checks in short-circuit order:
  * 1. Config null → skip
- * 2. Fetch files → classify (file count, changed lines, path rules)
- * 3. Count trusted approvals → check ≥ minApprovals
- * 4. If requireChecks → check CI via isCIPassing()
- * 5. All pass → add label; any fail → remove label if present
+ * 2. PR state gates: draft → remove; merge conflicts → remove
+ * 3. Fetch files → classify (file count, changed lines, path rules)
+ * 4. Count trusted approvals → check ≥ minApprovals
+ * 5. If requireChecks → check CI via isCIPassing()
+ * 6. All pass → add label; any fail → remove label if present
  *
  * Idempotent: safe to call multiple times for the same PR.
  */
@@ -188,7 +195,15 @@ export async function evaluateAutomerge(
     return { action: "noop", labeled: false };
   };
 
-  // 2. Fetch files and classify
+  // 2. PR state gates — cheaper than file/approval/CI API calls
+  if (params.draft === true) {
+    return removeIfLabeled("PR is a draft");
+  }
+  if (params.mergeable === false) {
+    return removeIfLabeled("PR has merge conflicts");
+  }
+
+  // 3. Fetch files and classify
   const files = await prs.listFiles(ref, { earlyExitThreshold: config.maxFiles });
   const classification = classifyFiles(files, config);
 
@@ -196,7 +211,7 @@ export async function evaluateAutomerge(
     return removeIfLabeled(classification.reason);
   }
 
-  // 3. Check trusted approvals
+  // 4. Check trusted approvals
   const approvers = await prs.getApproverLogins(ref);
   const trustedApprovalCount = trustedReviewers.filter(r => approvers.has(r)).length;
 
@@ -206,7 +221,7 @@ export async function evaluateAutomerge(
     );
   }
 
-  // 4. Check CI if required
+  // 5. Check CI if required
   if (config.requireChecks) {
     let headSha = params.headSha;
     if (!headSha) {
@@ -220,7 +235,7 @@ export async function evaluateAutomerge(
     }
   }
 
-  // All conditions met → add label if not present
+  // 6. All conditions met → add label if not present
   if (!hasAutomerge) {
     await prs.addLabels(ref, [LABELS.AUTOMERGE]);
     log?.info(`[PR #${ref.prNumber}] Added automerge label`);

@@ -548,6 +548,88 @@ describe("evaluateAutomerge", () => {
     ).rejects.toThrow("API error");
   });
 
+  describe("draft and mergeable gates", () => {
+    it("removes label when the PR is a draft", async () => {
+      const config = makeConfig({ requireChecks: false });
+      const prs = createMockPROperations({
+        getLabels: vi.fn().mockResolvedValue([LABELS.AUTOMERGE]),
+      });
+
+      const result = await evaluateAutomerge({
+        prs,
+        ref: baseRef,
+        config,
+        trustedReviewers,
+        draft: true,
+      });
+
+      expect(result).toEqual({ action: "unlabeled", reason: "PR is a draft" });
+      expect(prs.removeLabel).toHaveBeenCalledWith(baseRef, LABELS.AUTOMERGE);
+      expect(prs.listFiles).not.toHaveBeenCalled();
+    });
+
+    it("returns noop when the PR is a draft and the label is absent", async () => {
+      const config = makeConfig({ requireChecks: false });
+      const prs = createMockPROperations({
+        getLabels: vi.fn().mockResolvedValue([]),
+      });
+
+      const result = await evaluateAutomerge({
+        prs,
+        ref: baseRef,
+        config,
+        trustedReviewers,
+        draft: true,
+      });
+
+      expect(result).toEqual({ action: "noop", labeled: false });
+      expect(prs.removeLabel).not.toHaveBeenCalled();
+      expect(prs.listFiles).not.toHaveBeenCalled();
+    });
+
+    it("removes label when the PR has merge conflicts", async () => {
+      const config = makeConfig({ requireChecks: false });
+      const prs = createMockPROperations({
+        getLabels: vi.fn().mockResolvedValue([LABELS.AUTOMERGE]),
+      });
+
+      const result = await evaluateAutomerge({
+        prs,
+        ref: baseRef,
+        config,
+        trustedReviewers,
+        mergeable: false,
+      });
+
+      expect(result).toEqual({
+        action: "unlabeled",
+        reason: "PR has merge conflicts",
+      });
+      expect(prs.removeLabel).toHaveBeenCalledWith(baseRef, LABELS.AUTOMERGE);
+      expect(prs.listFiles).not.toHaveBeenCalled();
+    });
+
+    it("passes through when mergeable is null", async () => {
+      const config = makeConfig({ requireChecks: false });
+      const prs = createMockPROperations({
+        listFiles: vi.fn().mockResolvedValue([makeFile("README.md", 5)]),
+        getApproverLogins: vi.fn().mockResolvedValue(new Set(["alice", "bob"])),
+        getLabels: vi.fn().mockResolvedValue([]),
+      });
+
+      const result = await evaluateAutomerge({
+        prs,
+        ref: baseRef,
+        config,
+        trustedReviewers,
+        mergeable: null,
+      });
+
+      expect(result).toEqual({ action: "labeled" });
+      expect(prs.listFiles).toHaveBeenCalled();
+    });
+  });
+
   it("only counts approvals from trusted reviewers", async () => {
     const config = makeConfig({ minApprovals: 2 });
     const prs = createMockPROperations({

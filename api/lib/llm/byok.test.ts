@@ -170,12 +170,26 @@ describe("resolveInstallationBYOKConfig", () => {
     );
   });
 
-  it("re-throws non-abort fetch errors as-is", async () => {
+  it("wraps non-abort fetch errors with BYOK network error message", async () => {
     setRedisEnv();
     const networkError = new TypeError("Failed to fetch");
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(networkError) as unknown as typeof fetch);
 
-    await expect(resolveInstallationBYOKConfig(2)).rejects.toThrow("Failed to fetch");
+    const err = await resolveInstallationBYOKConfig(2).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe("BYOK Redis network error");
+    expect((err as Error & { cause: unknown }).cause).toBe(networkError);
+  });
+
+  it("throws when Redis lookup times out via TimeoutError", async () => {
+    setRedisEnv();
+    const timeoutError = new Error("The operation was aborted due to timeout");
+    timeoutError.name = "TimeoutError";
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(timeoutError) as unknown as typeof fetch);
+
+    await expect(resolveInstallationBYOKConfig(2)).rejects.toThrow(
+      "BYOK Redis lookup timed out after 5000ms",
+    );
   });
 
   it("sends Authorization header with Bearer token", async () => {
@@ -610,6 +624,32 @@ describe("resolveInstallationBYOKConfig", () => {
       const err = await resolveInstallationBYOKConfig(55).catch((e: unknown) => e);
       expect(err).toBeInstanceOf(Error);
       expect((err as { installationId: number }).installationId).toBe(55);
+      expect((err as { correlationId: string }).correlationId).toMatch(UUID_RE);
+    });
+
+    it("attaches installationId and correlationId to network error", async () => {
+      setRedisEnv();
+      const networkError = new TypeError("Failed to fetch");
+      vi.stubGlobal("fetch", vi.fn().mockRejectedValue(networkError) as unknown as typeof fetch);
+
+      const err = await resolveInstallationBYOKConfig(77).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toBe("BYOK Redis network error");
+      expect((err as { installationId: number }).installationId).toBe(77);
+      expect((err as { correlationId: string }).correlationId).toMatch(UUID_RE);
+      expect((err as Error & { cause: unknown }).cause).toBe(networkError);
+    });
+
+    it("attaches installationId and correlationId to timeout error", async () => {
+      setRedisEnv();
+      const timeoutError = new Error("The operation was aborted due to timeout");
+      timeoutError.name = "TimeoutError";
+      vi.stubGlobal("fetch", vi.fn().mockRejectedValue(timeoutError) as unknown as typeof fetch);
+
+      const err = await resolveInstallationBYOKConfig(88).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toContain("timed out");
+      expect((err as { installationId: number }).installationId).toBe(88);
       expect((err as { correlationId: string }).correlationId).toMatch(UUID_RE);
     });
 

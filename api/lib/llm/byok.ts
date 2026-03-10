@@ -299,13 +299,16 @@ async function fetchEnvelope(
       signal: AbortSignal.timeout(REDIS_FETCH_TIMEOUT_MS),
     });
   } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") {
+    if (error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError")) {
       throw Object.assign(
         new Error(`BYOK Redis lookup timed out after ${REDIS_FETCH_TIMEOUT_MS}ms`),
         { installationId, correlationId },
       );
     }
-    throw error;
+    throw Object.assign(
+      new Error("BYOK Redis network error", { cause: error }),
+      { installationId, correlationId },
+    );
   }
 
   if (!response.ok) {

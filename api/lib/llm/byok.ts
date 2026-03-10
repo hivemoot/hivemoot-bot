@@ -1,4 +1,4 @@
-import { createDecipheriv } from "node:crypto";
+import { createDecipheriv, randomUUID } from "node:crypto";
 
 import type { LLMProvider } from "./types.js";
 import { normalizeEnvString } from "./env.js";
@@ -36,6 +36,11 @@ export interface InstallationBYOKConfig {
   provider: LLMProvider;
   model?: string;
   apiKey: string;
+}
+
+interface BYOKResolutionErrorMetadata {
+  installationId: number;
+  correlationId: string;
 }
 
 function readFirstEnv(names: readonly string[]): string | undefined {
@@ -139,6 +144,13 @@ function parseMasterKeys(): ReadonlyMap<string, Buffer> {
 /** Reset the master keys cache. Intended for use in tests only. */
 export function _resetMasterKeysCache(): void {
   _masterKeysCache = undefined;
+}
+
+function attachResolutionMetadata<T extends Error>(
+  error: T,
+  metadata: BYOKResolutionErrorMetadata,
+): T & BYOKResolutionErrorMetadata {
+  return Object.assign(error, metadata);
 }
 
 function decodeBase64Field(fieldName: string, value: string): Buffer {
@@ -301,33 +313,41 @@ async function fetchEnvelope(
 export async function resolveInstallationBYOKConfig(
   installationId: number
 ): Promise<InstallationBYOKConfig | null> {
+  const correlationId = randomUUID();
   const runtimeConfig = getRedisRuntimeConfig();
   if (!runtimeConfig) {
     return null;
   }
 
-  const envelope = await fetchEnvelope(runtimeConfig, installationId);
-  if (!envelope) {
-    return null;
+  try {
+    const envelope = await fetchEnvelope(runtimeConfig, installationId);
+    if (!envelope) {
+      return null;
+    }
+
+    if (envelope.status === "revoked") {
+      return null;
+    }
+
+    if (envelope.status !== "active") {
+      const status = envelope.status ?? "missing";
+      throw new Error(
+        `BYOK record for installation ${installationId} is not active (status=${status})`
+      );
+    }
+
+    const masterKeys = parseMasterKeys();
+    const decrypted = decryptEnvelope(envelope, masterKeys);
+
+    return {
+      apiKey: decrypted.apiKey,
+      provider: parseProvider(decrypted.provider),
+      model: normalizeEnvString(decrypted.model),
+    };
+  } catch (error) {
+    if (error instanceof Error) {
+      throw attachResolutionMetadata(error, { installationId, correlationId });
+    }
+    throw error;
   }
-
-  if (envelope.status === "revoked") {
-    return null;
-  }
-
-  if (envelope.status !== "active") {
-    const status = envelope.status ?? "missing";
-    throw new Error(
-      `BYOK record for installation ${installationId} is not active (status=${status})`
-    );
-  }
-
-  const masterKeys = parseMasterKeys();
-  const decrypted = decryptEnvelope(envelope, masterKeys);
-
-  return {
-    apiKey: decrypted.apiKey,
-    provider: parseProvider(decrypted.provider),
-    model: normalizeEnvString(decrypted.model),
-  };
 }

@@ -87,6 +87,18 @@ function stubRedisResponse(
   return fetchMock;
 }
 
+function expectResolutionMetadata(error: unknown, installationId: number): void {
+  expect(error).toBeInstanceOf(Error);
+  expect(error).toEqual(
+    expect.objectContaining({
+      installationId,
+      correlationId: expect.stringMatching(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+      ),
+    }),
+  );
+}
+
 describe("resolveInstallationBYOKConfig", () => {
   const originalEnv = process.env;
 
@@ -154,9 +166,11 @@ describe("resolveInstallationBYOKConfig", () => {
     setRedisEnv();
     stubRedisResponse({}, { ok: false, status: 503 });
 
-    await expect(resolveInstallationBYOKConfig(2)).rejects.toThrow(
-      "BYOK Redis lookup failed with HTTP 503",
-    );
+    await expect(resolveInstallationBYOKConfig(2)).rejects.toMatchObject({
+      message: "BYOK Redis lookup failed with HTTP 503",
+      installationId: 2,
+      correlationId: expect.any(String),
+    });
   });
 
   it("throws when Redis lookup times out", async () => {
@@ -165,9 +179,11 @@ describe("resolveInstallationBYOKConfig", () => {
     abortError.name = "AbortError";
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(abortError) as unknown as typeof fetch);
 
-    await expect(resolveInstallationBYOKConfig(2)).rejects.toThrow(
-      "BYOK Redis lookup timed out after 5000ms",
-    );
+    await expect(resolveInstallationBYOKConfig(2)).rejects.toMatchObject({
+      message: "BYOK Redis lookup timed out after 5000ms",
+      installationId: 2,
+      correlationId: expect.any(String),
+    });
   });
 
   it("re-throws non-abort fetch errors as-is", async () => {
@@ -175,7 +191,11 @@ describe("resolveInstallationBYOKConfig", () => {
     const networkError = new TypeError("Failed to fetch");
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(networkError) as unknown as typeof fetch);
 
-    await expect(resolveInstallationBYOKConfig(2)).rejects.toThrow("Failed to fetch");
+    await expect(resolveInstallationBYOKConfig(2)).rejects.toMatchObject({
+      message: "Failed to fetch",
+      installationId: 2,
+      correlationId: expect.any(String),
+    });
   });
 
   it("sends Authorization header with Bearer token", async () => {
@@ -548,5 +568,45 @@ describe("resolveInstallationBYOKConfig", () => {
     await expect(resolveInstallationBYOKConfig(7)).rejects.toThrow(
       "Unsupported BYOK provider: mistral",
     );
+  });
+
+  it("reuses one correlationId across all errors in a single resolution attempt", async () => {
+    const masterKey = randomBytes(32);
+    setRedisEnv();
+    setMasterKeys({ v1: masterKey.toString("hex") });
+    stubRedisResponse({
+      result: buildEnvelope({ apiKey: "sk", provider: "vertex" }, masterKey),
+    });
+
+    const firstError = await resolveInstallationBYOKConfig(7).catch((error: unknown) => error);
+    const secondError = await resolveInstallationBYOKConfig(7).catch((error: unknown) => error);
+
+    expectResolutionMetadata(firstError, 7);
+    expectResolutionMetadata(secondError, 7);
+    expect((firstError as { correlationId: string }).correlationId).not.toBe(
+      (secondError as { correlationId: string }).correlationId,
+    );
+  });
+
+  it("preserves decrypt causes while adding resolution metadata", async () => {
+    setRedisEnv();
+    setMasterKeys({ v1: randomBytes(32).toString("hex") });
+    stubRedisResponse({
+      result: JSON.stringify({
+        ciphertext: "aW52YWxpZA==",
+        iv: randomBytes(12).toString("base64"),
+        tag: randomBytes(16).toString("base64"),
+        keyVersion: "v1",
+        status: "active",
+      }),
+    });
+
+    const error = await resolveInstallationBYOKConfig(42).catch((caught: unknown) => caught);
+
+    expectResolutionMetadata(error, 42);
+    expect(error).toMatchObject({
+      message: "BYOK key material could not be decrypted",
+      cause: expect.any(Error),
+    });
   });
 });

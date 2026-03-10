@@ -1,4 +1,4 @@
-import { createDecipheriv } from "node:crypto";
+import { createDecipheriv, randomUUID } from "node:crypto";
 
 import type { LLMProvider } from "./types.js";
 import { normalizeEnvString } from "./env.js";
@@ -141,7 +141,12 @@ export function _resetMasterKeysCache(): void {
   _masterKeysCache = undefined;
 }
 
-function decodeBase64Field(fieldName: string, value: string): Buffer {
+function decodeBase64Field(
+  fieldName: string,
+  value: string,
+  installationId: number,
+  correlationId: string,
+): Buffer {
   try {
     const decoded = Buffer.from(value, "base64");
     if (decoded.length === 0) {
@@ -149,20 +154,33 @@ function decodeBase64Field(fieldName: string, value: string): Buffer {
     }
     return decoded;
   } catch {
-    throw new Error(`BYOK envelope field '${fieldName}' is not valid base64`);
+    throw Object.assign(
+      new Error(`BYOK envelope field '${fieldName}' is not valid base64`),
+      { installationId, correlationId },
+    );
   }
 }
 
-function parseEnvelope(rawEnvelope: string): BYOKEnvelope {
+function parseEnvelope(
+  rawEnvelope: string,
+  installationId: number,
+  correlationId: string,
+): BYOKEnvelope {
   let parsed: unknown;
   try {
     parsed = JSON.parse(rawEnvelope);
   } catch {
-    throw new Error("BYOK envelope is not valid JSON");
+    throw Object.assign(
+      new Error("BYOK envelope is not valid JSON"),
+      { installationId, correlationId },
+    );
   }
 
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("BYOK envelope must be a JSON object");
+    throw Object.assign(
+      new Error("BYOK envelope must be a JSON object"),
+      { installationId, correlationId },
+    );
   }
 
   const envelope = parsed as Partial<BYOKEnvelope>;
@@ -173,7 +191,10 @@ function parseEnvelope(rawEnvelope: string): BYOKEnvelope {
     typeof envelope.tag !== "string" ||
     typeof envelope.keyVersion !== "string"
   ) {
-    throw new Error("BYOK envelope is missing required fields");
+    throw Object.assign(
+      new Error("BYOK envelope is missing required fields"),
+      { installationId, correlationId },
+    );
   }
 
   return {
@@ -190,19 +211,27 @@ function parseEnvelope(rawEnvelope: string): BYOKEnvelope {
 function decryptEnvelope(
   envelope: BYOKEnvelope,
   masterKeys: ReadonlyMap<string, Buffer>,
+  installationId: number,
+  correlationId: string,
 ): BYOKPayload {
   const key = masterKeys.get(envelope.keyVersion);
   if (!key) {
-    throw new Error(`BYOK key version '${envelope.keyVersion}' is unavailable`);
+    throw Object.assign(
+      new Error(`BYOK key version '${envelope.keyVersion}' is unavailable`),
+      { installationId, correlationId },
+    );
   }
 
-  const iv = decodeBase64Field("iv", envelope.iv);
+  const iv = decodeBase64Field("iv", envelope.iv, installationId, correlationId);
   if (iv.length !== 12) {
-    throw new Error(`BYOK envelope IV must be 12 bytes (96 bits) for AES-256-GCM; got ${iv.length}`);
+    throw Object.assign(
+      new Error(`BYOK envelope IV must be 12 bytes (96 bits) for AES-256-GCM; got ${iv.length}`),
+      { installationId, correlationId },
+    );
   }
 
-  const authTag = decodeBase64Field("tag", envelope.tag);
-  const ciphertext = decodeBase64Field("ciphertext", envelope.ciphertext);
+  const authTag = decodeBase64Field("tag", envelope.tag, installationId, correlationId);
+  const ciphertext = decodeBase64Field("ciphertext", envelope.ciphertext, installationId, correlationId);
 
   let plaintext: string;
   try {
@@ -213,23 +242,35 @@ function decryptEnvelope(
       decipher.final(),
     ]).toString("utf8");
   } catch (error) {
-    throw new Error("BYOK key material could not be decrypted", { cause: error });
+    throw Object.assign(
+      new Error("BYOK key material could not be decrypted", { cause: error }),
+      { installationId, correlationId },
+    );
   }
 
   let payload: unknown;
   try {
     payload = JSON.parse(plaintext);
   } catch {
-    throw new Error("BYOK decrypted payload is not valid JSON");
+    throw Object.assign(
+      new Error("BYOK decrypted payload is not valid JSON"),
+      { installationId, correlationId },
+    );
   }
 
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    throw new Error("BYOK decrypted payload must be a JSON object");
+    throw Object.assign(
+      new Error("BYOK decrypted payload must be a JSON object"),
+      { installationId, correlationId },
+    );
   }
 
   const byokPayload = payload as Partial<BYOKPayload>;
   if (typeof byokPayload.apiKey !== "string" || byokPayload.apiKey.trim().length === 0) {
-    throw new Error("BYOK decrypted payload is missing apiKey");
+    throw Object.assign(
+      new Error("BYOK decrypted payload is missing apiKey"),
+      { installationId, correlationId },
+    );
   }
 
   return {
@@ -242,6 +283,7 @@ function decryptEnvelope(
 async function fetchEnvelope(
   runtimeConfig: RedisRuntimeConfig,
   installationId: number,
+  correlationId: string,
 ): Promise<BYOKEnvelope | null> {
   const key = `${runtimeConfig.keyPrefix}:${installationId}`;
   const endpoint = `${runtimeConfig.url}/get/${encodeURIComponent(key)}`;
@@ -258,27 +300,42 @@ async function fetchEnvelope(
     });
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
-      throw new Error(`BYOK Redis lookup timed out after ${REDIS_FETCH_TIMEOUT_MS}ms`);
+      throw Object.assign(
+        new Error(`BYOK Redis lookup timed out after ${REDIS_FETCH_TIMEOUT_MS}ms`),
+        { installationId, correlationId },
+      );
     }
     throw error;
   }
 
   if (!response.ok) {
-    throw new Error(`BYOK Redis lookup failed with HTTP ${response.status}`);
+    throw Object.assign(
+      new Error(`BYOK Redis lookup failed with HTTP ${response.status}`),
+      { installationId, correlationId },
+    );
   }
 
   let body: { result?: unknown; error?: unknown };
   try {
     body = (await response.json()) as typeof body;
   } catch {
-    throw new Error(`BYOK Redis REST response is not valid JSON (HTTP ${response.status})`);
+    throw Object.assign(
+      new Error(`BYOK Redis REST response is not valid JSON (HTTP ${response.status})`),
+      { installationId, correlationId },
+    );
   }
   if (typeof body.error === "string" && body.error.length > 0) {
-    throw new Error(`BYOK Redis returned an error for installation ${installationId}`);
+    throw Object.assign(
+      new Error(`BYOK Redis returned an error for installation ${installationId}`),
+      { installationId, correlationId },
+    );
   }
 
   if (!Object.prototype.hasOwnProperty.call(body, "result")) {
-    throw new Error("BYOK Redis response is missing the 'result' field");
+    throw Object.assign(
+      new Error("BYOK Redis response is missing the 'result' field"),
+      { installationId, correlationId },
+    );
   }
 
   if (body.result === null) {
@@ -286,10 +343,13 @@ async function fetchEnvelope(
   }
 
   if (typeof body.result !== "string") {
-    throw new Error("BYOK Redis returned an unexpected result payload");
+    throw Object.assign(
+      new Error("BYOK Redis returned an unexpected result payload"),
+      { installationId, correlationId },
+    );
   }
 
-  return parseEnvelope(body.result);
+  return parseEnvelope(body.result, installationId, correlationId);
 }
 
 /**
@@ -301,12 +361,14 @@ async function fetchEnvelope(
 export async function resolveInstallationBYOKConfig(
   installationId: number
 ): Promise<InstallationBYOKConfig | null> {
+  const correlationId = randomUUID();
+
   const runtimeConfig = getRedisRuntimeConfig();
   if (!runtimeConfig) {
     return null;
   }
 
-  const envelope = await fetchEnvelope(runtimeConfig, installationId);
+  const envelope = await fetchEnvelope(runtimeConfig, installationId, correlationId);
   if (!envelope) {
     return null;
   }
@@ -317,17 +379,25 @@ export async function resolveInstallationBYOKConfig(
 
   if (envelope.status !== "active") {
     const status = envelope.status ?? "missing";
-    throw new Error(
-      `BYOK record for installation ${installationId} is not active (status=${status})`
+    throw Object.assign(
+      new Error(`BYOK record for installation ${installationId} is not active (status=${status})`),
+      { installationId, correlationId },
     );
   }
 
   const masterKeys = parseMasterKeys();
-  const decrypted = decryptEnvelope(envelope, masterKeys);
+  const decrypted = decryptEnvelope(envelope, masterKeys, installationId, correlationId);
 
-  return {
-    apiKey: decrypted.apiKey,
-    provider: parseProvider(decrypted.provider),
-    model: normalizeEnvString(decrypted.model),
-  };
+  try {
+    return {
+      apiKey: decrypted.apiKey,
+      provider: parseProvider(decrypted.provider),
+      model: normalizeEnvString(decrypted.model),
+    };
+  } catch (error) {
+    throw Object.assign(
+      error instanceof Error ? error : new Error(String(error)),
+      { installationId, correlationId },
+    );
+  }
 }

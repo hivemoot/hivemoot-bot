@@ -549,4 +549,84 @@ describe("resolveInstallationBYOKConfig", () => {
       "Unsupported BYOK provider: mistral",
     );
   });
+
+  describe("correlation ID and installationId on errors", () => {
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+    it("attaches installationId and correlationId to Redis HTTP error", async () => {
+      setRedisEnv();
+      stubRedisResponse({}, { ok: false, status: 503 });
+
+      const err = await resolveInstallationBYOKConfig(42).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect((err as { installationId: number }).installationId).toBe(42);
+      expect((err as { correlationId: string }).correlationId).toMatch(UUID_RE);
+    });
+
+    it("attaches installationId and correlationId to decrypt error", async () => {
+      const masterKey = randomBytes(32);
+      setRedisEnv();
+      setMasterKeys({ v1: masterKey.toString("hex") });
+      // Build an envelope with a tampered tag so decryption fails
+      const envelopeJson = buildEnvelope({ apiKey: "sk", provider: "openai" }, masterKey);
+      const envelope = JSON.parse(envelopeJson) as Record<string, unknown>;
+      envelope.tag = randomBytes(16).toString("base64");
+      stubRedisResponse({ result: JSON.stringify(envelope) });
+
+      const err = await resolveInstallationBYOKConfig(99).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toBe("BYOK key material could not be decrypted");
+      expect((err as { installationId: number }).installationId).toBe(99);
+      expect((err as { correlationId: string }).correlationId).toMatch(UUID_RE);
+      expect((err as Error & { cause: unknown }).cause).toBeInstanceOf(Error);
+    });
+
+    it("attaches installationId and correlationId to inactive status error", async () => {
+      setRedisEnv();
+      stubRedisResponse({
+        result: JSON.stringify({
+          ciphertext: "AA==",
+          iv: "AA==",
+          tag: "AA==",
+          keyVersion: "v1",
+          status: "suspended",
+        }),
+      });
+
+      const err = await resolveInstallationBYOKConfig(11).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect((err as { installationId: number }).installationId).toBe(11);
+      expect((err as { correlationId: string }).correlationId).toMatch(UUID_RE);
+    });
+
+    it("attaches installationId and correlationId to provider parse error", async () => {
+      const masterKey = randomBytes(32);
+      setRedisEnv();
+      setMasterKeys({ v1: masterKey.toString("hex") });
+      stubRedisResponse({
+        result: buildEnvelope({ apiKey: "sk", provider: "unsupported-provider" }, masterKey),
+      });
+
+      const err = await resolveInstallationBYOKConfig(55).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect((err as { installationId: number }).installationId).toBe(55);
+      expect((err as { correlationId: string }).correlationId).toMatch(UUID_RE);
+    });
+
+    it("produces distinct correlationIds for separate calls", async () => {
+      setRedisEnv();
+      stubRedisResponse({}, { ok: false, status: 500 });
+
+      const [err1, err2] = await Promise.all([
+        resolveInstallationBYOKConfig(1).catch((e: unknown) => e),
+        resolveInstallationBYOKConfig(1).catch((e: unknown) => e),
+      ]);
+
+      const id1 = (err1 as { correlationId: string }).correlationId;
+      const id2 = (err2 as { correlationId: string }).correlationId;
+      expect(id1).toMatch(UUID_RE);
+      expect(id2).toMatch(UUID_RE);
+      expect(id1).not.toBe(id2);
+    });
+  });
 });

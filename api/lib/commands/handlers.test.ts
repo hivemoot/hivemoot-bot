@@ -728,6 +728,7 @@ describe("executeCommand", () => {
       expect(commentArgs.body).toContain("governance exits are misconfigured");
       expect(commentArgs.body).toContain("governance.proposals.discussion.exits");
       expect(commentArgs.body).toContain("silently discarded");
+      expect(commentArgs.body).toContain("fall back to manual mode");
     });
 
     it("should report Config as advisory when type:auto has non-finite afterMinutes (e.g. .inf)", async () => {
@@ -748,6 +749,27 @@ describe("executeCommand", () => {
       expect(commentArgs.body).toContain("governance exits are misconfigured");
       expect(commentArgs.body).toContain("governance.proposals.voting.exits");
       expect(commentArgs.body).toContain("silently discarded");
+      expect(commentArgs.body).toContain("fall back to manual mode");
+    });
+
+    it("should not say 'fall back to manual mode' when a valid auto exit exists alongside a bad one", async () => {
+      const ctx = createCtx({ verb: "doctor" });
+      ctx.octokit.rest.repos.getContent.mockResolvedValueOnce({
+        data: {
+          type: "file",
+          content: Buffer.from(
+            "version: 1\ngovernance:\n  proposals:\n    voting:\n      exits:\n        - type: auto\n          afterMinutes: 1440\n        - type: auto\n          afterMinutes: .inf\n",
+          ).toString("base64"),
+        },
+      });
+
+      await executeCommand(ctx);
+
+      const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
+      expect(commentArgs.body).toContain("[!] **Config**");
+      expect(commentArgs.body).toContain("governance exits are misconfigured");
+      expect(commentArgs.body).toContain("silently discarded");
+      expect(commentArgs.body).not.toContain("fall back to manual mode");
     });
 
     it("should report Config as advisory for multiple phases with broken auto exits", async () => {

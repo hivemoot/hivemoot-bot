@@ -1237,19 +1237,23 @@ function detectDiscardedAutoExits(rawConfig: unknown): string[] {
       continue;
     }
 
-    // type:auto entries without a valid afterMinutes are silently skipped
-    const hasBadAuto = exits.some(
-      (e) =>
-        typeof e === "object" &&
-        e !== null &&
-        !Array.isArray(e) &&
-        (e as Record<string, unknown>).type === "auto" &&
-        (typeof (e as Record<string, unknown>).afterMinutes !== "number" ||
-          !Number.isFinite((e as Record<string, unknown>).afterMinutes as number)),
-    );
+    // type:auto entries with a missing or non-finite afterMinutes are silently skipped by
+    // the parser. If all auto entries are bad, the phase falls back to manual mode.
+    const isAutoEntry = (e: unknown): e is Record<string, unknown> =>
+      typeof e === "object" && e !== null && !Array.isArray(e) &&
+      (e as Record<string, unknown>).type === "auto";
+    const isBadAuto = (e: unknown): boolean =>
+      isAutoEntry(e) &&
+      (typeof (e as Record<string, unknown>).afterMinutes !== "number" ||
+        !Number.isFinite((e as Record<string, unknown>).afterMinutes as number));
+    const hasBadAuto = exits.some(isBadAuto);
     if (hasBadAuto) {
+      const hasValidAuto = exits.some((e) => isAutoEntry(e) && !isBadAuto(e));
+      const suffix = hasValidAuto
+        ? ""
+        : " — the phase will fall back to manual mode";
       advisories.push(
-        `${phasePrefix} has a \`type: auto\` entry without \`afterMinutes\` — it will be silently discarded and fall back to manual mode`,
+        `${phasePrefix} has a \`type: auto\` entry with a missing or invalid \`afterMinutes\` — it will be silently discarded${suffix}`,
       );
     }
   }

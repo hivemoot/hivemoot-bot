@@ -345,6 +345,10 @@ describe("Queen Bot", () => {
         payload: {},
       });
 
+      // Label-bootstrap and onboarding each independently paginate the fallback
+      // repo list. Label-bootstrap runs first (calls 1 + 2), onboarding runs
+      // second (calls 3 + 4). Both handlers share the same octokit so
+      // listReposAccessibleToInstallation is called 4 times total.
       expect(octokit.rest.apps.listReposAccessibleToInstallation).toHaveBeenNthCalledWith(1, {
         per_page: 100,
         page: 1,
@@ -353,7 +357,7 @@ describe("Queen Bot", () => {
         per_page: 100,
         page: 2,
       });
-      expect(octokit.rest.apps.listReposAccessibleToInstallation).toHaveBeenCalledTimes(2);
+      expect(octokit.rest.apps.listReposAccessibleToInstallation).toHaveBeenCalledTimes(4);
       expect(octokit.rest.issues.createLabel).toHaveBeenCalledWith(
         expect.objectContaining({ repo: "repo-1" })
       );
@@ -2141,6 +2145,39 @@ describe("Queen Bot", () => {
           draft: false,
           mergeable: true,
         })
+      );
+    });
+
+    it("should cancel queued squash on pull_request.synchronize when the label is present", async () => {
+      const { handlers } = createWebhookHarness();
+      vi.mocked(getLinkedIssues).mockResolvedValue([]);
+      vi.mocked(loadRepositoryConfig).mockResolvedValue(prConfig as any);
+      const octokit = mkOctokit();
+
+      await handlers.get("pull_request.synchronize")!({
+        octokit,
+        log: mkLog(),
+        payload: {
+          pull_request: {
+            number: 1,
+            base: { ref: "main" },
+            labels: [{ name: "hivemoot:squash-queued" }],
+          },
+          repository: testRepo,
+        },
+      });
+
+      expect(octokit.rest.issues.removeLabel).toHaveBeenCalledWith(
+        expect.objectContaining({
+          issue_number: 1,
+          name: "hivemoot:squash-queued",
+        }),
+      );
+      expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          issue_number: 1,
+          body: "Queued squash cancelled because new commits were pushed. Run `/squash` again when the branch is ready.",
+        }),
       );
     });
 

@@ -340,6 +340,7 @@ export const LABELS = {
   IMPLEMENTED: "hivemoot:implemented",
   NEEDS_HUMAN: "hivemoot:needs-human",
   MERGE_READY: "hivemoot:merge-ready",
+  SQUASH_QUEUED: "hivemoot:squash-queued",
   AUTOMERGE: "hivemoot:automerge",
 } as const;
 
@@ -461,6 +462,11 @@ export const REQUIRED_REPOSITORY_LABELS: readonly RepositoryLabelDefinition[] = 
     name: LABELS.MERGE_READY,
     color: "2ea043",
     description: "Implementation PR meets merge-readiness checks.",
+  },
+  {
+    name: LABELS.SQUASH_QUEUED,
+    color: "fbca04",
+    description: "PR is queued for automatic squash retry when CI completes.",
   },
   {
     name: LABELS.AUTOMERGE,
@@ -614,8 +620,10 @@ Issue #${issueNumber} hasn't passed voting. This PR won't be tracked until it do
   issueReadyNeedsUpdate: (issueNumber: number) =>
     `# 🐝 Update Needed ⏳
 
-Issue #${issueNumber} is approved, but this PR was opened before approval.
-Add a new commit or leave a comment to activate it for implementation tracking.${SIGNATURE}`,
+Issue #${issueNumber} passed voting, but this PR was opened before approval and was not automatically activated for implementation tracking.
+
+Pre-ready PRs require a fresh post-vote signal so implementation tracking reflects the approved proposal.
+Depending on this repo's intake rules, activate by adding a new commit/comment or by meeting trusted-reviewer approval requirements.${SIGNATURE}`,
 
   /**
    * Posted to a PR when it becomes stale (no activity for threshold days).

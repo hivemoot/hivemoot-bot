@@ -746,7 +746,7 @@ export async function generateStandupLLMContent(
             }
             return repaired;
           },
-          maxTokens: config.maxTokens,
+          maxOutputTokens: config.maxTokens,
           temperature: 0.4,
           maxRetries: 0, // Disable SDK retry; our wrapper handles rate-limits
           abortSignal: AbortSignal.timeout(LLM_DEFAULTS.perCallTimeoutMs),

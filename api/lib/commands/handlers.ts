@@ -1810,7 +1810,11 @@ export async function autoGatherIfEligible(params: AutoGatherParams): Promise<vo
   try {
     const context = await issues.getIssueContext(ref);
     const generator = new BlueprintGenerator();
-    const result = await generator.generate(context);
+    const result = await generator.generate(
+      context,
+      undefined,
+      installationId !== undefined ? { installationId } : undefined
+    );
     const triggerLabel = "auto-gather";
 
     let blueprintContent: string;

@@ -1683,4 +1683,24 @@ describe("autoGatherIfEligible", () => {
     expect(params.log.warn).toHaveBeenCalled();
     expect(mockIssueOpsLocal.comment).not.toHaveBeenCalled();
   });
+
+  it("should pass installationId to generator for BYOK resolution", async () => {
+    const params = createAutoGatherParams({ installationId: 42 });
+    await autoGatherIfEligible(params);
+    expect(mockBlueprintGenerate).toHaveBeenCalledWith(
+      expect.anything(),
+      undefined,
+      { installationId: 42 }
+    );
+  });
+
+  it("should pass undefined model options when installationId is absent", async () => {
+    const params = createAutoGatherParams({ installationId: undefined });
+    await autoGatherIfEligible(params);
+    expect(mockBlueprintGenerate).toHaveBeenCalledWith(
+      expect.anything(),
+      undefined,
+      undefined
+    );
+  });
 });

@@ -21,7 +21,7 @@ function createMockPrs(overrides: Partial<Record<keyof PROperations, unknown>> =
   return {
     getLabels: vi.fn().mockResolvedValue(["hivemoot:candidate"]),
     getApproverLogins: vi.fn().mockResolvedValue(new Set<string>()),
-    get: vi.fn().mockResolvedValue({ headSha: "abc123", mergeable: true }),
+    get: vi.fn().mockResolvedValue({ headSha: "abc123", mergeable: true, draft: false }),
     getCheckRunsForRef: vi.fn().mockResolvedValue({ totalCount: 0, checkRuns: [] }),
     getCombinedStatus: vi.fn().mockResolvedValue({ state: "pending", totalCount: 0 }),
     addLabels: vi.fn().mockResolvedValue(undefined),
@@ -83,6 +83,82 @@ describe("evaluateMergeReadiness", () => {
 
       expect(result).toEqual({ action: "skipped", reason: "no implementation label" });
       expect(prs.getLabels).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("draft check", () => {
+    it("should skip when draft is pre-fetched as true", async () => {
+      const prs = createMockPrs();
+      const result = await evaluateMergeReadiness(buildParams({ prs, draft: true }));
+
+      expect(result).toEqual({ action: "skipped", reason: "PR is draft" });
+      expect(prs.getApproverLogins).not.toHaveBeenCalled();
+      expect(prs.getCheckRunsForRef).not.toHaveBeenCalled();
+    });
+
+    it("should remove merge-ready when draft is pre-fetched as true and label is present", async () => {
+      const prs = createMockPrs({
+        getLabels: vi.fn().mockResolvedValue(["hivemoot:candidate", "hivemoot:merge-ready"]),
+      });
+      const result = await evaluateMergeReadiness(buildParams({ prs, draft: true }));
+
+      expect(result).toEqual({ action: "removed" });
+      expect(prs.removeLabel).toHaveBeenCalledWith(defaultRef, "hivemoot:merge-ready");
+    });
+
+    it("should remove merge-ready when draft is discovered via prs.get()", async () => {
+      const prs = createMockPrs({
+        getLabels: vi.fn().mockResolvedValue(["hivemoot:candidate", "hivemoot:merge-ready"]),
+        getApproverLogins: vi.fn().mockResolvedValue(new Set(["alice"])),
+        get: vi.fn().mockResolvedValue({ headSha: "abc123", mergeable: true, draft: true }),
+      });
+      const result = await evaluateMergeReadiness(buildParams({ prs }));
+
+      expect(result).toEqual({ action: "removed" });
+      expect(prs.removeLabel).toHaveBeenCalledWith(defaultRef, "hivemoot:merge-ready");
+      expect(prs.getCheckRunsForRef).not.toHaveBeenCalled();
+    });
+
+    it("should skip when draft is discovered via prs.get() and merge-ready is absent", async () => {
+      const prs = createMockPrs({
+        getLabels: vi.fn().mockResolvedValue(["hivemoot:candidate"]),
+        getApproverLogins: vi.fn().mockResolvedValue(new Set(["alice"])),
+        get: vi.fn().mockResolvedValue({ headSha: "abc123", mergeable: true, draft: true }),
+      });
+      const result = await evaluateMergeReadiness(buildParams({ prs }));
+
+      expect(result).toEqual({ action: "skipped", reason: "PR is draft" });
+      expect(prs.removeLabel).not.toHaveBeenCalled();
+      expect(prs.getCheckRunsForRef).not.toHaveBeenCalled();
+    });
+
+    it("should fetch PR draft when headSha is pre-fetched and draft is missing", async () => {
+      const prs = createMockPrs({
+        getLabels: vi.fn().mockResolvedValue(["hivemoot:candidate"]),
+        getApproverLogins: vi.fn().mockResolvedValue(new Set(["alice"])),
+        get: vi.fn().mockResolvedValue({ headSha: "abc123", mergeable: true, draft: true }),
+      });
+      const result = await evaluateMergeReadiness(
+        buildParams({ prs, headSha: "precomputed-sha" })
+      );
+
+      expect(result).toEqual({ action: "skipped", reason: "PR is draft" });
+      expect(prs.get).toHaveBeenCalledWith(defaultRef);
+      expect(prs.getCheckRunsForRef).not.toHaveBeenCalled();
+    });
+
+    it("should skip PR fetch when both headSha and draft are pre-fetched", async () => {
+      const prs = createMockPrs({
+        getApproverLogins: vi.fn().mockResolvedValue(new Set(["alice"])),
+        getCheckRunsForRef: vi.fn().mockResolvedValue({ totalCount: 0, checkRuns: [] }),
+        getCombinedStatus: vi.fn().mockResolvedValue({ state: "pending", totalCount: 0 }),
+      });
+      const result = await evaluateMergeReadiness(
+        buildParams({ prs, headSha: "precomputed-sha", draft: false })
+      );
+
+      expect(result.action).toBe("added");
+      expect(prs.get).not.toHaveBeenCalled();
     });
   });
 
@@ -186,14 +262,14 @@ describe("evaluateMergeReadiness", () => {
       expect(result.action).toBe("added");
     });
 
-    it("should skip mergeable check when headSha is pre-fetched (webhook path)", async () => {
+    it("should skip mergeable check when headSha and draft are pre-fetched (webhook path)", async () => {
       const prs = createMockPrs({
         getApproverLogins: vi.fn().mockResolvedValue(new Set(["alice"])),
         getCheckRunsForRef: vi.fn().mockResolvedValue({ totalCount: 0, checkRuns: [] }),
         getCombinedStatus: vi.fn().mockResolvedValue({ state: "pending", totalCount: 0 }),
       });
       const result = await evaluateMergeReadiness(
-        buildParams({ prs, headSha: "precomputed-sha" })
+        buildParams({ prs, headSha: "precomputed-sha", draft: false })
       );
 
       expect(result.action).toBe("added");
@@ -385,9 +461,10 @@ describe("evaluateMergeReadiness", () => {
       expect(params.prs.removeLabel).toHaveBeenCalledWith(defaultRef, "hivemoot:merge-ready");
     });
 
-    it("should use pre-fetched headSha when provided", async () => {
+    it("should use pre-fetched headSha for CI even when draft requires PR fetch", async () => {
       const prs = createMockPrs({
         getApproverLogins: vi.fn().mockResolvedValue(new Set(["alice"])),
+        get: vi.fn().mockResolvedValue({ headSha: "different-sha", mergeable: true, draft: false }),
         getCheckRunsForRef: vi.fn().mockResolvedValue({ totalCount: 0, checkRuns: [] }),
         getCombinedStatus: vi.fn().mockResolvedValue({ state: "pending", totalCount: 0 }),
       });
@@ -396,7 +473,7 @@ describe("evaluateMergeReadiness", () => {
       );
 
       expect(result.action).toBe("added");
-      expect(prs.get).not.toHaveBeenCalled();
+      expect(prs.get).toHaveBeenCalledWith(defaultRef);
       expect(prs.getCheckRunsForRef).toHaveBeenCalledWith(
         "test-org",
         "test-repo",

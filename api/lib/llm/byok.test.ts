@@ -554,4 +554,17 @@ describe("resolveInstallationBYOKConfig", () => {
       "Unsupported BYOK provider: vertex",
     );
   });
+
+  it("throws when provider is mistral (removed from BYOK allowlist)", async () => {
+    const masterKey = randomBytes(32);
+    setRedisEnv();
+    setMasterKeys({ v1: masterKey.toString("hex") });
+    stubRedisResponse({
+      result: buildEnvelope({ apiKey: "sk", provider: "mistral" }, masterKey),
+    });
+
+    await expect(resolveInstallationBYOKConfig(7)).rejects.toThrow(
+      "Unsupported BYOK provider: mistral",
+    );
+  });
 });

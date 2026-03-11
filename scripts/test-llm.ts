@@ -1,8 +1,7 @@
 /**
  * Local LLM Debug Script
  *
- * Tests generateObject with different Gemini models and configurations
- * to identify why "No object generated" errors occur in production.
+ * Tests generateObject with different Gemini models to verify configuration.
  *
  * Usage:
  *   GOOGLE_API_KEY=... npx tsx scripts/test-llm.ts
@@ -53,18 +52,11 @@ BODY RULES: 1-3 sentences explaining WHY.`;
 interface TestConfig {
   name: string;
   model: string;
-  structuredOutputs?: boolean;
 }
 
 const tests: TestConfig[] = [
-  // Test 1: The production config (gemini-3-flash-preview, default structuredOutputs=true)
-  { name: "gemini-3-flash-preview (native)", model: "gemini-3-flash-preview" },
-  // Test 2: Same model, structuredOutputs disabled (mirrors production fix)
-  { name: "gemini-3-flash-preview (prompt-based)", model: "gemini-3-flash-preview", structuredOutputs: false },
-  // Test 3: Older stable model
-  { name: "gemini-2.0-flash (native)", model: "gemini-2.0-flash" },
-  // Test 4: Older model, structuredOutputs disabled
-  { name: "gemini-2.0-flash (prompt-based)", model: "gemini-2.0-flash", structuredOutputs: false },
+  { name: "gemini-3-flash-preview", model: "gemini-3-flash-preview" },
+  { name: "gemini-2.0-flash", model: "gemini-2.0-flash" },
 ];
 
 async function runTest(config: TestConfig): Promise<void> {
@@ -73,18 +65,14 @@ async function runTest(config: TestConfig): Promise<void> {
   console.log(`${label} Testing...`);
 
   try {
-    // Mirror production: structuredOutputs is set at model construction,
-    // not via providerOptions in generateObject.
-    const model = config.structuredOutputs === false
-      ? google(config.model, { structuredOutputs: false })
-      : google(config.model);
+    const model = google(config.model);
 
     const result = await generateObject({
       model,
       schema: simpleSchema,
       system: systemPrompt,
       prompt: testPrompt,
-      maxTokens: 500,
+      maxOutputTokens: 500,
       temperature: 0.3,
       maxRetries: 0,
     });

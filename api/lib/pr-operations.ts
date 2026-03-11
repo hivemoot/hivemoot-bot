@@ -173,6 +173,7 @@ export interface PRClient {
           total_count: number;
           check_runs: Array<{
             id: number;
+            name?: string;
             status: string;
             conclusion: string | null;
           }>;
@@ -317,12 +318,13 @@ export class PROperations {
   }
 
   /**
-   * Remove all transient governance labels (implementation, merge-ready) from a PR.
+   * Remove all transient governance labels from a PR.
    * Safe to call on PRs that don't have these labels — removeLabel handles 404s.
    */
   async removeGovernanceLabels(ref: PRRef): Promise<void> {
     await this.removeLabel(ref, LABELS.IMPLEMENTATION);
     await this.removeLabel(ref, LABELS.MERGE_READY);
+    await this.removeLabel(ref, LABELS.SQUASH_QUEUED);
     await this.removeLabel(ref, LABELS.AUTOMERGE);
   }
 
@@ -621,7 +623,7 @@ export class PROperations {
     ref: string
   ): Promise<{
     totalCount: number;
-    checkRuns: Array<{ id: number; status: string; conclusion: string | null }>;
+    checkRuns: Array<{ id: number; name?: string; status: string; conclusion: string | null }>;
   }> {
     const { data } = await this.client.rest.checks.listForRef({
       owner,
@@ -643,13 +645,17 @@ export class PROperations {
   ): Promise<{
     state: string;
     totalCount: number;
+    statuses: Array<{
+      state: string;
+      context: string;
+    }>;
   }> {
     const { data } = await this.client.rest.repos.getCombinedStatusForRef({
       owner,
       repo,
       ref,
     });
-    return { state: data.state, totalCount: data.total_count };
+    return { state: data.state, totalCount: data.total_count, statuses: data.statuses };
   }
 
   /**

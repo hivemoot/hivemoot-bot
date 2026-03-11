@@ -58,6 +58,7 @@ export interface PreflightCheckItem {
   passed: boolean;
   severity: PreflightSeverity;
   detail: string;
+  pendingTargets?: string[];
 }
 
 export interface PreflightResult {
@@ -220,21 +221,22 @@ async function evaluateCI(
 
   // Check Runs: all must be completed with a passing conclusion
   const failingChecks: string[] = [];
-  let pendingCount = 0;
+  const pendingChecks: string[] = [];
   for (const checkRun of checksResult.checkRuns) {
     if (checkRun.status !== "completed") {
-      pendingCount++;
+      pendingChecks.push(checkRun.name ?? `check #${checkRun.id}`);
     } else if (!checkRun.conclusion || !PASSING_CHECK_CONCLUSIONS.has(checkRun.conclusion)) {
-      failingChecks.push(`check #${checkRun.id}: ${checkRun.conclusion ?? "no conclusion"}`);
+      failingChecks.push(`${checkRun.name ?? `check #${checkRun.id}`}: ${checkRun.conclusion ?? "no conclusion"}`);
     }
   }
 
-  if (pendingCount > 0) {
+  if (pendingChecks.length > 0) {
     return {
       name: "CI checks passing",
       passed: false,
       severity: "hard",
-      detail: `${pendingCount} check run(s) still in progress`,
+      detail: `Still running: ${pendingChecks.join(", ")}`,
+      pendingTargets: pendingChecks,
     };
   }
 
@@ -247,13 +249,31 @@ async function evaluateCI(
     };
   }
 
+  const pendingStatuses = (statusResult.statuses ?? [])
+    .filter((status) => status.state === "pending")
+    .map((status) => status.context)
+    .filter((context) => context.length > 0);
+
+  if (pendingStatuses.length > 0) {
+    return {
+      name: "CI checks passing",
+      passed: false,
+      severity: "hard",
+      detail: `Still running: ${pendingStatuses.join(", ")}`,
+      pendingTargets: pendingStatuses,
+    };
+  }
+
   // Legacy Status API
   if (statusResult.totalCount > 0 && statusResult.state !== "success") {
     return {
       name: "CI checks passing",
       passed: false,
       severity: "hard",
-      detail: `Legacy status: ${statusResult.state}`,
+      detail: statusResult.state === "pending"
+        ? "Still running: legacy status checks"
+        : `Legacy status: ${statusResult.state}`,
+      pendingTargets: statusResult.state === "pending" ? ["legacy status checks"] : undefined,
     };
   }
 

@@ -197,6 +197,8 @@ describe("executeCommand", () => {
         merged: false,
         headSha: "head-sha",
       }),
+      addLabels: vi.fn().mockResolvedValue(undefined),
+      removeLabel: vi.fn().mockResolvedValue(undefined),
     };
     mockRepoConfig = {
       version: 1,

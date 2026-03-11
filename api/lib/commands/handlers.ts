@@ -1637,7 +1637,17 @@ const COMMAND_HANDLERS: Record<string, (ctx: CommandContext) => Promise<CommandR
 export async function executeCommand(ctx: CommandContext): Promise<CommandResult> {
   const handler = COMMAND_HANDLERS[ctx.verb];
   if (!handler) {
-    // Unknown command — silent ignore (not a command we handle)
+    // Unknown command — check auth before deciding whether to reply.
+    // Authorized users get a command list; unauthorized users get silent ignore (per #81).
+    const authorization = await isAuthorized(ctx);
+    if (authorization.authorized) {
+      const available = Object.keys(COMMAND_HANDLERS)
+        .map((v) => `\`/${v}\``)
+        .join(", ");
+      await react(ctx, "confused");
+      await reply(ctx, `\`/${ctx.verb}\` is not a recognized command. Available commands: ${available}`);
+      return { status: "rejected", reason: `Unknown command: /${ctx.verb}` };
+    }
     return { status: "ignored" };
   }
 

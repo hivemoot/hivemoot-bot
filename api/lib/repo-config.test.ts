@@ -1510,7 +1510,7 @@ governance: ${governanceValue}
         }
       });
 
-      it("should return pr with defaults when pr: section is present but empty", async () => {
+      it("should return pr config with stale cleanup disabled when pr: section is present but empty", async () => {
         const configYaml = `
 governance:
   pr: {}
@@ -1526,9 +1526,30 @@ governance:
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
 
         expect(config.governance.pr).not.toBeNull();
-        expect(config.governance.pr!.staleDays).toBe(PR_STALE_THRESHOLD_DAYS);
+        expect(config.governance.pr!.staleDays).toBeNull();
         expect(config.governance.pr!.maxPRsPerIssue).toBe(MAX_PRS_PER_ISSUE);
         expect(config.governance.pr!.intake).toEqual([{ method: "auto" }]);
+      });
+
+      it("should keep stale cleanup disabled when other pr settings are configured without staleDays", async () => {
+        const configYaml = `
+governance:
+  pr:
+    maxPRsPerIssue: 5
+`;
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(configYaml),
+            encoding: "base64",
+          },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
+        expect(config.governance.pr).not.toBeNull();
+        expect(config.governance.pr!.staleDays).toBeNull();
+        expect(config.governance.pr!.maxPRsPerIssue).toBe(5);
       });
 
       it("should use default when staleDays is an object", async () => {

@@ -304,9 +304,77 @@ describe("executeCommand", () => {
   });
 
   describe("unknown commands", () => {
-    it("should ignore unknown command verbs", async () => {
-      const result = await executeCommand(createCtx({ verb: "unknown" }));
+    it("should reject unknown command with available commands list for authorized users", async () => {
+      const ctx = createCtx({ verb: "unknown" });
+      const result = await executeCommand(ctx);
+
+      expect(result.status).toBe("rejected");
+      expect(result).toHaveProperty("reason", "Unknown command: /unknown");
+
+      // Should react with confused and post a reply listing available commands
+      const reactionCalls = ctx.octokit.rest.reactions.createForIssueComment.mock.calls;
+      expect(reactionCalls.some((c: unknown[]) => (c[0] as { content: string }).content === "confused")).toBe(true);
+
+      const replyCall = ctx.octokit.rest.issues.createComment.mock.calls[0];
+      expect(replyCall[0].body).toContain("Unknown command `/unknown`");
+      expect(replyCall[0].body).toContain("`/vote`");
+      expect(replyCall[0].body).toContain("`/implement`");
+      expect(replyCall[0].body).toContain("`/preflight`");
+    });
+
+    it("should skip unknown command on webhook retry (confused reaction exists)", async () => {
+      const octokit = createMockOctokit();
+      // Allow resolveAppBotLogin to identify the bot
+      octokit.rest.issues.listComments.mockResolvedValue({
+        data: [
+          {
+            user: { login: "hivemoot[bot]" },
+            performed_via_github_app: { id: 12345, name: "Hivemoot" },
+          },
+        ],
+      });
+      // Simulate a previous confused reaction from the bot: eyes empty, confused present
+      octokit.rest.reactions.listForIssueComment
+        .mockResolvedValueOnce({ data: [] }) // eyes check — none
+        .mockResolvedValueOnce({
+          data: [{ user: { login: "hivemoot[bot]" } }],
+        }); // confused check — bot reacted
+
+      const ctx = createCtx({ verb: "unknown", octokit });
+      const result = await executeCommand(ctx);
+
       expect(result).toEqual({ status: "ignored" });
+      // Should NOT post a duplicate reply or reaction
+      expect(octokit.rest.reactions.createForIssueComment).not.toHaveBeenCalled();
+      expect(octokit.rest.issues.createComment).not.toHaveBeenCalled();
+    });
+
+    it("should silently ignore unknown command from unauthorized users", async () => {
+      const ctx = createCtx({
+        verb: "unknown",
+        octokit: createMockOctokit("read"),
+      });
+      const result = await executeCommand(ctx);
+
+      expect(result).toEqual({ status: "ignored" });
+      expect(ctx.octokit.rest.reactions.createForIssueComment).not.toHaveBeenCalled();
+      expect(ctx.octokit.rest.issues.createComment).not.toHaveBeenCalled();
+    });
+
+    it("should treat inherited verbs as unknown commands", async () => {
+      const ctx = createCtx({ verb: "constructor" });
+      const result = await executeCommand(ctx);
+
+      expect(result.status).toBe("rejected");
+      expect(result).toHaveProperty("reason", "Unknown command: /constructor");
+
+      const reactionCalls = ctx.octokit.rest.reactions.createForIssueComment.mock.calls;
+      expect(reactionCalls).toHaveLength(1);
+      expect(reactionCalls[0][0].content).toBe("confused");
+
+      const replyCall = ctx.octokit.rest.issues.createComment.mock.calls[0];
+      expect(replyCall[0].body).toContain("Unknown command `/constructor`");
+      expect(replyCall[0].body).toContain("Available commands:");
     });
   });
 
@@ -450,6 +518,63 @@ describe("executeCommand", () => {
           removeLabel: LABELS.NEEDS_HUMAN,
           addLabel: LABELS.READY_TO_IMPLEMENT,
         }),
+      );
+    });
+
+    it("should remove extra phase labels after transition", async () => {
+      const ctx = createCtx({
+        verb: "implement",
+        issueLabels: [{ name: LABELS.VOTING }, { name: LABELS.NEEDS_HUMAN }],
+      });
+      const result = await executeCommand(ctx);
+
+      expect(result.status).toBe("executed");
+      expect(mockIssueOps.transition).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          removeLabel: LABELS.VOTING,
+          addLabel: LABELS.READY_TO_IMPLEMENT,
+        }),
+      );
+      expect(mockIssueOps.removeLabel).toHaveBeenCalledTimes(1);
+      expect(mockIssueOps.removeLabel).toHaveBeenCalledWith(
+        expect.anything(),
+        LABELS.NEEDS_HUMAN,
+      );
+    });
+
+    it("should continue when extra phase label was already removed", async () => {
+      const notFoundError = Object.assign(new Error("Not Found"), { status: 404 });
+      mockIssueOps.removeLabel.mockRejectedValueOnce(notFoundError);
+      const ctx = createCtx({
+        verb: "implement",
+        issueLabels: [{ name: LABELS.VOTING }, { name: LABELS.NEEDS_HUMAN }],
+      });
+      const result = await executeCommand(ctx);
+
+      expect(result.status).toBe("executed");
+      expect(mockIssueOps.removeLabel).toHaveBeenCalledWith(
+        expect.anything(),
+        LABELS.NEEDS_HUMAN,
+      );
+      expect(ctx.log.warn).not.toHaveBeenCalled();
+    });
+
+    it("should warn and continue when extra phase label cleanup fails", async () => {
+      mockIssueOps.removeLabel.mockRejectedValueOnce(new Error("label cleanup failed"));
+      const ctx = createCtx({
+        verb: "implement",
+        issueLabels: [{ name: LABELS.VOTING }, { name: LABELS.NEEDS_HUMAN }],
+      });
+      const result = await executeCommand(ctx);
+
+      expect(result.status).toBe("executed");
+      expect(ctx.log.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          issueNumber: 42,
+          label: LABELS.NEEDS_HUMAN,
+        }),
+        "Failed to remove extra phase label after /implement transition",
       );
     });
 
@@ -710,6 +835,145 @@ describe("executeCommand", () => {
       const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
       expect(commentArgs.body).toContain("**PR Workflow**: No trusted reviewers configured");
       expect(commentArgs.body).toContain("**Standup**: Category `Hivemoot Reports` is available");
+    });
+
+    it("should report Config as advisory when discussion exits have type:auto without afterMinutes", async () => {
+      const ctx = createCtx({ verb: "doctor" });
+      ctx.octokit.rest.repos.getContent.mockResolvedValueOnce({
+        data: {
+          type: "file",
+          content: Buffer.from(
+            "version: 1\ngovernance:\n  proposals:\n    discussion:\n      exits:\n        - type: auto\n",
+          ).toString("base64"),
+        },
+      });
+
+      await executeCommand(ctx);
+
+      const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
+      expect(commentArgs.body).toContain("[!] **Config**");
+      expect(commentArgs.body).toContain("governance exits are misconfigured");
+      expect(commentArgs.body).toContain("governance.proposals.discussion.exits");
+      expect(commentArgs.body).toContain("silently discarded");
+      expect(commentArgs.body).toContain("fall back to manual mode");
+    });
+
+    it("should report Config as advisory when type:auto has non-finite afterMinutes (e.g. .inf)", async () => {
+      const ctx = createCtx({ verb: "doctor" });
+      ctx.octokit.rest.repos.getContent.mockResolvedValueOnce({
+        data: {
+          type: "file",
+          content: Buffer.from(
+            "version: 1\ngovernance:\n  proposals:\n    voting:\n      exits:\n        - type: auto\n          afterMinutes: .inf\n",
+          ).toString("base64"),
+        },
+      });
+
+      await executeCommand(ctx);
+
+      const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
+      expect(commentArgs.body).toContain("[!] **Config**");
+      expect(commentArgs.body).toContain("governance exits are misconfigured");
+      expect(commentArgs.body).toContain("governance.proposals.voting.exits");
+      expect(commentArgs.body).toContain("silently discarded");
+      expect(commentArgs.body).toContain("fall back to manual mode");
+    });
+
+    it("should not say 'fall back to manual mode' when a valid auto exit exists alongside a bad one", async () => {
+      const ctx = createCtx({ verb: "doctor" });
+      ctx.octokit.rest.repos.getContent.mockResolvedValueOnce({
+        data: {
+          type: "file",
+          content: Buffer.from(
+            "version: 1\ngovernance:\n  proposals:\n    voting:\n      exits:\n        - type: auto\n          afterMinutes: 1440\n        - type: auto\n          afterMinutes: .inf\n",
+          ).toString("base64"),
+        },
+      });
+
+      await executeCommand(ctx);
+
+      const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
+      expect(commentArgs.body).toContain("[!] **Config**");
+      expect(commentArgs.body).toContain("governance exits are misconfigured");
+      expect(commentArgs.body).toContain("silently discarded");
+      expect(commentArgs.body).not.toContain("fall back to manual mode");
+    });
+
+    it("should report Config as advisory for multiple phases with broken auto exits", async () => {
+      const ctx = createCtx({ verb: "doctor" });
+      ctx.octokit.rest.repos.getContent.mockResolvedValueOnce({
+        data: {
+          type: "file",
+          content: Buffer.from(
+            "version: 1\ngovernance:\n  proposals:\n    voting:\n      exits:\n        - type: auto\n    extendedVoting:\n      exits:\n        - type: auto\n",
+          ).toString("base64"),
+        },
+      });
+
+      await executeCommand(ctx);
+
+      const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
+      expect(commentArgs.body).toContain("[!] **Config**");
+      expect(commentArgs.body).toContain("governance.proposals.voting.exits");
+      expect(commentArgs.body).toContain("governance.proposals.extendedVoting.exits");
+    });
+
+    it("should report Config as advisory when exits is not an array", async () => {
+      const ctx = createCtx({ verb: "doctor" });
+      ctx.octokit.rest.repos.getContent.mockResolvedValueOnce({
+        data: {
+          type: "file",
+          content: Buffer.from(
+            "version: 1\ngovernance:\n  proposals:\n    discussion:\n      exits: auto\n",
+          ).toString("base64"),
+        },
+      });
+
+      await executeCommand(ctx);
+
+      const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
+      expect(commentArgs.body).toContain("[!] **Config**");
+      expect(commentArgs.body).toContain("governance exits are misconfigured");
+      expect(commentArgs.body).toContain("governance.proposals.discussion.exits");
+      expect(commentArgs.body).toContain("must be an array");
+    });
+
+    it("should report Config as advisory when exits mixes manual and auto entries", async () => {
+      const ctx = createCtx({ verb: "doctor" });
+      ctx.octokit.rest.repos.getContent.mockResolvedValueOnce({
+        data: {
+          type: "file",
+          content: Buffer.from(
+            "version: 1\ngovernance:\n  proposals:\n    voting:\n      exits:\n        - type: auto\n          afterMinutes: 1440\n        - type: manual\n",
+          ).toString("base64"),
+        },
+      });
+
+      await executeCommand(ctx);
+
+      const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
+      expect(commentArgs.body).toContain("[!] **Config**");
+      expect(commentArgs.body).toContain("governance exits are misconfigured");
+      expect(commentArgs.body).toContain("governance.proposals.voting.exits");
+      expect(commentArgs.body).toContain("mixes");
+    });
+
+    it("should report Config as pass when auto exits have valid afterMinutes", async () => {
+      const ctx = createCtx({ verb: "doctor" });
+      ctx.octokit.rest.repos.getContent.mockResolvedValueOnce({
+        data: {
+          type: "file",
+          content: Buffer.from(
+            "version: 1\ngovernance:\n  proposals:\n    discussion:\n      exits:\n        - type: auto\n          afterMinutes: 1440\n",
+          ).toString("base64"),
+        },
+      });
+
+      await executeCommand(ctx);
+
+      const [commentArgs] = ctx.octokit.rest.issues.createComment.mock.calls[0];
+      expect(commentArgs.body).toContain("[x] **Config**");
+      expect(commentArgs.body).not.toContain("governance exits are misconfigured");
     });
   });
 
@@ -1450,7 +1714,7 @@ describe("executeCommand", () => {
       expect(result.status).toBe("executed");
     });
 
-    it("should paginate eyes reactions and skip when bot is found on later page", async () => {
+    it("should skip when bot eyes reaction is in the first 100 reactions", async () => {
       const octokit = createMockOctokit();
       octokit.rest.issues.listComments.mockResolvedValue({
         data: [
@@ -1460,13 +1724,42 @@ describe("executeCommand", () => {
           },
         ],
       });
+      // Eyes has bot reaction among others — short-circuits before confused check
+      octokit.rest.reactions.listForIssueComment.mockResolvedValueOnce({
+        data: [
+          ...Array.from({ length: 5 }, (_, i) => ({ user: { login: `human-${i}` } })),
+          { user: { login: "hivemoot[bot]" } },
+        ],
+      }); // eyes check — bot present, short-circuit
+
+      const ctx = createCtx({ octokit });
+      const result = await executeCommand(ctx);
+
+      expect(result).toEqual({ status: "ignored" });
+      expect(octokit.rest.reactions.listForIssueComment).toHaveBeenCalledTimes(1);
+      expect(octokit.rest.reactions.listForIssueComment).toHaveBeenCalledWith(
+        expect.objectContaining({ per_page: 100, content: "eyes" }),
+      );
+    });
+
+    it("should paginate eyes reactions and find bot marker on page 2", async () => {
+      const octokit = createMockOctokit();
+      octokit.rest.issues.listComments.mockResolvedValue({
+        data: [
+          {
+            user: { login: "hivemoot[bot]" },
+            performed_via_github_app: { id: 12345, name: "Hivemoot" },
+          },
+        ],
+      });
+      // Page 1: 100 non-bot reactions; page 2: bot reaction present
       octokit.rest.reactions.listForIssueComment
         .mockResolvedValueOnce({
           data: Array.from({ length: 100 }, (_, i) => ({ user: { login: `human-${i}` } })),
-        })
+        }) // eyes page 1 — full, no bot
         .mockResolvedValueOnce({
           data: [{ user: { login: "hivemoot[bot]" } }],
-        });
+        }); // eyes page 2 — bot found
 
       const ctx = createCtx({ octokit });
       const result = await executeCommand(ctx);
@@ -1475,11 +1768,47 @@ describe("executeCommand", () => {
       expect(octokit.rest.reactions.listForIssueComment).toHaveBeenCalledTimes(2);
       expect(octokit.rest.reactions.listForIssueComment).toHaveBeenNthCalledWith(
         1,
-        expect.objectContaining({ per_page: 100, page: 1 }),
+        expect.objectContaining({ content: "eyes", page: 1 }),
       );
       expect(octokit.rest.reactions.listForIssueComment).toHaveBeenNthCalledWith(
         2,
-        expect.objectContaining({ per_page: 100, page: 2 }),
+        expect.objectContaining({ content: "eyes", page: 2 }),
+      );
+    });
+
+    it("should paginate confused reactions and find bot marker on page 2", async () => {
+      const octokit = createMockOctokit();
+      octokit.rest.issues.listComments.mockResolvedValue({
+        data: [
+          {
+            user: { login: "hivemoot[bot]" },
+            performed_via_github_app: { id: 12345, name: "Hivemoot" },
+          },
+        ],
+      });
+      // Eyes: exhausted (no bot); confused page 1: full, no bot; confused page 2: bot found
+      octokit.rest.reactions.listForIssueComment
+        .mockResolvedValueOnce({ data: [] }) // eyes page 1 — exhausted
+        .mockResolvedValueOnce({
+          data: Array.from({ length: 100 }, (_, i) => ({ user: { login: `human-${i}` } })),
+        }) // confused page 1 — full, no bot
+        .mockResolvedValueOnce({
+          data: [{ user: { login: "hivemoot[bot]" } }],
+        }); // confused page 2 — bot found
+
+      const ctx = createCtx({ octokit });
+      const result = await executeCommand(ctx);
+
+      expect(result).toEqual({ status: "ignored" });
+      // 1 call for eyes (exhausted on page 1), 2 calls for confused (found on page 2)
+      expect(octokit.rest.reactions.listForIssueComment).toHaveBeenCalledTimes(3);
+      expect(octokit.rest.reactions.listForIssueComment).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ content: "confused", page: 1 }),
+      );
+      expect(octokit.rest.reactions.listForIssueComment).toHaveBeenNthCalledWith(
+        3,
+        expect.objectContaining({ content: "confused", page: 2 }),
       );
     });
   });

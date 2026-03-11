@@ -309,9 +309,9 @@ async function reply(ctx: CommandContext, body: string): Promise<void> {
 }
 
 /**
- * Check if the bot has already reacted with 👀 to this comment.
- * Used as an idempotency guard against webhook retries — if we already
- * processed a command (indicated by our eyes reaction), skip re-execution.
+ * Check if the bot has already reacted to this comment with a processing
+ * marker (👀 for known commands, 😕 for unknown commands).
+ * Used as an idempotency guard against webhook retries.
  *
  * Security: Only trust reactions from THIS app's bot identity, not any [bot].
  * This prevents unrelated bots from suppressing command execution.
@@ -327,33 +327,18 @@ async function alreadyProcessed(ctx: CommandContext): Promise<boolean> {
       return false;
     }
 
-    const perPage = 100;
-    let page = 1;
-
-    while (true) {
-      const { data: reactions } = await ctx.octokit.rest.reactions.listForIssueComment({
-        owner: ctx.owner,
-        repo: ctx.repo,
-        comment_id: ctx.commentId,
-        content: "eyes",
-        per_page: perPage,
-        page,
-      });
-
-      // Only skip if THIS app's bot left the eyes reaction.
-      const processedByUs = reactions.some((r) => r.user?.login === botLogin);
-      if (processedByUs) {
-        ctx.log.info({ botLogin, reactionCount: reactions.length, page }, "Found our own eyes reaction — already processed");
+    // Check both marker reactions with full pagination.
+    // Eyes = known commands processed; confused = unknown commands processed.
+    // Must paginate: the app's marker reaction may be on page 2+ in high-reaction threads.
+    for (const content of ["eyes", "confused"] as const) {
+      const found = await isMarkerReactionPresent(ctx, botLogin, content);
+      if (found) {
+        ctx.log.info({ botLogin, content }, "Found our own marker reaction — already processed");
         return true;
       }
-
-      // Last page reached.
-      if (reactions.length < perPage) {
-        return false;
-      }
-
-      page += 1;
     }
+
+    return false;
   } catch (error) {
     // If we can't check reactions, proceed with execution to avoid
     // silently dropping commands due to transient API failures.
@@ -362,6 +347,40 @@ async function alreadyProcessed(ctx: CommandContext): Promise<boolean> {
       "Idempotency check failed — proceeding to avoid silent command drop",
     );
     return false;
+  }
+}
+
+/**
+ * Paginate through all reactions of a given type and return true if botLogin left one.
+ * Must paginate: in high-reaction threads the app's marker reaction can be on page 2+.
+ */
+async function isMarkerReactionPresent(
+  ctx: CommandContext,
+  botLogin: string,
+  content: "eyes" | "confused",
+): Promise<boolean> {
+  const perPage = 100;
+  let page = 1;
+
+  while (true) {
+    const { data: reactions } = await ctx.octokit.rest.reactions.listForIssueComment({
+      owner: ctx.owner,
+      repo: ctx.repo,
+      comment_id: ctx.commentId,
+      content,
+      per_page: perPage,
+      page,
+    });
+
+    if (reactions.some((r) => r.user?.login === botLogin)) {
+      return true;
+    }
+
+    if (reactions.length < perPage) {
+      return false;
+    }
+
+    page += 1;
   }
 }
 
@@ -495,17 +514,14 @@ async function handleImplement(ctx: CommandContext): Promise<CommandResult> {
   };
   const issues = createIssueOperations(ctx.octokit, { appId: ctx.appId });
 
-  // Determine which phase label to remove (none for unlabeled issues)
-  let removeLabel: string | undefined;
-  if (hasLabel(ctx, LABELS.DISCUSSION)) {
-    removeLabel = LABELS.DISCUSSION;
-  } else if (hasLabel(ctx, LABELS.VOTING)) {
-    removeLabel = LABELS.VOTING;
-  } else if (hasLabel(ctx, LABELS.EXTENDED_VOTING)) {
-    removeLabel = LABELS.EXTENDED_VOTING;
-  } else if (hasLabel(ctx, LABELS.NEEDS_HUMAN)) {
-    removeLabel = LABELS.NEEDS_HUMAN;
-  }
+  const phaseLabelsInPriority = [
+    LABELS.DISCUSSION,
+    LABELS.VOTING,
+    LABELS.EXTENDED_VOTING,
+    LABELS.NEEDS_HUMAN,
+  ] as const;
+  const labelsToClear = phaseLabelsInPriority.filter(label => hasLabel(ctx, label));
+  const [removeLabel, ...extraPhaseLabelsToRemove] = labelsToClear;
 
   const message = `# 🐝 Fast-tracked to Implementation ⚡\n\nMoved to ready-to-implement by @${ctx.senderLogin} via \`/implement\` command.\n\nNext steps:\n- Open a PR for review if you plan to implement.\n- Link this issue in the PR description (e.g., \`Fixes #${ctx.issueNumber}\`).${SIGNATURE}`;
 
@@ -515,6 +531,21 @@ async function handleImplement(ctx: CommandContext): Promise<CommandResult> {
     comment: message,
     unlock: true,
   });
+
+  for (const label of extraPhaseLabelsToRemove) {
+    try {
+      await issues.removeLabel(ref, label);
+    } catch (error) {
+      const status = getErrorStatus(error);
+      if (status === 404) {
+        continue;
+      }
+      ctx.log.warn(
+        { err: error, issueNumber: ctx.issueNumber, label },
+        "Failed to remove extra phase label after /implement transition",
+      );
+    }
+  }
 
   return { status: "executed", message: "Fast-tracked to ready-to-implement." };
 }
@@ -1333,6 +1364,87 @@ async function runLabelDoctorCheck(ctx: CommandContext): Promise<DoctorCheckResu
   };
 }
 
+/**
+ * Check raw governance config for `type: auto` exits that lack `afterMinutes`.
+ * The parser silently discards these and falls back to manual mode, so operators
+ * get `Config: pass` with no signal that their auto exits are broken.
+ *
+ * Covers all silent discard paths in the exits parsers:
+ * - `exits` is not an array (type error — clearly misconfigured)
+ * - `exits` contains mixed manual and auto entries (collapses to manual)
+ * - `exits` has `type: auto` entries missing a valid `afterMinutes` (entry is skipped)
+ *
+ * Returns advisory messages for each affected phase.
+ */
+function detectDiscardedAutoExits(rawConfig: unknown): string[] {
+  if (typeof rawConfig !== "object" || rawConfig === null || Array.isArray(rawConfig)) {
+    return [];
+  }
+
+  const raw = rawConfig as Record<string, unknown>;
+  const proposals = (raw.governance as Record<string, unknown> | undefined)?.proposals;
+  if (typeof proposals !== "object" || proposals === null || Array.isArray(proposals)) {
+    return [];
+  }
+
+  const proposalsObj = proposals as Record<string, unknown>;
+  const phases = [
+    { key: "discussion", label: "discussion" },
+    { key: "voting", label: "voting" },
+    { key: "extendedVoting", label: "extendedVoting" },
+  ];
+
+  const advisories: string[] = [];
+  for (const { key, label } of phases) {
+    const phase = proposalsObj[key];
+    if (typeof phase !== "object" || phase === null || Array.isArray(phase)) continue;
+    const exits = (phase as Record<string, unknown>).exits;
+    if (exits === undefined || exits === null) continue;
+
+    const phasePrefix = `\`governance.proposals.${label}.exits\``;
+
+    // Non-array exits value is a type error — the parser ignores it and falls back to manual
+    if (!Array.isArray(exits)) {
+      advisories.push(
+        `${phasePrefix} must be an array (got \`${typeof exits}\`) — it will be ignored and fall back to manual mode`,
+      );
+      continue;
+    }
+
+    // Mixed manual and auto entries: the parser collapses to manual-only with no in-band signal
+    const hasAuto = exits.some((e) => typeof e === "object" && e !== null && (e as Record<string, unknown>).type === "auto");
+    const hasManual = exits.some((e) => typeof e === "object" && e !== null && (e as Record<string, unknown>).type === "manual");
+    if (hasAuto && hasManual) {
+      advisories.push(
+        `${phasePrefix} mixes \`type: manual\` and \`type: auto\` entries — mixed exits are not supported and will fall back to manual mode`,
+      );
+      continue;
+    }
+
+    // type:auto entries with a missing or non-finite afterMinutes are silently skipped by
+    // the parser. If all auto entries are bad, the phase falls back to manual mode.
+    const isAutoEntry = (e: unknown): e is Record<string, unknown> =>
+      typeof e === "object" && e !== null && !Array.isArray(e) &&
+      (e as Record<string, unknown>).type === "auto";
+    const isBadAuto = (e: unknown): boolean =>
+      isAutoEntry(e) &&
+      (typeof (e as Record<string, unknown>).afterMinutes !== "number" ||
+        !Number.isFinite((e as Record<string, unknown>).afterMinutes as number));
+    const hasBadAuto = exits.some(isBadAuto);
+    if (hasBadAuto) {
+      const hasValidAuto = exits.some((e) => isAutoEntry(e) && !isBadAuto(e));
+      const suffix = hasValidAuto
+        ? ""
+        : " — the phase will fall back to manual mode";
+      advisories.push(
+        `${phasePrefix} has a \`type: auto\` entry with a missing or invalid \`afterMinutes\` — it will be silently discarded${suffix}`,
+      );
+    }
+  }
+
+  return advisories;
+}
+
 async function runConfigDoctorCheck(
   ctx: CommandContext,
   repoConfig: EffectiveConfig,
@@ -1376,6 +1488,17 @@ async function runConfigDoctorCheck(
     const intakeDetail = repoConfig.governance.pr
       ? `intake: ${repoConfig.governance.pr.intake.map((entry) => entry.method).join(", ") || "none"}`
       : "PR workflows: disabled";
+
+    const governanceAdvisories = detectDiscardedAutoExits(parsed);
+    if (governanceAdvisories.length > 0) {
+      return {
+        name: "Config",
+        status: "advisory",
+        detail: `Loaded \`${configPath}\` (${intakeDetail}) — governance exits are misconfigured and some entries will be discarded`,
+        subItems: governanceAdvisories,
+      };
+    }
+
     return {
       name: "Config",
       status: "pass",
@@ -1624,22 +1747,24 @@ const COMMAND_HANDLERS: Record<string, (ctx: CommandContext) => Promise<CommandR
   squash: handleSquash,
 };
 
+/** Exported list of recognized command verbs for help messages and validation. */
+export const KNOWN_COMMANDS = Object.keys(COMMAND_HANDLERS);
+
 /**
  * Execute a parsed command.
  *
  * Authorization flow:
- * 1. Check if the verb is recognized → ignore if not
- * 2. Check sender permissions → silent ignore if not authorized
- * 3. React with 👀 to acknowledge receipt
- * 4. Execute the handler
- * 5. React with ✅ on success, post error comment on rejection
+ * 1. Check sender permissions → silent ignore if not authorized
+ * 2. Check idempotency (eyes/confused reaction) → skip on retry
+ * 3. Unknown command → react confused + reply with available commands
+ * 4. React with 👀 to acknowledge receipt
+ * 5. Execute the handler
+ * 6. React with ✅ on success, post error comment on rejection
  */
 export async function executeCommand(ctx: CommandContext): Promise<CommandResult> {
-  const handler = COMMAND_HANDLERS[ctx.verb];
-  if (!handler) {
-    // Unknown command — silent ignore (not a command we handle)
-    return { status: "ignored" };
-  }
+  const handler = Object.prototype.hasOwnProperty.call(COMMAND_HANDLERS, ctx.verb)
+    ? COMMAND_HANDLERS[ctx.verb]
+    : undefined;
 
   // Authorization: only maintainers can use commands
   const authorization = await isAuthorized(ctx);
@@ -1663,13 +1788,21 @@ export async function executeCommand(ctx: CommandContext): Promise<CommandResult
   }
   const logContext = buildCommandLogContext(ctx, authorization.permission);
 
-  // Idempotency guard: if we already reacted with 👀, this is a webhook
+  // Idempotency guard: if we already reacted with 👀 or 😕, this is a webhook
   // retry and the command was already executed. Skip to prevent duplicates.
   if (await alreadyProcessed(ctx)) {
     ctx.log.info(
-      `Command /${ctx.verb} on comment ${ctx.commentId} already processed (eyes reaction found) — skipping retry`,
+      `Command /${ctx.verb} on comment ${ctx.commentId} already processed — skipping retry`,
     );
     return { status: "ignored" };
+  }
+
+  if (!handler) {
+    // Unknown command from an authorized user — reply with available commands
+    const available = KNOWN_COMMANDS.map((c) => `\`/${c}\``).join(", ");
+    await react(ctx, "confused");
+    await reply(ctx, `Unknown command \`/${ctx.verb}\`. Available commands: ${available}`);
+    return { status: "rejected", reason: `Unknown command: /${ctx.verb}` };
   }
 
   // Acknowledge receipt

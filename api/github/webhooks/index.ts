@@ -220,6 +220,8 @@ export function app(probotApp: Probot): void {
           ref: { owner, repo, prNumber: number },
           config: repoConfig.governance.pr.automerge,
           trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+          draft: context.payload.pull_request.draft,
+          mergeable: context.payload.pull_request.mergeable,
           log: context.log,
         });
       }
@@ -295,11 +297,113 @@ export function app(probotApp: Probot): void {
           ref: prRef,
           config: repoConfig.governance.pr.automerge,
           trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+          draft: context.payload.pull_request.draft,
+          mergeable: context.payload.pull_request.mergeable,
           log: context.log,
         });
       }
     } catch (error) {
       context.log.error({ err: error, pr: number, repo: fullName }, "Failed to process PR update");
+      throw error;
+    }
+  });
+
+  /**
+   * Handle draft -> ready transition.
+   * Re-runs merge-readiness/automerge evaluation when an author marks a PR ready.
+   */
+  probotApp.on("pull_request.ready_for_review", async (context) => {
+    const { number } = context.payload.pull_request;
+    const { owner, repo, fullName } = getRepoContext(context.payload.repository);
+
+    context.log.info(`Processing ready_for_review for PR #${number} in ${fullName}`);
+
+    try {
+      const appId = getAppId();
+      const prs = createPROperations(context.octokit, { appId });
+      const repoConfig = await loadRepositoryConfig(context.octokit, owner, repo);
+      if (!repoConfig) {
+        context.log.debug(`No config in ${fullName}; skipping ready_for_review automation`);
+        return;
+      }
+
+      if (repoConfig.governance.pr) {
+        const currentLabels = context.payload.pull_request.labels?.map(
+          (l: { name: string }) => l.name
+        );
+        const prRef = { owner, repo, prNumber: number };
+
+        await evaluateMergeReadiness({
+          prs,
+          ref: prRef,
+          config: repoConfig.governance.pr.mergeReady,
+          trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+          currentLabels,
+          draft: false,
+          log: context.log,
+        });
+
+        await evaluateAutomerge({
+          prs,
+          ref: prRef,
+          config: repoConfig.governance.pr.automerge,
+          trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+          currentLabels,
+          draft: false,
+          mergeable: context.payload.pull_request.mergeable,
+          log: context.log,
+        });
+      }
+    } catch (error) {
+      context.log.error({ err: error, pr: number, repo: fullName }, "Failed to process ready_for_review");
+      throw error;
+    }
+  });
+
+  /**
+   * Handle ready -> draft transition.
+   * Draft PRs cannot be merge-ready/automerge, so remove both labels immediately.
+   */
+  probotApp.on("pull_request.converted_to_draft", async (context) => {
+    const { number } = context.payload.pull_request;
+    const { owner, repo, fullName } = getRepoContext(context.payload.repository);
+
+    context.log.info(`Processing converted_to_draft for PR #${number} in ${fullName}`);
+
+    try {
+      const appId = getAppId();
+      const prs = createPROperations(context.octokit, { appId });
+      const repoConfig = await loadRepositoryConfig(context.octokit, owner, repo);
+      if (!repoConfig) {
+        context.log.debug(`No config in ${fullName}; skipping converted_to_draft automation`);
+        return;
+      }
+
+      if (!repoConfig.governance.pr) return;
+
+      const currentLabels = context.payload.pull_request.labels?.map((l: { name: string }) => l.name) ?? [];
+      const hadMergeReady = currentLabels.some((label) => isLabelMatch(label, LABELS.MERGE_READY));
+      const hadAutomerge = currentLabels.some((label) => isLabelMatch(label, LABELS.AUTOMERGE));
+
+      if (!hadMergeReady && !hadAutomerge) return;
+
+      const prRef = { owner, repo, prNumber: number };
+      const removedLabels: string[] = [];
+
+      if (hadMergeReady) {
+        await prs.removeLabel(prRef, LABELS.MERGE_READY);
+        removedLabels.push(LABELS.MERGE_READY);
+      }
+      if (hadAutomerge) {
+        await prs.removeLabel(prRef, LABELS.AUTOMERGE);
+        removedLabels.push(LABELS.AUTOMERGE);
+      }
+
+      if (hadMergeReady) {
+        await prs.comment(prRef, PR_MESSAGES.prConvertedToDraft(removedLabels));
+      }
+    } catch (error) {
+      context.log.error({ err: error, pr: number, repo: fullName }, "Failed to process converted_to_draft");
       throw error;
     }
   });
@@ -557,6 +661,7 @@ export function app(probotApp: Probot): void {
           ref: { owner, repo, prNumber: number },
           config: repoConfig.governance.pr.mergeReady,
           trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+          draft: context.payload.pull_request.draft,
           log: context.log,
         });
 
@@ -565,6 +670,8 @@ export function app(probotApp: Probot): void {
           ref: { owner, repo, prNumber: number },
           config: repoConfig.governance.pr.automerge,
           trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+          draft: context.payload.pull_request.draft,
+          // mergeable is omitted from SimplePullRequest review payloads.
           log: context.log,
         });
       }
@@ -600,6 +707,7 @@ export function app(probotApp: Probot): void {
           ref: { owner, repo, prNumber: number },
           config: repoConfig.governance.pr.mergeReady,
           trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+          draft: context.payload.pull_request.draft,
           log: context.log,
         });
 
@@ -608,6 +716,8 @@ export function app(probotApp: Probot): void {
           ref: { owner, repo, prNumber: number },
           config: repoConfig.governance.pr.automerge,
           trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+          draft: context.payload.pull_request.draft,
+          // mergeable is omitted from SimplePullRequest review payloads.
           log: context.log,
         });
       }
@@ -647,6 +757,7 @@ export function app(probotApp: Probot): void {
           config: repoConfig.governance.pr.mergeReady,
           trustedReviewers: repoConfig.governance.pr.trustedReviewers,
           currentLabels,
+          draft: context.payload.pull_request.draft,
           log: context.log,
         });
       }
@@ -681,21 +792,31 @@ export function app(probotApp: Probot): void {
       const errors: Error[] = [];
       for (const pr of pull_requests) {
         try {
+          const prRef = { owner, repo, prNumber: pr.number };
           context.log.info(`Evaluating merge-readiness for PR #${pr.number} after check_suite in ${fullName}`);
           await evaluateMergeReadiness({
             prs,
-            ref: { owner, repo, prNumber: pr.number },
+            ref: prRef,
             config: repoConfig.governance.pr.mergeReady,
             trustedReviewers: repoConfig.governance.pr.trustedReviewers,
             headSha,
             log: context.log,
           });
+          let prDraft: boolean | undefined;
+          let prMergeable: boolean | null | undefined;
+          if (repoConfig.governance.pr.automerge) {
+            const prState = await prs.get(prRef);
+            prDraft = prState.draft;
+            prMergeable = prState.mergeable;
+          }
           await evaluateAutomerge({
             prs,
-            ref: { owner, repo, prNumber: pr.number },
+            ref: prRef,
             config: repoConfig.governance.pr.automerge,
             trustedReviewers: repoConfig.governance.pr.trustedReviewers,
             headSha,
+            draft: prDraft,
+            mergeable: prMergeable,
             log: context.log,
           });
         } catch (error) {
@@ -740,24 +861,34 @@ export function app(probotApp: Probot): void {
       const errors: Error[] = [];
       for (const pr of pull_requests) {
         try {
+          const prRef = { owner, repo, prNumber: pr.number };
           context.log.info(`Evaluating merge-readiness for PR #${pr.number} after check_run in ${fullName}`);
           const currentLabels = await prs.getLabels({ owner, repo, prNumber: pr.number });
           await evaluateMergeReadiness({
             prs,
-            ref: { owner, repo, prNumber: pr.number },
+            ref: prRef,
             config: repoConfig.governance.pr.mergeReady,
             trustedReviewers: repoConfig.governance.pr.trustedReviewers,
             currentLabels,
             headSha,
             log: context.log,
           });
+          let prDraft: boolean | undefined;
+          let prMergeable: boolean | null | undefined;
+          if (repoConfig.governance.pr.automerge) {
+            const prState = await prs.get(prRef);
+            prDraft = prState.draft;
+            prMergeable = prState.mergeable;
+          }
           await evaluateAutomerge({
             prs,
-            ref: { owner, repo, prNumber: pr.number },
+            ref: prRef,
             config: repoConfig.governance.pr.automerge,
             trustedReviewers: repoConfig.governance.pr.trustedReviewers,
             currentLabels,
             headSha,
+            draft: prDraft,
+            mergeable: prMergeable,
             log: context.log,
           });
 
@@ -825,8 +956,10 @@ export function app(probotApp: Probot): void {
         per_page: 100,
       });
 
-      // Filter to PRs whose HEAD matches the status event SHA
-      const matchingPRs = data.filter((pr: { head: { sha: string } }) => pr.head.sha === sha);
+      // Filter to PRs whose HEAD matches the status event SHA while preserving draft state.
+      const matchingPRs = data.filter(
+        (pr: { head: { sha: string }; draft?: boolean; number: number }) => pr.head.sha === sha
+      );
 
       const errors: Error[] = [];
       for (const pr of matchingPRs) {
@@ -849,6 +982,7 @@ export function app(probotApp: Probot): void {
             trustedReviewers: repoConfig.governance.pr.trustedReviewers,
             currentLabels,
             headSha: sha,
+            draft: pr.draft,
             log: context.log,
           });
 

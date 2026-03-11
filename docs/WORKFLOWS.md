@@ -172,7 +172,7 @@ When a maintainer merges an implementation PR:
 
 ### Stale PR Handling
 
-Implementation PRs are monitored for activity to free up slots for active contributors:
+When `governance.pr.staleDays` is set, implementation PRs are monitored for activity to free up slots for active contributors:
 
 ```
 ┌─────────────┐   N days*   ┌─────────────┐   N days*   ┌─────────────┐
@@ -184,7 +184,7 @@ Implementation PRs are monitored for activity to free up slots for active contri
        └──────────────────────────┘
 ```
 
-*Default stale threshold is 3 days. PRs are closed after 2x the threshold (6 days) of inactivity.
+*Stale cleanup is opt-in. When enabled, the default threshold is 3 days and PRs are closed after 2x the threshold (6 days) of inactivity.
 
 **Timeline:**
 1. **Day 0-3:** PR is considered active
@@ -204,7 +204,7 @@ Implementation PRs are monitored for activity to free up slots for active contri
 | PR opened | Webhook | Real-time |
 | PR merged | Webhook | Real-time |
 | Issue phase transitions | Scheduled script | Every 5 min |
-| Stale PR cleanup | Scheduled script | Every hour |
+| Stale PR cleanup | Scheduled script | Every hour (repos with `governance.pr.staleDays`) |
 
 ## CI Deploy Health Gate
 
@@ -239,7 +239,7 @@ Environment variables for customization:
 |----------|---------|-------------|
 | `HIVEMOOT_DISCUSSION_DURATION_MINUTES` | 1440 (24h) | Discussion phase length |
 | `HIVEMOOT_VOTING_DURATION_MINUTES` | 1440 (24h) | Voting phase length |
-| `HIVEMOOT_PR_STALE_DAYS` | 3 | Days until PR gets stale warning |
+| `HIVEMOOT_PR_STALE_DAYS` | 3 | Fallback days when `governance.pr.staleDays` is present but invalid |
 | `HIVEMOOT_MAX_PRS_PER_ISSUE` | 3 | Max competing implementations |
 | `LLM_PROVIDER` | - | Optional provider: `openai`, `anthropic`, `google`/`gemini`, `mistral` |
 | `LLM_MODEL` | - | Optional model used for summaries and commit-message generation |

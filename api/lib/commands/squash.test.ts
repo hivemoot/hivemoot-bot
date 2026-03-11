@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { executeCommand, type CommandContext } from "./handlers.js";
+import { executeCommand, retryQueuedSquash, type CommandContext } from "./handlers.js";
 import { LABELS } from "../../config.js";
 
 const DEFAULT_PREFLIGHT = {
@@ -19,6 +19,8 @@ vi.mock("../index.js", () => ({
   createGovernanceService: vi.fn(() => ({})),
   createPROperations: vi.fn(() => ({
     get: vi.fn().mockResolvedValue({ number: 42, state: "open", merged: false, headSha: "abc123", mergeable: true }),
+    addLabels: vi.fn().mockResolvedValue(undefined),
+    removeLabel: vi.fn().mockResolvedValue(undefined),
   })),
   loadRepositoryConfig: vi.fn().mockResolvedValue({
     governance: {
@@ -208,6 +210,46 @@ describe("/squash command", () => {
     expect(body).toContain("blocked");
   });
 
+  it("queues squash when CI is the only pending hard check", async () => {
+    const { createPROperations } = await import("../index.js");
+    const { evaluatePreflightChecks } = await import("../merge-readiness.js");
+    const mockPrs = {
+      get: vi.fn().mockResolvedValue({ number: 42, state: "open", merged: false, headSha: "abc123", mergeable: true }),
+      addLabels: vi.fn().mockResolvedValue(undefined),
+      removeLabel: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.mocked(createPROperations).mockReturnValueOnce(mockPrs as any);
+    vi.mocked(evaluatePreflightChecks).mockResolvedValueOnce({
+      checks: [
+        { name: "PR is open", passed: true, severity: "hard", detail: "PR is open" },
+        { name: "Approved by trusted reviewers", passed: true, severity: "hard", detail: "1/1 trusted approvals (alice)" },
+        { name: "No merge conflicts", passed: true, severity: "hard", detail: "Branch is mergeable" },
+        {
+          name: "CI checks passing",
+          passed: false,
+          severity: "hard",
+          detail: "Still running: CI / build, CI / test",
+          pendingTargets: ["CI / build", "CI / test"],
+        },
+      ],
+      allHardChecksPassed: false,
+    } as any);
+    const ctx = createPRCtx();
+
+    const result = await executeCommand(ctx);
+
+    expect(result).toEqual({ status: "executed", message: "Squash queued." });
+    expect(mockPrs.addLabels).toHaveBeenCalledWith(
+      expect.objectContaining({ prNumber: 42 }),
+      [LABELS.SQUASH_QUEUED],
+    );
+    expect(ctx.octokit.rest.pulls.merge).not.toHaveBeenCalled();
+    const body = (ctx.octokit.rest.issues.createComment.mock.calls[0][0] as { body: string }).body;
+    expect(body).toContain("Squash queued");
+    expect(body).toContain("CI / build, CI / test");
+    expect(body).toContain("retry automatically");
+  });
+
   it("fails closed when commit message generation is unavailable", async () => {
     const { CommitMessageGenerator } = await import("../llm/commit-message.js");
     vi.mocked(CommitMessageGenerator).mockImplementationOnce(
@@ -254,14 +296,20 @@ describe("/squash command", () => {
     expect(body).toContain("Retry `/squash` after the generator is healthy");
   });
 
-  it("blocks merge when final verification changes before merge", async () => {
+  it("queues squash when final verification is waiting on CI", async () => {
     const { evaluatePreflightChecks } = await import("../merge-readiness.js");
     vi.mocked(evaluatePreflightChecks)
       .mockResolvedValueOnce(DEFAULT_PREFLIGHT as any)
       .mockResolvedValueOnce({
         checks: [
           { name: "PR is open", passed: true, severity: "hard", detail: "PR is open" },
-          { name: "CI checks passing", passed: false, severity: "hard", detail: "1 check run(s) still in progress" },
+          {
+            name: "CI checks passing",
+            passed: false,
+            severity: "hard",
+            detail: "Still running: CI / build",
+            pendingTargets: ["CI / build"],
+          },
         ],
         allHardChecksPassed: false,
       } as any);
@@ -269,11 +317,95 @@ describe("/squash command", () => {
 
     const result = await executeCommand(ctx);
 
-    expect(result.status).toBe("rejected");
+    expect(result).toEqual({ status: "executed", message: "Squash queued." });
     expect(ctx.octokit.rest.pulls.merge).not.toHaveBeenCalled();
     const body = (ctx.octokit.rest.issues.createComment.mock.calls[0][0] as { body: string }).body;
     expect(body).toContain("final verification");
-    expect(body).toContain("blocked");
+    expect(body).toContain("Squash queued");
+  });
+
+  it("queues squash when legacy status checks are still pending without explicit targets", async () => {
+    const { evaluatePreflightChecks } = await import("../merge-readiness.js");
+    vi.mocked(evaluatePreflightChecks).mockResolvedValueOnce({
+      checks: [
+        { name: "PR is open", passed: true, severity: "hard", detail: "PR is open" },
+        { name: "Approved by trusted reviewers", passed: true, severity: "hard", detail: "1/1 trusted approvals (alice)" },
+        { name: "No merge conflicts", passed: true, severity: "hard", detail: "Branch is mergeable" },
+        {
+          name: "CI checks passing",
+          passed: false,
+          severity: "hard",
+          detail: "Still running: legacy status checks",
+        },
+      ],
+      allHardChecksPassed: false,
+    } as any);
+    const ctx = createPRCtx();
+
+    const result = await executeCommand(ctx);
+
+    expect(result).toEqual({ status: "executed", message: "Squash queued." });
+    const body = (ctx.octokit.rest.issues.createComment.mock.calls[0][0] as { body: string }).body;
+    expect(body).toContain("Squash queued");
+    expect(body).toContain("legacy status checks");
+  });
+
+  it("does not queue squash when CI is failing rather than still running", async () => {
+    const { createPROperations } = await import("../index.js");
+    const { evaluatePreflightChecks } = await import("../merge-readiness.js");
+    const mockPrs = {
+      get: vi.fn().mockResolvedValue({ number: 42, state: "open", merged: false, headSha: "abc123", mergeable: true }),
+      addLabels: vi.fn().mockResolvedValue(undefined),
+      removeLabel: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.mocked(createPROperations).mockReturnValueOnce(mockPrs as any);
+    vi.mocked(evaluatePreflightChecks).mockResolvedValueOnce({
+      checks: [
+        { name: "PR is open", passed: true, severity: "hard", detail: "PR is open" },
+        { name: "Approved by trusted reviewers", passed: true, severity: "hard", detail: "1/1 trusted approvals (alice)" },
+        { name: "No merge conflicts", passed: true, severity: "hard", detail: "Branch is mergeable" },
+        {
+          name: "CI checks passing",
+          passed: false,
+          severity: "hard",
+          detail: "Legacy status: failure",
+        },
+      ],
+      allHardChecksPassed: false,
+    } as any);
+    const ctx = createPRCtx();
+
+    const result = await executeCommand(ctx);
+
+    expect(result.status).toBe("rejected");
+    expect(mockPrs.addLabels).not.toHaveBeenCalled();
+    expect(mockPrs.removeLabel).toHaveBeenCalledWith(
+      expect.objectContaining({ prNumber: 42 }),
+      LABELS.SQUASH_QUEUED,
+    );
+  });
+
+  it("passes commit generator logger callbacks through to the command context", async () => {
+    const { CommitMessageGenerator } = await import("../llm/commit-message.js");
+    vi.mocked(CommitMessageGenerator).mockImplementationOnce(
+      function (options: { logger: { info: (...args: unknown[]) => void; error: (...args: unknown[]) => void } }) {
+        options.logger.info("generator info");
+        options.logger.error("generator error");
+        return {
+          generate: vi.fn().mockResolvedValue({
+            success: true,
+            message: { subject: "Add merge helper", body: "Introduces automatic squash merge after readiness checks pass." },
+          }),
+        };
+      } as any,
+    );
+    const ctx = createPRCtx();
+
+    const result = await executeCommand(ctx);
+
+    expect(result).toEqual({ status: "executed", message: "Squash merge completed." });
+    expect(ctx.log.info).toHaveBeenCalledWith("generator info");
+    expect(ctx.log.error).toHaveBeenCalledWith("generator error");
   });
 
   it("refreshes a behind branch before final verification and merge", async () => {
@@ -532,5 +664,129 @@ describe("/squash command", () => {
     expect(result.status).toBe("rejected");
     const body = (octokit.rest.issues.createComment.mock.calls[0][0] as { body: string }).body;
     expect(body).toContain("Squash merge failed due to a GitHub merge API error");
+  });
+
+  it("cancels queued retry when the PR head SHA has changed", async () => {
+    const { createPROperations } = await import("../index.js");
+    const headCheckPrs = {
+      get: vi.fn().mockResolvedValue({ number: 42, state: "open", merged: false, headSha: "def456", mergeable: true }),
+      removeLabel: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.mocked(createPROperations).mockReturnValueOnce(headCheckPrs as any);
+    const ctx = createPRCtx();
+
+    await retryQueuedSquash(ctx, "abc123");
+
+    expect(headCheckPrs.removeLabel).toHaveBeenCalledWith(
+      expect.objectContaining({ prNumber: 42 }),
+      LABELS.SQUASH_QUEUED,
+    );
+    expect(ctx.octokit.rest.issues.createComment).not.toHaveBeenCalled();
+  });
+
+  it("posts a cancellation comment when queued retry is no longer mergeable", async () => {
+    const { createPROperations } = await import("../index.js");
+    const { evaluatePreflightChecks } = await import("../merge-readiness.js");
+    const headCheckPrs = {
+      get: vi.fn().mockResolvedValue({ number: 42, state: "open", merged: false, headSha: "abc123", mergeable: true }),
+      removeLabel: vi.fn().mockResolvedValue(undefined),
+    };
+    const runPrs = {
+      get: vi.fn().mockResolvedValue({ number: 42, state: "open", merged: false, headSha: "abc123", mergeable: true }),
+      addLabels: vi.fn().mockResolvedValue(undefined),
+      removeLabel: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.mocked(createPROperations)
+      .mockReturnValueOnce(headCheckPrs as any)
+      .mockReturnValueOnce(runPrs as any);
+    vi.mocked(evaluatePreflightChecks).mockResolvedValueOnce({
+      checks: [
+        { name: "PR is open", passed: true, severity: "hard", detail: "PR is open" },
+        { name: "Approved by trusted reviewers", passed: false, severity: "hard", detail: "0/1 trusted approvals" },
+      ],
+      allHardChecksPassed: false,
+    } as any);
+    const ctx = createPRCtx();
+
+    await retryQueuedSquash(ctx, "abc123");
+
+    expect(runPrs.removeLabel).toHaveBeenCalledWith(
+      expect.objectContaining({ prNumber: 42 }),
+      LABELS.SQUASH_QUEUED,
+    );
+    const body = (ctx.octokit.rest.issues.createComment.mock.calls[0][0] as { body: string }).body;
+    expect(body).toContain("Queued squash was cancelled");
+    expect(body).toContain("Run `/squash` again after resolving the failing checks");
+  });
+
+  it("posts a cancellation comment when final verification fails after a refresh during queued retry", async () => {
+    const { createPROperations } = await import("../index.js");
+    const { evaluatePreflightChecks } = await import("../merge-readiness.js");
+    const headCheckPrs = {
+      get: vi.fn().mockResolvedValue({ number: 42, state: "open", merged: false, headSha: "abc123", mergeable: true }),
+      removeLabel: vi.fn().mockResolvedValue(undefined),
+    };
+    const runPrs = {
+      get: vi.fn().mockResolvedValue({ number: 42, state: "open", merged: false, headSha: "abc123", mergeable: true }),
+      addLabels: vi.fn().mockResolvedValue(undefined),
+      removeLabel: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.mocked(createPROperations)
+      .mockReturnValueOnce(headCheckPrs as any)
+      .mockReturnValueOnce(runPrs as any);
+    vi.mocked(evaluatePreflightChecks)
+      .mockResolvedValueOnce(DEFAULT_PREFLIGHT as any)
+      .mockResolvedValueOnce({
+        checks: [
+          { name: "PR is open", passed: true, severity: "hard", detail: "PR is open" },
+          { name: "Approved by trusted reviewers", passed: false, severity: "hard", detail: "0/1 trusted approvals" },
+        ],
+        allHardChecksPassed: false,
+      } as any);
+
+    const octokit = createMockOctokit();
+    let pullsGetCalls = 0;
+    octokit.rest.pulls.get.mockImplementation(async () => {
+      pullsGetCalls += 1;
+      if (pullsGetCalls === 2) {
+        return {
+          data: {
+            title: "Add merge helper",
+            body: "PR description",
+            mergeable_state: "behind",
+            head: { sha: "abc123" },
+          },
+        };
+      }
+      if (pullsGetCalls === 3) {
+        return {
+          data: {
+            title: "Add merge helper",
+            body: "PR description",
+            mergeable_state: "clean",
+            head: { sha: "def456" },
+          },
+        };
+      }
+      return {
+        data: {
+          title: "Add merge helper",
+          body: "PR description",
+          mergeable_state: "clean",
+          head: { sha: "abc123" },
+        },
+      };
+    });
+    const ctx = createPRCtx({ octokit });
+
+    await retryQueuedSquash(ctx, "abc123");
+
+    expect(runPrs.removeLabel).toHaveBeenCalledWith(
+      expect.objectContaining({ prNumber: 42 }),
+      LABELS.SQUASH_QUEUED,
+    );
+    const body = (ctx.octokit.rest.issues.createComment.mock.calls[0][0] as { body: string }).body;
+    expect(body).toContain("Checks changed while processing");
+    expect(body).toContain("Queued squash was cancelled");
   });
 });

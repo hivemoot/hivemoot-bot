@@ -16,6 +16,7 @@ import {
   SUMMARIZATION_SYSTEM_PROMPT,
   buildUserPrompt,
 } from "./prompts.js";
+import { formatBYOKErrorContext } from "./byok.js";
 import { createModelFromEnv, type ModelResolutionOptions } from "./provider.js";
 import { withLLMRetry } from "./retry.js";
 import type { DiscussionSummary, IssueContext, LLMConfig } from "./types.js";
@@ -138,7 +139,7 @@ export class DiscussionSummarizer {
       return { success: true, summary };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.error(`LLM summarization failed: ${message}`);
+      this.logger.error(`LLM summarization failed: ${message}${formatBYOKErrorContext(error)}`);
       return { success: false, reason: message };
     }
   }

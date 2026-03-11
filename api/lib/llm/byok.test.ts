@@ -1,7 +1,7 @@
 import { createCipheriv, randomBytes } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { _resetMasterKeysCache, resolveInstallationBYOKConfig } from "./byok.js";
+import { _resetMasterKeysCache, formatBYOKErrorContext, resolveInstallationBYOKConfig } from "./byok.js";
 
 type EnvelopeOverrides = Partial<{
   ciphertext: string;
@@ -668,5 +668,47 @@ describe("resolveInstallationBYOKConfig", () => {
       expect(id2).toMatch(UUID_RE);
       expect(id1).not.toBe(id2);
     });
+  });
+});
+
+describe("formatBYOKErrorContext", () => {
+  it("returns empty string for a plain Error without structured fields", () => {
+    expect(formatBYOKErrorContext(new Error("plain error"))).toBe("");
+  });
+
+  it("returns empty string for null", () => {
+    expect(formatBYOKErrorContext(null)).toBe("");
+  });
+
+  it("returns empty string for a primitive", () => {
+    expect(formatBYOKErrorContext("string error")).toBe("");
+    expect(formatBYOKErrorContext(42)).toBe("");
+  });
+
+  it("returns formatted context when both installationId and correlationId are present", () => {
+    const error = Object.assign(new Error("BYOK decrypt failed"), {
+      installationId: 42,
+      correlationId: "abc-123",
+    });
+    expect(formatBYOKErrorContext(error)).toBe(" [installationId=42 correlationId=abc-123]");
+  });
+
+  it("returns context with only installationId when correlationId is absent", () => {
+    const error = Object.assign(new Error("BYOK error"), { installationId: 99 });
+    expect(formatBYOKErrorContext(error)).toBe(" [installationId=99]");
+  });
+
+  it("returns context with only correlationId when installationId is absent", () => {
+    const error = Object.assign(new Error("BYOK error"), { correlationId: "xyz-789" });
+    expect(formatBYOKErrorContext(error)).toBe(" [correlationId=xyz-789]");
+  });
+
+  it("ignores fields with wrong types", () => {
+    // installationId as string and correlationId as number are not extracted
+    const error = Object.assign(new Error("BYOK error"), {
+      installationId: "not-a-number",
+      correlationId: 12345,
+    });
+    expect(formatBYOKErrorContext(error)).toBe("");
   });
 });

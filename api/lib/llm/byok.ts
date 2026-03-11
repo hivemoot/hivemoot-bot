@@ -356,6 +356,26 @@ async function fetchEnvelope(
 }
 
 /**
+ * Extract operator-diagnosable context from a BYOK error for log messages.
+ *
+ * BYOK errors thrown by this module carry `installationId` and `correlationId`
+ * as own properties. Returns a formatted context string when those fields are
+ * present, or an empty string for non-BYOK errors.
+ *
+ * Usage: `logger.warn(`BYOK failed: ${message}${formatBYOKErrorContext(error)}`)`
+ */
+export function formatBYOKErrorContext(error: unknown): string {
+  if (error !== null && typeof error === "object") {
+    const e = error as Record<string, unknown>;
+    const parts: string[] = [];
+    if (typeof e.installationId === "number") parts.push(`installationId=${e.installationId}`);
+    if (typeof e.correlationId === "string") parts.push(`correlationId=${e.correlationId}`);
+    if (parts.length > 0) return ` [${parts.join(" ")}]`;
+  }
+  return "";
+}
+
+/**
  * Resolve BYOK config for an installation from encrypted Redis records.
  *
  * Returns null when BYOK is not configured for the installation, and throws

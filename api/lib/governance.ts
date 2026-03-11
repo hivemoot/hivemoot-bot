@@ -321,7 +321,7 @@ export class GovernanceService {
     const commentId = await this.issues.findVotingCommentId(ref);
 
     if (!commentId) {
-      await this.handleMissingVotingComment(ref);
+      await this.handleMissingVotingComment(ref, LABELS.VOTING);
       return "skipped";
     }
 
@@ -424,7 +424,7 @@ export class GovernanceService {
     const commentId = await this.issues.findVotingCommentId(ref);
 
     if (!commentId) {
-      await this.handleMissingVotingComment(ref);
+      await this.handleMissingVotingComment(ref, LABELS.EXTENDED_VOTING);
       return "skipped";
     }
 
@@ -536,7 +536,7 @@ export class GovernanceService {
    *   (race with webhook handler or cron reconciliation — healthy state)
    * - exception: self-heal failed, falls back to human help request
    */
-  private async handleMissingVotingComment(ref: IssueRef): Promise<void> {
+  private async handleMissingVotingComment(ref: IssueRef, currentPhaseLabel: string): Promise<void> {
     // Attempt self-heal: post the missing voting comment
     try {
       const result = await this.postVotingComment(ref);
@@ -579,14 +579,16 @@ export class GovernanceService {
     await this.issues.comment(ref, errorComment);
 
     // Add the hivemoot:needs-human label to make the issue visible in issue lists
+    // and clear the active voting phase label so the issue does not end up dual-labeled.
     // Note: Label addition is best-effort - if the label doesn't exist in the repo,
     // we log a warning but don't fail the operation (the comment is the critical part)
     try {
       await this.issues.addLabels(ref, [LABELS.NEEDS_HUMAN]);
+      await this.issues.removeLabel(ref, currentPhaseLabel);
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       this.logger.warn(
-        `Failed to add ${LABELS.NEEDS_HUMAN} label to issue #${ref.issueNumber}: ${errorMsg}`,
+        `Failed to swap ${currentPhaseLabel} -> ${LABELS.NEEDS_HUMAN} labels on issue #${ref.issueNumber}: ${errorMsg}`,
       );
     }
 

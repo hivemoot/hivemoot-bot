@@ -22,7 +22,7 @@ import { getLLMReadiness } from "../llm/provider.js";
 import { BlueprintGenerator, createMinimalPlan } from "../llm/blueprint.js";
 import type { ImplementationPlan, IssueContext } from "../llm/types.js";
 import { evaluatePreflightChecks } from "../merge-readiness.js";
-import type { PreflightCheckItem } from "../merge-readiness.js";
+import type { PreflightCheckItem, PreflightResult } from "../merge-readiness.js";
 import { CommitMessageGenerator, formatCommitMessage } from "../llm/commit-message.js";
 import type { PRContext } from "../llm/types.js";
 import type { IssueRef, PRRef } from "../types.js";
@@ -794,9 +794,80 @@ async function handlePreflight(ctx: CommandContext): Promise<CommandResult> {
  * - Requires repository squash-merge capability to be enabled
  * - Re-runs preflight immediately before merge to reduce stale CI race windows
  */
-async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
+type SquashAttemptMode = "command" | "retry";
+
+type SquashAttemptResult =
+  | { outcome: "queued"; body: string }
+  | { outcome: "merged"; body: string }
+  | { outcome: "blocked"; body: string };
+
+function buildSquashBodyHeader(ctx: CommandContext, checklistLines: string[]): string {
+  return `## 🐝 Squash Preflight for #${ctx.issueNumber}\n\n### Checklist\n\n${checklistLines.join("\n")}\n\n`;
+}
+
+function getHardCheckTotals(preflight: PreflightResult): { hardCount: number; hardPassed: number } {
+  return {
+    hardCount: preflight.checks.filter((check) => check.severity === "hard").length,
+    hardPassed: preflight.checks.filter((check) => check.severity === "hard" && check.passed).length,
+  };
+}
+
+function findQueuedCiCheck(preflight: PreflightResult): PreflightCheckItem | null {
+  const failedHardChecks = preflight.checks.filter((check) => check.severity === "hard" && !check.passed);
+  if (failedHardChecks.length !== 1) {
+    return null;
+  }
+
+  const [failedCheck] = failedHardChecks;
+  if (failedCheck.name !== "CI checks passing") {
+    return null;
+  }
+
+  if (!failedCheck.pendingTargets?.length && !failedCheck.detail.startsWith("Still running:")) {
+    return null;
+  }
+
+  return failedCheck;
+}
+
+function formatQueuedSquashMessage(pendingTargets: string[]): string {
+  const waitingFor = pendingTargets.length > 0
+    ? pendingTargets.join(", ")
+    : "legacy status checks";
+  return [
+    "### Queue",
+    "",
+    `Squash queued. Waiting for: ${waitingFor}.`,
+    "",
+    "I will retry automatically when all checks complete. No need to rerun `/squash`.",
+    "",
+  ].join("\n");
+}
+
+function formatBlockedSummary(
+  mode: SquashAttemptMode,
+  summary: string,
+  followup?: string,
+): string {
+  if (mode === "retry") {
+    const lines = [
+      `${summary} Queued squash was cancelled.`,
+    ];
+    if (followup) {
+      lines.push("", followup);
+    }
+    return `${lines.join("\n")}\n`;
+  }
+
+  return `${summary} Squash merge was blocked.`;
+}
+
+async function attemptSquash(ctx: CommandContext, mode: SquashAttemptMode): Promise<SquashAttemptResult> {
   if (!ctx.isPullRequest) {
-    return { status: "rejected", reason: "The `/squash` command can only be used on pull requests, not issues." };
+    return {
+      outcome: "blocked",
+      body: "The `/squash` command can only be used on pull requests, not issues.",
+    };
   }
 
   const octokit = ctx.octokit as any; // Full Probot client at runtime
@@ -812,13 +883,19 @@ async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
 
   const pr = await prs.get(ref);
   if (pr.merged || pr.state !== "open") {
-    return { status: "rejected", reason: "This pull request is already closed or merged." };
+    return {
+      outcome: "blocked",
+      body: "This pull request is already closed or merged.",
+    };
   }
   let mergeHeadSha = pr.headSha;
 
   const repoInfo = await octokit.rest.repos.get({ owner: ctx.owner, repo: ctx.repo });
   if (!repoInfo?.data?.allow_squash_merge) {
-    return { status: "rejected", reason: "Squash merge is disabled for this repository. Enable it in repository settings before using `/squash`." };
+    return {
+      outcome: "blocked",
+      body: "Squash merge is disabled for this repository. Enable it in repository settings before using `/squash`.",
+    };
   }
 
   const preflight = await evaluatePreflightChecks({
@@ -830,16 +907,26 @@ async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
   });
 
   const checklistLines = preflight.checks.map(formatCheckItem);
-  const hardCount = preflight.checks.filter((c) => c.severity === "hard").length;
-  const hardPassed = preflight.checks.filter((c) => c.severity === "hard" && c.passed).length;
+  const { hardCount, hardPassed } = getHardCheckTotals(preflight);
 
-  let body = `## 🐝 Squash Preflight for #${ctx.issueNumber}\n\n`;
-  body += `### Checklist\n\n`;
-  body += checklistLines.join("\n") + "\n\n";
+  let body = buildSquashBodyHeader(ctx, checklistLines);
+
+  const queuedCiCheck = findQueuedCiCheck(preflight);
+  if (queuedCiCheck) {
+    await prs.addLabels(ref, [LABELS.SQUASH_QUEUED]);
+    body += formatQueuedSquashMessage(queuedCiCheck.pendingTargets ?? []);
+    body += `**${hardPassed}/${hardCount} hard checks passed.** Squash will retry automatically after CI completes.`;
+    return { outcome: "queued", body };
+  }
 
   if (!preflight.allHardChecksPassed) {
-    body += `**${hardPassed}/${hardCount} hard checks passed.** Squash merge was blocked.`;
-    return { status: "rejected", reason: body };
+    await prs.removeLabel(ref, LABELS.SQUASH_QUEUED);
+    body += formatBlockedSummary(
+      mode,
+      `**${hardPassed}/${hardCount} hard checks passed.**`,
+      "Run `/squash` again after resolving the failing checks."
+    );
+    return { outcome: "blocked", body };
   }
 
   let commitTitle = "";
@@ -866,10 +953,11 @@ async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
     );
 
     if (!result.success) {
+      await prs.removeLabel(ref, LABELS.SQUASH_QUEUED);
       body += "### Commit Message\n\n";
       body += "Commit message generation failed. Squash merge was blocked.\n\n";
       body += `**${hardPassed}/${hardCount} hard checks passed.** Retry \`/squash\` after the generator is healthy.`;
-      return { status: "rejected", reason: body };
+      return { outcome: "blocked", body };
     }
 
     commitTitle = result.message.subject.trim();
@@ -882,18 +970,22 @@ async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     ctx.log.error({ err: error }, `Commit message generation failed during /squash: ${reason}`);
+    await prs.removeLabel(ref, LABELS.SQUASH_QUEUED);
     body += "### Commit Message\n\n";
     body += "Commit message generation failed. Squash merge was blocked.\n\n";
     body += `**${hardPassed}/${hardCount} hard checks passed.** Retry \`/squash\` after the generator is healthy.`;
-    return { status: "rejected", reason: body };
+    return { outcome: "blocked", body };
   }
 
   const refreshedHead = await refreshHeadIfBehindBase(ctx, mergeHeadSha);
   if (!refreshedHead.success) {
+    await prs.removeLabel(ref, LABELS.SQUASH_QUEUED);
     body += `### Branch Refresh\n\n`;
     body += `${refreshedHead.reason}\n\n`;
-    body += `Squash merge was blocked to avoid merging a stale head.`;
-    return { status: "rejected", reason: body };
+    body += mode === "retry"
+      ? "Queued squash was cancelled to avoid merging a stale head. Run `/squash` again once the branch is current."
+      : "Squash merge was blocked to avoid merging a stale head.";
+    return { outcome: "blocked", body };
   }
   if (refreshedHead.updated) {
     mergeHeadSha = refreshedHead.headSha;
@@ -910,11 +1002,22 @@ async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
     trustedReviewers: repoConfig.governance.pr?.trustedReviewers ?? [],
     currentLabels,
   });
+  const queuedCiCheckAfterRefresh = findQueuedCiCheck(freshPreflight);
+  if (queuedCiCheckAfterRefresh) {
+    const { hardCount: freshHardCount, hardPassed: freshHardPassed } = getHardCheckTotals(freshPreflight);
+    await prs.addLabels(ref, [LABELS.SQUASH_QUEUED]);
+    body += formatQueuedSquashMessage(queuedCiCheckAfterRefresh.pendingTargets ?? []);
+    body += `**${freshHardPassed}/${freshHardCount} hard checks passed on final verification.** Squash will retry automatically after CI completes.`;
+    return { outcome: "queued", body };
+  }
+
   if (!freshPreflight.allHardChecksPassed) {
-    const freshHardCount = freshPreflight.checks.filter((c) => c.severity === "hard").length;
-    const freshHardPassed = freshPreflight.checks.filter((c) => c.severity === "hard" && c.passed).length;
-    body += `**${freshHardPassed}/${freshHardCount} hard checks passed on final verification.** Checks changed while processing; squash merge was blocked.`;
-    return { status: "rejected", reason: body };
+    const { hardCount: freshHardCount, hardPassed: freshHardPassed } = getHardCheckTotals(freshPreflight);
+    await prs.removeLabel(ref, LABELS.SQUASH_QUEUED);
+    body += mode === "retry"
+      ? `**${freshHardPassed}/${freshHardCount} hard checks passed on final verification.** Checks changed while processing. Queued squash was cancelled.\n\nRun \`/squash\` again after resolving the blocker.`
+      : `**${freshHardPassed}/${freshHardCount} hard checks passed on final verification.** Checks changed while processing; squash merge was blocked.`;
+    return { outcome: "blocked", body };
   }
 
   try {
@@ -930,14 +1033,64 @@ async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     ctx.log.error({ err: error }, `Squash merge failed for #${ctx.issueNumber}: ${reason}`);
+    await prs.removeLabel(ref, LABELS.SQUASH_QUEUED);
     body += "### Merge\n\n";
-    body += "Squash merge failed due to a GitHub merge API error. Resolve merge blockers and retry.\n\n";
-    return { status: "rejected", reason: body };
+    body += mode === "retry"
+      ? "GitHub rejected the queued squash merge attempt. Queued squash was cancelled.\n\nRun `/squash` again after resolving merge blockers.\n\n"
+      : "Squash merge failed due to a GitHub merge API error. Resolve merge blockers and retry.\n\n";
+    return { outcome: "blocked", body };
   }
 
+  await prs.removeLabel(ref, LABELS.SQUASH_QUEUED);
   body += `**${hardPassed}/${hardCount} hard checks passed.** Squash merge completed successfully.`;
-  await reply(ctx, body);
-  return { status: "executed", message: "Squash merge completed." };
+  return { outcome: "merged", body };
+}
+
+async function handleSquash(ctx: CommandContext): Promise<CommandResult> {
+  const result = await attemptSquash(ctx, "command");
+
+  if (result.outcome === "blocked") {
+    return { status: "rejected", reason: result.body };
+  }
+
+  await reply(ctx, result.body);
+  return {
+    status: "executed",
+    message: result.outcome === "queued" ? "Squash queued." : "Squash merge completed.",
+  };
+}
+
+export async function retryQueuedSquash(ctx: CommandContext, expectedHeadSha?: string): Promise<void> {
+  if (expectedHeadSha) {
+    const octokit = ctx.octokit as any; // Full Probot client at runtime
+    const prs = createPROperations(octokit, { appId: ctx.appId });
+    const ref: PRRef = {
+      owner: ctx.owner,
+      repo: ctx.repo,
+      prNumber: ctx.issueNumber,
+      installationId: ctx.installationId,
+    };
+    const pr = await prs.get(ref);
+
+    if (pr.headSha !== expectedHeadSha) {
+      await prs.removeLabel(ref, LABELS.SQUASH_QUEUED);
+      ctx.log.info(
+        {
+          pr: ctx.issueNumber,
+          expectedHeadSha,
+          currentHeadSha: pr.headSha,
+        },
+        "Skipping queued squash retry because the PR head changed"
+      );
+      return;
+    }
+  }
+
+  const result = await attemptSquash(ctx, "retry");
+
+  if (result.outcome === "blocked" || result.outcome === "merged") {
+    await reply(ctx, result.body);
+  }
 }
 
 type BranchRefreshResult =

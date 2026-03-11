@@ -309,9 +309,9 @@ async function reply(ctx: CommandContext, body: string): Promise<void> {
 }
 
 /**
- * Check if the bot has already reacted with 👀 to this comment.
- * Used as an idempotency guard against webhook retries — if we already
- * processed a command (indicated by our eyes reaction), skip re-execution.
+ * Check if the bot has already reacted to this comment with a processing
+ * marker (👀 for known commands, 😕 for unknown commands).
+ * Used as an idempotency guard against webhook retries.
  *
  * Security: Only trust reactions from THIS app's bot identity, not any [bot].
  * This prevents unrelated bots from suppressing command execution.
@@ -327,33 +327,18 @@ async function alreadyProcessed(ctx: CommandContext): Promise<boolean> {
       return false;
     }
 
-    const perPage = 100;
-    let page = 1;
-
-    while (true) {
-      const { data: reactions } = await ctx.octokit.rest.reactions.listForIssueComment({
-        owner: ctx.owner,
-        repo: ctx.repo,
-        comment_id: ctx.commentId,
-        content: "eyes",
-        per_page: perPage,
-        page,
-      });
-
-      // Only skip if THIS app's bot left the eyes reaction.
-      const processedByUs = reactions.some((r) => r.user?.login === botLogin);
-      if (processedByUs) {
-        ctx.log.info({ botLogin, reactionCount: reactions.length, page }, "Found our own eyes reaction — already processed");
+    // Check both marker reactions with full pagination.
+    // Eyes = known commands processed; confused = unknown commands processed.
+    // Must paginate: the app's marker reaction may be on page 2+ in high-reaction threads.
+    for (const content of ["eyes", "confused"] as const) {
+      const found = await isMarkerReactionPresent(ctx, botLogin, content);
+      if (found) {
+        ctx.log.info({ botLogin, content }, "Found our own marker reaction — already processed");
         return true;
       }
-
-      // Last page reached.
-      if (reactions.length < perPage) {
-        return false;
-      }
-
-      page += 1;
     }
+
+    return false;
   } catch (error) {
     // If we can't check reactions, proceed with execution to avoid
     // silently dropping commands due to transient API failures.
@@ -362,6 +347,40 @@ async function alreadyProcessed(ctx: CommandContext): Promise<boolean> {
       "Idempotency check failed — proceeding to avoid silent command drop",
     );
     return false;
+  }
+}
+
+/**
+ * Paginate through all reactions of a given type and return true if botLogin left one.
+ * Must paginate: in high-reaction threads the app's marker reaction can be on page 2+.
+ */
+async function isMarkerReactionPresent(
+  ctx: CommandContext,
+  botLogin: string,
+  content: "eyes" | "confused",
+): Promise<boolean> {
+  const perPage = 100;
+  let page = 1;
+
+  while (true) {
+    const { data: reactions } = await ctx.octokit.rest.reactions.listForIssueComment({
+      owner: ctx.owner,
+      repo: ctx.repo,
+      comment_id: ctx.commentId,
+      content,
+      per_page: perPage,
+      page,
+    });
+
+    if (reactions.some((r) => r.user?.login === botLogin)) {
+      return true;
+    }
+
+    if (reactions.length < perPage) {
+      return false;
+    }
+
+    page += 1;
   }
 }
 
@@ -1636,22 +1655,24 @@ const COMMAND_HANDLERS: Record<string, (ctx: CommandContext) => Promise<CommandR
   squash: handleSquash,
 };
 
+/** Exported list of recognized command verbs for help messages and validation. */
+export const KNOWN_COMMANDS = Object.keys(COMMAND_HANDLERS);
+
 /**
  * Execute a parsed command.
  *
  * Authorization flow:
- * 1. Check if the verb is recognized → ignore if not
- * 2. Check sender permissions → silent ignore if not authorized
- * 3. React with 👀 to acknowledge receipt
- * 4. Execute the handler
- * 5. React with ✅ on success, post error comment on rejection
+ * 1. Check sender permissions → silent ignore if not authorized
+ * 2. Check idempotency (eyes/confused reaction) → skip on retry
+ * 3. Unknown command → react confused + reply with available commands
+ * 4. React with 👀 to acknowledge receipt
+ * 5. Execute the handler
+ * 6. React with ✅ on success, post error comment on rejection
  */
 export async function executeCommand(ctx: CommandContext): Promise<CommandResult> {
-  const handler = COMMAND_HANDLERS[ctx.verb];
-  if (!handler) {
-    // Unknown command — silent ignore (not a command we handle)
-    return { status: "ignored" };
-  }
+  const handler = Object.prototype.hasOwnProperty.call(COMMAND_HANDLERS, ctx.verb)
+    ? COMMAND_HANDLERS[ctx.verb]
+    : undefined;
 
   // Authorization: only maintainers can use commands
   const authorization = await isAuthorized(ctx);
@@ -1675,13 +1696,21 @@ export async function executeCommand(ctx: CommandContext): Promise<CommandResult
   }
   const logContext = buildCommandLogContext(ctx, authorization.permission);
 
-  // Idempotency guard: if we already reacted with 👀, this is a webhook
+  // Idempotency guard: if we already reacted with 👀 or 😕, this is a webhook
   // retry and the command was already executed. Skip to prevent duplicates.
   if (await alreadyProcessed(ctx)) {
     ctx.log.info(
-      `Command /${ctx.verb} on comment ${ctx.commentId} already processed (eyes reaction found) — skipping retry`,
+      `Command /${ctx.verb} on comment ${ctx.commentId} already processed — skipping retry`,
     );
     return { status: "ignored" };
+  }
+
+  if (!handler) {
+    // Unknown command from an authorized user — reply with available commands
+    const available = KNOWN_COMMANDS.map((c) => `\`/${c}\``).join(", ");
+    await react(ctx, "confused");
+    await reply(ctx, `Unknown command \`/${ctx.verb}\`. Available commands: ${available}`);
+    return { status: "rejected", reason: `Unknown command: /${ctx.verb}` };
   }
 
   // Acknowledge receipt

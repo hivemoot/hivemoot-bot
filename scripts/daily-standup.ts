@@ -30,6 +30,7 @@ import {
 } from "../api/lib/standup.js";
 import { runForAllRepositories, runIfMain } from "./shared/run-installations.js";
 import type { Repository } from "../api/lib/index.js";
+import type { InstallationContext } from "./shared/run-installations.js";
 
 /**
  * Get today's UTC date string and the reporting date (yesterday UTC).
@@ -49,7 +50,8 @@ function getReportDate(): string {
 export async function processRepository(
   octokit: InstanceType<typeof Octokit>,
   repo: Repository,
-  _appId: number
+  _appId: number,
+  installation?: InstallationContext
 ): Promise<void> {
   const owner = repo.owner.login;
   const repoName = repo.name;
@@ -59,6 +61,10 @@ export async function processRepository(
   try {
     // 1. Load repo config — check if standup is enabled
     const repoConfig = await loadRepositoryConfig(octokit, owner, repoName);
+    if (!repoConfig) {
+      logger.debug(`No config file found for ${repo.full_name}; skipping standup`);
+      return;
+    }
     if (!repoConfig.standup.enabled) {
       logger.debug(`Standup not enabled for ${repo.full_name}`);
       return;
@@ -116,7 +122,9 @@ export async function processRepository(
     // 8. Generate LLM content (optional — graceful fallback)
     let llmContent = null;
     if (hasAnyContent(data)) {
-      llmContent = await generateStandupLLMContent(data);
+      llmContent = await generateStandupLLMContent(data, {
+        installationId: installation?.installationId,
+      });
     }
 
     // 9. Format the comment body

@@ -80,6 +80,17 @@ describe("reconcile-merge-ready", () => {
       expect(mockEvaluateMergeReadiness).not.toHaveBeenCalled();
     });
 
+    it("should skip repos with PR workflows disabled (pr: null)", async () => {
+      mockLoadRepositoryConfig.mockResolvedValue({
+        governance: { pr: null },
+      } as ReturnType<typeof loadRepositoryConfig> extends Promise<infer T> ? T : never);
+
+      await processRepository({} as never, testRepo, testAppId);
+
+      expect(mockFindPRsWithLabel).not.toHaveBeenCalled();
+      expect(mockEvaluateMergeReadiness).not.toHaveBeenCalled();
+    });
+
     it("should process all implementation PRs", async () => {
       mockLoadRepositoryConfig.mockResolvedValue({
         governance: {
@@ -91,8 +102,8 @@ describe("reconcile-merge-ready", () => {
       } as ReturnType<typeof loadRepositoryConfig> extends Promise<infer T> ? T : never);
 
       mockFindPRsWithLabel.mockResolvedValue([
-        { number: 1, labels: [{ name: "implementation" }] },
-        { number: 2, labels: [{ name: "implementation" }, { name: "merge-ready" }] },
+        { number: 1, labels: [{ name: "hivemoot:candidate" }] },
+        { number: 2, labels: [{ name: "hivemoot:candidate" }, { name: "hivemoot:merge-ready" }] },
       ]);
 
       mockEvaluateMergeReadiness.mockResolvedValue({ action: "noop", labeled: false });
@@ -130,9 +141,9 @@ describe("reconcile-merge-ready", () => {
       } as ReturnType<typeof loadRepositoryConfig> extends Promise<infer T> ? T : never);
 
       mockFindPRsWithLabel.mockResolvedValue([
-        { number: 1, labels: [{ name: "implementation" }] },
-        { number: 2, labels: [{ name: "implementation" }] },
-        { number: 3, labels: [{ name: "implementation" }] },
+        { number: 1, labels: [{ name: "hivemoot:candidate" }] },
+        { number: 2, labels: [{ name: "hivemoot:candidate" }] },
+        { number: 3, labels: [{ name: "hivemoot:candidate" }] },
       ]);
 
       mockEvaluateMergeReadiness
@@ -163,7 +174,7 @@ describe("reconcile-merge-ready", () => {
       } as ReturnType<typeof loadRepositoryConfig> extends Promise<infer T> ? T : never);
 
       mockFindPRsWithLabel.mockResolvedValue([
-        { number: 1, labels: [{ name: "implementation" }, { name: "bug" }] },
+        { number: 1, labels: [{ name: "hivemoot:candidate" }, { name: "bug" }] },
       ]);
 
       mockEvaluateMergeReadiness.mockResolvedValue({ action: "noop", labeled: false });
@@ -172,7 +183,7 @@ describe("reconcile-merge-ready", () => {
 
       expect(mockEvaluateMergeReadiness).toHaveBeenCalledWith(
         expect.objectContaining({
-          currentLabels: ["implementation", "bug"],
+          currentLabels: ["hivemoot:candidate", "bug"],
         })
       );
     });

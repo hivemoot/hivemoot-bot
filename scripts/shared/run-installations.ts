@@ -16,6 +16,14 @@ import { getAppConfig } from "../../api/lib/env-validation.js";
 import type { Repository } from "../../api/lib/index.js";
 
 /**
+ * Installation metadata available while iterating repositories.
+ */
+export interface InstallationContext {
+  installationId: number;
+  installationLogin?: string;
+}
+
+/**
  * Configuration for the shared script runner.
  */
 export interface RunnerConfig<TResult = void> {
@@ -27,7 +35,8 @@ export interface RunnerConfig<TResult = void> {
   processRepository: (
     octokit: InstanceType<typeof Octokit>,
     repo: Repository,
-    appId: number
+    appId: number,
+    installation: InstallationContext
   ) => Promise<TResult>;
   /** Called after all repos processed, before error handling. Use for aggregate reporting. */
   afterAll?: (context: {
@@ -84,10 +93,19 @@ export async function runForAllRepositories<TResult = void>(
         octokit.rest.apps.listReposAccessibleToInstallation,
         { per_page: 100 }
       );
+      const installationContext: InstallationContext = {
+        installationId: installation.id,
+        installationLogin: installation.account?.login,
+      };
 
       for (const repo of repos as Repository[]) {
         try {
-          const result = await config.processRepository(octokit, repo, appConfig.appId);
+          const result = await config.processRepository(
+            octokit,
+            repo,
+            appConfig.appId,
+            installationContext
+          );
           results.push({ repo: repo.full_name, result });
         } catch (error) {
           hasErrors = true;

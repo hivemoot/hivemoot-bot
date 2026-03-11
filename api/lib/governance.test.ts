@@ -47,8 +47,10 @@ describe("GovernanceService", () => {
       hasHumanHelpComment: vi.fn().mockResolvedValue(false),
       getLabelAddedTime: vi.fn().mockResolvedValue(new Date()),
       transition: vi.fn().mockResolvedValue(undefined),
+      pinComment: vi.fn().mockResolvedValue(undefined),
       // getIssueContext should NOT be called when LLM is not configured
       getIssueContext: vi.fn(),
+      getIssueLabels: vi.fn().mockResolvedValue([]),
     } as unknown as IssueOperations;
 
     governance = new GovernanceService(mockIssues);
@@ -121,7 +123,7 @@ describe("GovernanceService", () => {
       expect(mockIssues.transition).toHaveBeenCalledWith(testRef, {
         removeLabel: LABELS.DISCUSSION,
         addLabel: LABELS.VOTING,
-        comment: expect.stringContaining(MESSAGES.VOTING_START),
+        comment: expect.stringContaining(MESSAGES.votingStart()),
       });
       // Verify metadata is prepended
       const callArgs = vi.mocked(mockIssues.transition).mock.calls[0][1];
@@ -144,8 +146,29 @@ describe("GovernanceService", () => {
       expect(mockIssues.transition).toHaveBeenCalledWith(testRef, {
         removeLabel: LABELS.DISCUSSION,
         addLabel: LABELS.VOTING,
-        comment: expect.stringContaining(MESSAGES.VOTING_START),
+        comment: expect.stringContaining(MESSAGES.votingStart()),
       });
+    });
+
+    it("should fall back to generic message and log warn when BYOK resolution fails", async () => {
+      const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+      const govWithLogger = new GovernanceService(mockIssues, mockLogger);
+
+      vi.mocked(createModelFromEnv).mockRejectedValue(
+        new Error("BYOK Redis lookup failed with HTTP 503"),
+      );
+
+      await govWithLogger.transitionToVoting(testRef);
+
+      expect(mockIssues.getIssueContext).not.toHaveBeenCalled();
+      expect(mockIssues.transition).toHaveBeenCalledWith(testRef, {
+        removeLabel: LABELS.DISCUSSION,
+        addLabel: LABELS.VOTING,
+        comment: expect.stringContaining(MESSAGES.votingStart()),
+      });
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.stringContaining("BYOK Redis lookup failed with HTTP 503"),
+      );
     });
 
     describe("with LLM configured", () => {
@@ -172,7 +195,7 @@ describe("GovernanceService", () => {
 
       beforeEach(() => {
         // Enable LLM by returning a mock model result
-        vi.mocked(createModelFromEnv).mockReturnValue(mockModelResult);
+        vi.mocked(createModelFromEnv).mockResolvedValue(mockModelResult);
 
         // Setup mock issue context
         vi.mocked(mockIssues.getIssueContext).mockResolvedValue(mockContext);
@@ -184,9 +207,9 @@ describe("GovernanceService", () => {
           success: true,
           summary: mockSummary,
         });
-        vi.mocked(DiscussionSummarizer).mockImplementation(() => ({
-          summarize: mockSummarize,
-        }));
+        vi.mocked(DiscussionSummarizer).mockImplementation(function () {
+          return { summarize: mockSummarize };
+        } as any);
 
         await governance.transitionToVoting(testRef);
 
@@ -198,7 +221,8 @@ describe("GovernanceService", () => {
           mockSummary,
           mockContext.title,
           SIGNATURE,
-          SIGNATURES.VOTING
+          SIGNATURES.VOTING,
+          undefined
         );
         // Verify comment includes both metadata and LLM message
         const callArgs = vi.mocked(mockIssues.transition).mock.calls[0][1];
@@ -211,9 +235,9 @@ describe("GovernanceService", () => {
           success: false,
           reason: "API rate limited",
         });
-        vi.mocked(DiscussionSummarizer).mockImplementation(() => ({
-          summarize: mockSummarize,
-        }));
+        vi.mocked(DiscussionSummarizer).mockImplementation(function () {
+          return { summarize: mockSummarize };
+        } as any);
 
         await governance.transitionToVoting(testRef);
 
@@ -221,15 +245,15 @@ describe("GovernanceService", () => {
         expect(mockIssues.transition).toHaveBeenCalledWith(testRef, {
           removeLabel: LABELS.DISCUSSION,
           addLabel: LABELS.VOTING,
-          comment: expect.stringContaining(MESSAGES.VOTING_START),
+          comment: expect.stringContaining(MESSAGES.votingStart()),
         });
       });
 
       it("should fall back to generic message when LLM throws an error", async () => {
         const mockSummarize = vi.fn().mockRejectedValue(new Error("Network error"));
-        vi.mocked(DiscussionSummarizer).mockImplementation(() => ({
-          summarize: mockSummarize,
-        }));
+        vi.mocked(DiscussionSummarizer).mockImplementation(function () {
+          return { summarize: mockSummarize };
+        } as any);
 
         await governance.transitionToVoting(testRef);
 
@@ -237,7 +261,7 @@ describe("GovernanceService", () => {
         expect(mockIssues.transition).toHaveBeenCalledWith(testRef, {
           removeLabel: LABELS.DISCUSSION,
           addLabel: LABELS.VOTING,
-          comment: expect.stringContaining(MESSAGES.VOTING_START),
+          comment: expect.stringContaining(MESSAGES.votingStart()),
         });
       });
 
@@ -250,7 +274,7 @@ describe("GovernanceService", () => {
         expect(mockIssues.transition).toHaveBeenCalledWith(testRef, {
           removeLabel: LABELS.DISCUSSION,
           addLabel: LABELS.VOTING,
-          comment: expect.stringContaining(MESSAGES.VOTING_START),
+          comment: expect.stringContaining(MESSAGES.votingStart()),
         });
       });
 
@@ -262,9 +286,23 @@ describe("GovernanceService", () => {
         expect(mockIssues.transition).toHaveBeenCalledWith(testRef, {
           removeLabel: LABELS.DISCUSSION,
           addLabel: LABELS.VOTING,
-          comment: expect.stringContaining(MESSAGES.VOTING_START),
+          comment: expect.stringContaining(MESSAGES.votingStart()),
         });
       });
+    });
+
+    it("should pin voting comment after transition", async () => {
+      // findVotingCommentId returns 12345 by default in beforeEach mock
+      await governance.transitionToVoting(testRef);
+
+      expect(mockIssues.findVotingCommentId).toHaveBeenCalledWith(testRef);
+      expect(mockIssues.pinComment).toHaveBeenCalledWith(testRef, 12345);
+    });
+
+    it("should not fail when pinning throws", async () => {
+      vi.mocked(mockIssues.pinComment).mockRejectedValueOnce(new Error("403 Forbidden"));
+
+      await expect(governance.transitionToVoting(testRef)).resolves.toBeUndefined();
     });
   });
 
@@ -280,7 +318,7 @@ describe("GovernanceService", () => {
       // Should contain voting metadata
       const commentBody = vi.mocked(mockIssues.comment).mock.calls[0][1];
       expect(commentBody).toContain('"type":"voting"');
-      expect(commentBody).toContain(MESSAGES.VOTING_START);
+      expect(commentBody).toContain(MESSAGES.votingStart());
     });
 
     it("should skip when voting comment already exists", async () => {
@@ -290,6 +328,26 @@ describe("GovernanceService", () => {
 
       expect(result).toBe("skipped");
       expect(mockIssues.comment).not.toHaveBeenCalled();
+    });
+
+    it("should pin voting comment after posting", async () => {
+      vi.mocked(mockIssues.findVotingCommentId)
+        .mockResolvedValueOnce(null)   // initial check: no existing comment
+        .mockResolvedValueOnce(99999); // pin step: find newly posted comment
+
+      const result = await governance.postVotingComment(testRef);
+
+      expect(result).toBe("posted");
+      expect(mockIssues.pinComment).toHaveBeenCalledWith(testRef, 99999);
+    });
+
+    it("should not fail when pinning throws after posting", async () => {
+      vi.mocked(mockIssues.findVotingCommentId)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(99999);
+      vi.mocked(mockIssues.pinComment).mockRejectedValueOnce(new Error("403 Forbidden"));
+
+      await expect(governance.postVotingComment(testRef)).resolves.toBe("posted");
     });
   });
 
@@ -413,13 +471,13 @@ describe("GovernanceService", () => {
       return { votes, voters: names, participants: names };
     }
 
-    it("should mark phase:ready-to-implement when thumbsUp > thumbsDown", async () => {
+    it("should mark ready-to-implement when thumbsUp > thumbsDown", async () => {
       const votes: VoteCounts = { thumbsUp: 5, thumbsDown: 2, confused: 1, eyes: 0 };
       vi.mocked(mockIssues.getValidatedVoteCounts).mockResolvedValue(validatedFrom(votes));
 
       const outcome = await governance.endVoting(testRef);
 
-      expect(outcome).toBe("phase:ready-to-implement");
+      expect(outcome).toBe("ready-to-implement");
       expect(mockIssues.findVotingCommentId).toHaveBeenCalledWith(testRef);
       expect(mockIssues.getValidatedVoteCounts).toHaveBeenCalledWith(testRef, 12345);
       expect(mockIssues.transition).toHaveBeenCalledWith(testRef, {
@@ -536,7 +594,7 @@ describe("GovernanceService", () => {
       const outcome = await governance.endVoting(testRef);
 
       // Should proceed with normal outcome (thumbsUp > thumbsDown)
-      expect(outcome).toBe("phase:ready-to-implement");
+      expect(outcome).toBe("ready-to-implement");
     });
 
     it("should return skipped and self-heal when voting comment not found", async () => {
@@ -678,7 +736,7 @@ describe("GovernanceService", () => {
         },
       });
 
-      expect(outcome).toBe("phase:ready-to-implement");
+      expect(outcome).toBe("ready-to-implement");
     });
 
     it("should count thumbsDown reactions as participation for requiredVoters", async () => {
@@ -708,7 +766,7 @@ describe("GovernanceService", () => {
       });
 
       // agent-a participated, so requiredVoters passes. 1 valid voter >= minVoters 1.
-      expect(outcome).toBe("phase:ready-to-implement");
+      expect(outcome).toBe("ready-to-implement");
     });
 
     it("should use pre-fetched validatedVotes and skip API call", async () => {
@@ -738,13 +796,13 @@ describe("GovernanceService", () => {
 
       const outcome = await governance.resolveInconclusive(testRef);
 
-      expect(outcome).toBe("phase:ready-to-implement");
+      expect(outcome).toBe("ready-to-implement");
       expect(mockIssues.findVotingCommentId).toHaveBeenCalledWith(testRef);
       expect(mockIssues.getValidatedVoteCounts).toHaveBeenCalledWith(testRef, 12345);
       expect(mockIssues.transition).toHaveBeenCalledWith(testRef, {
         removeLabel: LABELS.EXTENDED_VOTING,
         addLabel: LABELS.READY_TO_IMPLEMENT,
-        comment: MESSAGES.votingEndInconclusiveResolved(votes, "phase:ready-to-implement"),
+        comment: MESSAGES.votingEndInconclusiveResolved(votes, "ready-to-implement"),
         close: false,
         lock: false,
       });
@@ -910,7 +968,7 @@ describe("GovernanceService", () => {
         },
       });
 
-      expect(outcome).toBe("phase:ready-to-implement");
+      expect(outcome).toBe("ready-to-implement");
     });
 
     it("should use pre-fetched validatedVotes and skip API call", async () => {
@@ -937,7 +995,7 @@ describe("GovernanceService", () => {
         },
       });
 
-      expect(outcome).toBe("phase:ready-to-implement");
+      expect(outcome).toBe("ready-to-implement");
     });
 
     it("should force inconclusive when no required voter participated (minCount: 1)", async () => {
@@ -968,7 +1026,7 @@ describe("GovernanceService", () => {
         },
       });
 
-      expect(outcome).toBe("phase:ready-to-implement");
+      expect(outcome).toBe("ready-to-implement");
     });
   });
 
@@ -1102,6 +1160,7 @@ describe("GovernanceService voting cycle tracking", () => {
       hasHumanHelpComment: vi.fn().mockResolvedValue(false),
       getLabelAddedTime: vi.fn().mockResolvedValue(new Date()),
       transition: vi.fn().mockResolvedValue(undefined),
+      pinComment: vi.fn().mockResolvedValue(undefined),
       getIssueContext: vi.fn(),
     } as unknown as IssueOperations;
 
@@ -1159,6 +1218,7 @@ describe("createGovernanceService", () => {
     hasHumanHelpComment: vi.fn(),
     getLabelAddedTime: vi.fn(),
     transition: vi.fn(),
+    pinComment: vi.fn(),
     getIssueContext: vi.fn(),
   } as unknown as IssueOperations;
 

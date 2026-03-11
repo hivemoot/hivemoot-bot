@@ -7,16 +7,19 @@ import {
   createVotingMetadata,
   createLeaderboardMetadata,
   createWelcomeMetadata,
+  createAlignmentMetadata,
   createStatusMetadata,
   createHumanHelpMetadata,
   createNotificationMetadata,
   buildVotingComment,
   buildLeaderboardComment,
   buildDiscussionComment,
+  buildAlignmentComment,
   buildHumanHelpComment,
   buildNotificationComment,
   isVotingComment,
   isLeaderboardComment,
+  isAlignmentComment,
 
   isHumanHelpComment,
   isNotificationComment,
@@ -51,6 +54,10 @@ describe("SIGNATURES", () => {
 
   it("should have LEADERBOARD signature", () => {
     expect(SIGNATURES.LEADERBOARD).toBe("# 🐝 Implementation Leaderboard 📊");
+  });
+
+  it("should have ALIGNMENT signature", () => {
+    expect(SIGNATURES.ALIGNMENT).toBe("# 🐝 Blueprint");
   });
 
   it("should have HUMAN_HELP signature", () => {
@@ -127,6 +134,28 @@ describe("createWelcomeMetadata", () => {
       type: "welcome",
       createdAt: "2024-01-20T12:00:00.000Z",
       issueNumber: 99,
+    });
+  });
+});
+
+describe("createAlignmentMetadata", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2024-01-20T12:00:00.000Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("should create metadata with correct structure", () => {
+    const result = createAlignmentMetadata(73);
+
+    expect(result).toEqual({
+      version: 1,
+      type: "alignment",
+      createdAt: "2024-01-20T12:00:00.000Z",
+      issueNumber: 73,
     });
   });
 });
@@ -447,6 +476,29 @@ ${SIGNATURES.LEADERBOARD}`;
   });
 });
 
+describe("isAlignmentComment", () => {
+  it("should return true for comment with alignment metadata", () => {
+    const body = `<!-- hivemoot-metadata: {"version":1,"type":"alignment","createdAt":"2024-01-15T10:00:00.000Z","issueNumber":42} -->
+${SIGNATURES.ALIGNMENT}`;
+
+    expect(isAlignmentComment(body, TEST_APP_ID, TEST_APP_ID)).toBe(true);
+  });
+
+  it("should return false when metadata missing", () => {
+    expect(isAlignmentComment(SIGNATURES.ALIGNMENT, TEST_APP_ID, TEST_APP_ID)).toBe(false);
+  });
+
+  it("should return false for wrong metadata type", () => {
+    const body = `<!-- hivemoot-metadata: {"version":1,"type":"welcome","createdAt":"2024-01-15T10:00:00.000Z","issueNumber":42} -->`;
+    expect(isAlignmentComment(body, TEST_APP_ID, TEST_APP_ID)).toBe(false);
+  });
+
+  it("should return false when app ID doesn't match", () => {
+    const body = `<!-- hivemoot-metadata: {"version":1,"type":"alignment","createdAt":"2024-01-15T10:00:00.000Z","issueNumber":42} -->`;
+    expect(isAlignmentComment(body, TEST_APP_ID, 99999)).toBe(false);
+  });
+});
+
 describe("isHumanHelpComment", () => {
   it("should return true for comment with error metadata", () => {
     const body = buildHumanHelpComment(
@@ -734,6 +786,14 @@ describe("round-trip: build → parse", () => {
     expect(parsed?.issueNumber).toBe(99);
   });
 
+  it("should preserve alignment metadata through round-trip", () => {
+    const comment = buildAlignmentComment("Content", 88);
+    const parsed = parseMetadata(comment);
+
+    expect(parsed?.type).toBe("alignment");
+    expect(parsed?.issueNumber).toBe(88);
+  });
+
   it("should preserve human help metadata through round-trip", () => {
     const comment = buildHumanHelpComment("Content", 15, ERROR_CODES.VOTING_COMMENT_NOT_FOUND);
     const parsed = parseMetadata(comment);
@@ -784,6 +844,27 @@ describe("buildDiscussionComment", () => {
     expect(parsed?.type).toBe("welcome");
     expect(parsed?.issueNumber).toBe(99);
     expect(parsed?.version).toBe(1);
+  });
+});
+
+describe("buildAlignmentComment", () => {
+  it("should wrap content with alignment metadata", () => {
+    const content = "# 🐝 Blueprint\n\nInitial alignment placeholder.";
+    const result = buildAlignmentComment(content, 42);
+
+    expect(result).toContain("hivemoot-metadata:");
+    expect(result).toContain('"type":"alignment"');
+    expect(result).toContain('"issueNumber":42');
+    expect(result).toContain(content);
+  });
+
+  it("should place metadata before content", () => {
+    const content = "Test content";
+    const result = buildAlignmentComment(content, 1);
+
+    const metadataIndex = result.indexOf("<!--");
+    const contentIndex = result.indexOf(content);
+    expect(metadataIndex).toBeLessThan(contentIndex);
   });
 });
 

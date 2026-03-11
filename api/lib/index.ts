@@ -60,13 +60,32 @@ export type { Logger } from "./logger.js";
 export { processImplementationIntake, recalculateLeaderboardForPR } from "./implementation-intake.js";
 export type { IntakeTrigger, LeaderboardRecalcClient } from "./implementation-intake.js";
 
-// Merge readiness
-export { evaluateMergeReadiness } from "./merge-readiness.js";
-export type { MergeReadinessParams, MergeReadinessResult } from "./merge-readiness.js";
+// Merge readiness & preflight
+export { evaluateMergeReadiness, evaluatePreflightChecks, isCIPassing } from "./merge-readiness.js";
+export type {
+  MergeReadinessParams,
+  MergeReadinessResult,
+  PreflightParams,
+  PreflightResult,
+  PreflightCheckItem,
+  PreflightSeverity,
+} from "./merge-readiness.js";
+
+// Automerge classification
+export { evaluateAutomerge, classifyFiles, isFileAllowed } from "./automerge.js";
+export type {
+  AutomergeParams,
+  AutomergeResult,
+  ClassifyResult,
+} from "./automerge.js";
 
 // Repository label bootstrap
 export { RepositoryLabelService, createRepositoryLabelService } from "./repository-labels.js";
 export type { RepositoryLabelClient, EnsureLabelsResult } from "./repository-labels.js";
+
+// Onboarding PR service
+export { OnboardingService, createOnboardingService, ONBOARDING_BRANCH } from "./onboarding.js";
+export type { OnboardingClient, OnboardingResult } from "./onboarding.js";
 
 // Repository configuration
 export { loadRepositoryConfig, getDefaultConfig } from "./repo-config.js";
@@ -86,6 +105,8 @@ export type {
   ExitType,
   IntakeMethod,
   MergeReadyConfig,
+  AutomergeConfig,
+  PRConfig,
   StandupConfig,
 } from "./repo-config.js";
 export { isAutoVotingExit, isAutoDiscussionExit } from "./repo-config.js";

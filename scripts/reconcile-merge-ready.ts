@@ -20,6 +20,7 @@ import {
 } from "../api/lib/index.js";
 import { runForAllRepositories, runIfMain } from "./shared/run-installations.js";
 import type { Repository } from "../api/lib/index.js";
+import type { InstallationContext } from "./shared/run-installations.js";
 
 /**
  * Process a single repository — find all implementation PRs and reconcile each.
@@ -28,7 +29,8 @@ import type { Repository } from "../api/lib/index.js";
 export async function processRepository(
   octokit: InstanceType<typeof Octokit>,
   repo: Repository,
-  appId: number
+  appId: number,
+  _installation?: InstallationContext
 ): Promise<void> {
   const owner = repo.owner.login;
   const repoName = repo.name;
@@ -37,12 +39,16 @@ export async function processRepository(
 
   try {
     const repoConfig = await loadRepositoryConfig(octokit, owner, repoName);
-    const { mergeReady, trustedReviewers } = repoConfig.governance.pr;
-
-    if (!mergeReady) {
-      logger.debug(`[${repo.full_name}] mergeReady not configured, skipping`);
+    if (!repoConfig) {
+      logger.debug(`[${repo.full_name}] No config file found; skipping merge-ready reconciliation`);
       return;
     }
+
+    if (!repoConfig.governance.pr?.mergeReady) {
+      logger.debug(`[${repo.full_name}] PR workflows or mergeReady not configured, skipping`);
+      return;
+    }
+    const { mergeReady, trustedReviewers } = repoConfig.governance.pr;
 
     const prs = createPROperations(octokit, { appId });
     const implementationPRs = await prs.findPRsWithLabel(owner, repoName, LABELS.IMPLEMENTATION);

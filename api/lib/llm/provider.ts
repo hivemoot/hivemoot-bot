@@ -17,7 +17,7 @@ import { createAnthropic } from "@ai-sdk/anthropic";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createMistral } from "@ai-sdk/mistral";
 import { createOpenAI } from "@ai-sdk/openai";
-import type { LanguageModelV1 } from "ai";
+import type { LanguageModel } from "ai";
 
 import type { LLMConfig, LLMProvider, LLMReadiness } from "./types.js";
 import { resolveInstallationBYOKConfig } from "./byok.js";
@@ -134,10 +134,10 @@ export function getLLMConfig(): LLMConfig | null {
  * Create a language model instance for the configured provider.
  *
  * @param config - LLM configuration
- * @returns LanguageModelV1 instance
+ * @returns LanguageModel instance
  * @throws Error if API key is missing for the provider
  */
-function createModelWithApiKey(config: LLMConfig, apiKey: string): LanguageModelV1 {
+function createModelWithApiKey(config: LLMConfig, apiKey: string): LanguageModel {
   switch (config.provider) {
     case "anthropic": {
       const anthropic = createAnthropic({ apiKey });
@@ -151,28 +151,7 @@ function createModelWithApiKey(config: LLMConfig, apiKey: string): LanguageModel
 
     case "google": {
       const google = createGoogleGenerativeAI({ apiKey });
-      // Disable Gemini's native responseSchema so the SDK injects the JSON
-      // schema into the prompt instead.  @ai-sdk/google v1.2.22 (Jul 2025)
-      // predates gemini-3-flash-preview (Dec 2025); the older SDK's schema
-      // serialization breaks newer models, causing "No object generated" errors.
-      //
-      // How it works (ai SDK source, generateObject json mode):
-      //   supportsStructuredOutputs=true  → sends responseSchema to Gemini API
-      //   supportsStructuredOutputs=false → appends "JSON schema: …" to the
-      //     system prompt and sets responseMimeType only
-      //
-      // Revisit after upgrading @ai-sdk/google beyond v1.2.22 — newer versions
-      // may properly serialize schemas for gemini-3-* models, making this
-      // workaround unnecessary.
-      //
-      // References:
-      //   • AI SDK docs on the flag:
-      //     https://ai-sdk.dev/providers/ai-sdk-providers/google-generative-ai#structured-outputs
-      //   • SDK source (@ai-sdk/google, object-json mode in doGenerate):
-      //     responseSchema is populated only when supportsStructuredOutputs is true
-      //   • SDK source (ai core, generateObject):
-      //     injectJsonInstruction() called when supportsStructuredOutputs is false
-      return google(config.model, { structuredOutputs: false });
+      return google(config.model);
     }
 
     case "mistral": {
@@ -230,7 +209,7 @@ function getApiKeyFromEnv(provider: LLMProvider): string {
   }
 }
 
-export function createModel(config: LLMConfig): LanguageModelV1 {
+export function createModel(config: LLMConfig): LanguageModel {
   const apiKey = getApiKeyFromEnv(config.provider);
   return createModelWithApiKey(config, apiKey);
 }
@@ -249,7 +228,7 @@ export function createModel(config: LLMConfig): LanguageModelV1 {
  */
 export async function createModelFromEnv(
   options?: ModelResolutionOptions
-): Promise<{ model: LanguageModelV1; config: LLMConfig } | null> {
+): Promise<{ model: LanguageModel; config: LLMConfig } | null> {
   if (options?.installationId !== undefined) {
     const byokConfig = await resolveInstallationBYOKConfig(options.installationId);
     if (!byokConfig) {

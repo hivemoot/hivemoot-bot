@@ -340,6 +340,7 @@ export const LABELS = {
   IMPLEMENTED: "hivemoot:implemented",
   NEEDS_HUMAN: "hivemoot:needs-human",
   MERGE_READY: "hivemoot:merge-ready",
+  SQUASH_QUEUED: "hivemoot:squash-queued",
   AUTOMERGE: "hivemoot:automerge",
 } as const;
 
@@ -461,6 +462,11 @@ export const REQUIRED_REPOSITORY_LABELS: readonly RepositoryLabelDefinition[] = 
     name: LABELS.MERGE_READY,
     color: "2ea043",
     description: "Implementation PR meets merge-readiness checks.",
+  },
+  {
+    name: LABELS.SQUASH_QUEUED,
+    color: "fbca04",
+    description: "PR is queued for automatic squash retry when CI completes.",
   },
   {
     name: LABELS.AUTOMERGE,

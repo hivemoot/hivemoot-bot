@@ -149,7 +149,8 @@ export interface RepoConfigFile {
  * Present only when the `pr:` section exists in the config file.
  */
 export interface PRConfig {
-  staleDays: number;
+  /** Null unless `governance.pr.staleDays` is explicitly present in YAML. */
+  staleDays: number | null;
   maxPRsPerIssue: number;
   trustedReviewers: string[];
   intake: IntakeMethod[];
@@ -277,6 +278,13 @@ function parseIntValue(
   }
 
   return clamped;
+}
+
+function hasOwnConfigKey(value: unknown, key: string): boolean {
+  return typeof value === "object"
+    && value !== null
+    && !Array.isArray(value)
+    && Object.prototype.hasOwnProperty.call(value, key);
 }
 
 /**
@@ -1198,7 +1206,10 @@ function parseRepoConfig(raw: unknown, repoFullName: string): EffectiveConfig {
     const mergeReady = parseMergeReadyConfig(prConfigRaw?.mergeReady, trustedReviewers, repoFullName);
     const automerge = parseAutomergeConfig(prConfigRaw?.automerge, trustedReviewers, repoFullName);
     pr = {
-      staleDays: parseIntValue(prConfigRaw?.staleDays, PR_STALE_DAYS_BOUNDS, "pr.staleDays", repoFullName),
+      // Stale PR cleanup is opt-in per repo: omit staleDays to disable it.
+      staleDays: hasOwnConfigKey(prConfigRaw, "staleDays")
+        ? parseIntValue(prConfigRaw?.staleDays, PR_STALE_DAYS_BOUNDS, "pr.staleDays", repoFullName)
+        : null,
       maxPRsPerIssue: parseIntValue(prConfigRaw?.maxPRsPerIssue, MAX_PRS_PER_ISSUE_BOUNDS, "pr.maxPRsPerIssue", repoFullName),
       trustedReviewers,
       intake,

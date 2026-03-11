@@ -453,6 +453,63 @@ describe("executeCommand", () => {
       );
     });
 
+    it("should remove extra phase labels after transition", async () => {
+      const ctx = createCtx({
+        verb: "implement",
+        issueLabels: [{ name: LABELS.VOTING }, { name: LABELS.NEEDS_HUMAN }],
+      });
+      const result = await executeCommand(ctx);
+
+      expect(result.status).toBe("executed");
+      expect(mockIssueOps.transition).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          removeLabel: LABELS.VOTING,
+          addLabel: LABELS.READY_TO_IMPLEMENT,
+        }),
+      );
+      expect(mockIssueOps.removeLabel).toHaveBeenCalledTimes(1);
+      expect(mockIssueOps.removeLabel).toHaveBeenCalledWith(
+        expect.anything(),
+        LABELS.NEEDS_HUMAN,
+      );
+    });
+
+    it("should continue when extra phase label was already removed", async () => {
+      const notFoundError = Object.assign(new Error("Not Found"), { status: 404 });
+      mockIssueOps.removeLabel.mockRejectedValueOnce(notFoundError);
+      const ctx = createCtx({
+        verb: "implement",
+        issueLabels: [{ name: LABELS.VOTING }, { name: LABELS.NEEDS_HUMAN }],
+      });
+      const result = await executeCommand(ctx);
+
+      expect(result.status).toBe("executed");
+      expect(mockIssueOps.removeLabel).toHaveBeenCalledWith(
+        expect.anything(),
+        LABELS.NEEDS_HUMAN,
+      );
+      expect(ctx.log.warn).not.toHaveBeenCalled();
+    });
+
+    it("should warn and continue when extra phase label cleanup fails", async () => {
+      mockIssueOps.removeLabel.mockRejectedValueOnce(new Error("label cleanup failed"));
+      const ctx = createCtx({
+        verb: "implement",
+        issueLabels: [{ name: LABELS.VOTING }, { name: LABELS.NEEDS_HUMAN }],
+      });
+      const result = await executeCommand(ctx);
+
+      expect(result.status).toBe("executed");
+      expect(ctx.log.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          issueNumber: 42,
+          label: LABELS.NEEDS_HUMAN,
+        }),
+        "Failed to remove extra phase label after /implement transition",
+      );
+    });
+
     it("should include sender username and signature in transition comment", async () => {
       const ctx = createCtx({ verb: "implement", senderLogin: "alice" });
       await executeCommand(ctx);

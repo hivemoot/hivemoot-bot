@@ -495,17 +495,14 @@ async function handleImplement(ctx: CommandContext): Promise<CommandResult> {
   };
   const issues = createIssueOperations(ctx.octokit, { appId: ctx.appId });
 
-  // Determine which phase label to remove (none for unlabeled issues)
-  let removeLabel: string | undefined;
-  if (hasLabel(ctx, LABELS.DISCUSSION)) {
-    removeLabel = LABELS.DISCUSSION;
-  } else if (hasLabel(ctx, LABELS.VOTING)) {
-    removeLabel = LABELS.VOTING;
-  } else if (hasLabel(ctx, LABELS.EXTENDED_VOTING)) {
-    removeLabel = LABELS.EXTENDED_VOTING;
-  } else if (hasLabel(ctx, LABELS.NEEDS_HUMAN)) {
-    removeLabel = LABELS.NEEDS_HUMAN;
-  }
+  const phaseLabelsInPriority = [
+    LABELS.DISCUSSION,
+    LABELS.VOTING,
+    LABELS.EXTENDED_VOTING,
+    LABELS.NEEDS_HUMAN,
+  ] as const;
+  const labelsToClear = phaseLabelsInPriority.filter(label => hasLabel(ctx, label));
+  const [removeLabel, ...extraPhaseLabelsToRemove] = labelsToClear;
 
   const message = `# 🐝 Fast-tracked to Implementation ⚡\n\nMoved to ready-to-implement by @${ctx.senderLogin} via \`/implement\` command.\n\nNext steps:\n- Open a PR for review if you plan to implement.\n- Link this issue in the PR description (e.g., \`Fixes #${ctx.issueNumber}\`).${SIGNATURE}`;
 
@@ -515,6 +512,21 @@ async function handleImplement(ctx: CommandContext): Promise<CommandResult> {
     comment: message,
     unlock: true,
   });
+
+  for (const label of extraPhaseLabelsToRemove) {
+    try {
+      await issues.removeLabel(ref, label);
+    } catch (error) {
+      const status = getErrorStatus(error);
+      if (status === 404) {
+        continue;
+      }
+      ctx.log.warn(
+        { err: error, issueNumber: ctx.issueNumber, label },
+        "Failed to remove extra phase label after /implement transition",
+      );
+    }
+  }
 
   return { status: "executed", message: "Fast-tracked to ready-to-implement." };
 }

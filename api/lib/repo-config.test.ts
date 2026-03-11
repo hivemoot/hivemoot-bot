@@ -2525,14 +2525,14 @@ governance:
       });
     });
 
-    describe("alignment.autoGather", () => {
+    describe("proposals.discussion.autoGather", () => {
       it("should default to disabled when not configured", async () => {
         const configYaml = `version: 1\n`;
         const octokit = createMockOctokit({
           data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
         });
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
-        expect(config!.governance.alignment.autoGather).toEqual({
+        expect(config!.governance.proposals.discussion.autoGather).toEqual({
           enabled: false,
           minNewComments: CONFIG_BOUNDS.autoGather.minNewComments.default,
           cooldownMinutes: CONFIG_BOUNDS.autoGather.cooldownMinutes.default,
@@ -2541,24 +2541,25 @@ governance:
 
       it("should default to disabled in getDefaultConfig", () => {
         const defaults = getDefaultConfig();
-        expect(defaults.governance.alignment.autoGather.enabled).toBe(false);
+        expect(defaults.governance.proposals.discussion.autoGather.enabled).toBe(false);
       });
 
       it("should parse enabled auto-gather with custom values", async () => {
         const configYaml = `
 version: 1
 governance:
-  alignment:
-    autoGather:
-      enabled: true
-      minNewComments: 3
-      cooldownMinutes: 30
+  proposals:
+    discussion:
+      autoGather:
+        enabled: true
+        minNewComments: 3
+        cooldownMinutes: 30
 `;
         const octokit = createMockOctokit({
           data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
         });
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
-        expect(config!.governance.alignment.autoGather).toEqual({
+        expect(config!.governance.proposals.discussion.autoGather).toEqual({
           enabled: true,
           minNewComments: 3,
           cooldownMinutes: 30,
@@ -2569,19 +2570,20 @@ governance:
         const configYaml = `
 version: 1
 governance:
-  alignment:
-    autoGather:
-      enabled: true
+  proposals:
+    discussion:
+      autoGather:
+        enabled: true
 `;
         const octokit = createMockOctokit({
           data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
         });
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
-        expect(config!.governance.alignment.autoGather.enabled).toBe(true);
-        expect(config!.governance.alignment.autoGather.minNewComments).toBe(
+        expect(config!.governance.proposals.discussion.autoGather.enabled).toBe(true);
+        expect(config!.governance.proposals.discussion.autoGather.minNewComments).toBe(
           CONFIG_BOUNDS.autoGather.minNewComments.default
         );
-        expect(config!.governance.alignment.autoGather.cooldownMinutes).toBe(
+        expect(config!.governance.proposals.discussion.autoGather.cooldownMinutes).toBe(
           CONFIG_BOUNDS.autoGather.cooldownMinutes.default
         );
       });
@@ -2590,16 +2592,17 @@ governance:
         const configYaml = `
 version: 1
 governance:
-  alignment:
-    autoGather:
-      enabled: true
-      minNewComments: 9999
+  proposals:
+    discussion:
+      autoGather:
+        enabled: true
+        minNewComments: 9999
 `;
         const octokit = createMockOctokit({
           data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
         });
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
-        expect(config!.governance.alignment.autoGather.minNewComments).toBe(
+        expect(config!.governance.proposals.discussion.autoGather.minNewComments).toBe(
           CONFIG_BOUNDS.autoGather.minNewComments.max
         );
       });
@@ -2608,16 +2611,17 @@ governance:
         const configYaml = `
 version: 1
 governance:
-  alignment:
-    autoGather:
-      enabled: true
-      cooldownMinutes: 0
+  proposals:
+    discussion:
+      autoGather:
+        enabled: true
+        cooldownMinutes: 0
 `;
         const octokit = createMockOctokit({
           data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
         });
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
-        expect(config!.governance.alignment.autoGather.cooldownMinutes).toBe(
+        expect(config!.governance.proposals.discussion.autoGather.cooldownMinutes).toBe(
           CONFIG_BOUNDS.autoGather.cooldownMinutes.min
         );
       });
@@ -2626,29 +2630,31 @@ governance:
         const configYaml = `
 version: 1
 governance:
-  alignment:
-    autoGather:
-      enabled: "yes"
+  proposals:
+    discussion:
+      autoGather:
+        enabled: "yes"
 `;
         const octokit = createMockOctokit({
           data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
         });
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
-        expect(config!.governance.alignment.autoGather.enabled).toBe(false);
+        expect(config!.governance.proposals.discussion.autoGather.enabled).toBe(false);
       });
 
       it("should disable when autoGather is not an object", async () => {
         const configYaml = `
 version: 1
 governance:
-  alignment:
-    autoGather: "invalid"
+  proposals:
+    discussion:
+      autoGather: "invalid"
 `;
         const octokit = createMockOctokit({
           data: { type: "file", content: encodeBase64(configYaml), encoding: "base64" },
         });
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
-        expect(config!.governance.alignment.autoGather.enabled).toBe(false);
+        expect(config!.governance.proposals.discussion.autoGather.enabled).toBe(false);
       });
     });
   });

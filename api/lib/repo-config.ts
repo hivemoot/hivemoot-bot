@@ -72,9 +72,9 @@ export interface StandupConfig {
   category: string;
 }
 
-// ── Alignment Auto-Gather Config ────────────────────────────────────────
+// ── Auto-Gather Config ──────────────────────────────────────────────────
 
-export interface AlignmentAutoGatherConfig {
+export interface AutoGatherConfig {
   enabled: boolean;
   minNewComments: number;
   cooldownMinutes: number;
@@ -126,16 +126,14 @@ export function isAutoDiscussionExit(exit: DiscussionExit): exit is DiscussionAu
 export interface RepoConfigFile {
   version?: number;
   governance?: {
-    alignment?: {
-      autoGather?: {
-        enabled?: boolean;
-        minNewComments?: number;
-        cooldownMinutes?: number;
-      };
-    };
     proposals?: {
       discussion?: {
         exits?: unknown[];
+        autoGather?: {
+          enabled?: boolean;
+          minNewComments?: number;
+          cooldownMinutes?: number;
+        };
       };
       voting?: {
         exits?: unknown[];
@@ -179,14 +177,12 @@ export interface PRConfig {
 export interface EffectiveConfig {
   version: number;
   governance: {
-    alignment: {
-      autoGather: AlignmentAutoGatherConfig;
-    };
     proposals: {
       discussion: {
         exits: DiscussionExit[];
         /** Derived from the last auto exit's afterMs (0 when manual-only). */
         durationMs: number;
+        autoGather: AutoGatherConfig;
       };
       voting: {
         exits: VotingExit[];
@@ -939,15 +935,15 @@ function parseMergeReadyConfig(
 }
 
 /**
- * Parse and validate alignment auto-gather config.
+ * Parse and validate auto-gather config.
  * Opt-in feature — disabled by default.
  * When enabled, auto-gather triggers on discussion-phase issues after N new comments.
  */
-function parseAlignmentAutoGatherConfig(
+function parseAutoGatherConfig(
   value: unknown,
   repoFullName: string
-): AlignmentAutoGatherConfig {
-  const disabled: AlignmentAutoGatherConfig = {
+): AutoGatherConfig {
+  const disabled: AutoGatherConfig = {
     enabled: false,
     minNewComments: CONFIG_BOUNDS.autoGather.minNewComments.default,
     cooldownMinutes: CONFIG_BOUNDS.autoGather.cooldownMinutes.default,
@@ -959,7 +955,7 @@ function parseAlignmentAutoGatherConfig(
 
   if (typeof value !== "object" || Array.isArray(value)) {
     logger.warn(
-      `[${repoFullName}] Invalid alignment.autoGather config: expected object. Disabling auto-gather.`
+      `[${repoFullName}] Invalid proposals.discussion.autoGather config: expected object. Disabling auto-gather.`
     );
     return disabled;
   }
@@ -972,7 +968,7 @@ function parseAlignmentAutoGatherConfig(
       enabled = obj.enabled;
     } else {
       logger.warn(
-        `[${repoFullName}] Invalid alignment.autoGather.enabled: expected boolean. Disabling auto-gather.`
+        `[${repoFullName}] Invalid proposals.discussion.autoGather.enabled: expected boolean. Disabling auto-gather.`
       );
     }
   }
@@ -984,14 +980,14 @@ function parseAlignmentAutoGatherConfig(
   const minNewComments = parseIntValue(
     obj.minNewComments,
     CONFIG_BOUNDS.autoGather.minNewComments,
-    "alignment.autoGather.minNewComments",
+    "proposals.discussion.autoGather.minNewComments",
     repoFullName
   );
 
   const cooldownMinutes = parseIntValue(
     obj.cooldownMinutes,
     CONFIG_BOUNDS.autoGather.cooldownMinutes,
-    "alignment.autoGather.cooldownMinutes",
+    "proposals.discussion.autoGather.cooldownMinutes",
     repoFullName
   );
 
@@ -1257,9 +1253,9 @@ function deriveVotingDurationMs(exits: VotingExit[]): number {
 function parseRepoConfig(raw: unknown, repoFullName: string): EffectiveConfig {
   const config = raw as RepoConfigFile | undefined;
 
-  // Alignment config
-  const autoGather = parseAlignmentAutoGatherConfig(
-    config?.governance?.alignment?.autoGather,
+  // Discussion auto-gather config
+  const autoGather = parseAutoGatherConfig(
+    config?.governance?.proposals?.discussion?.autoGather,
     repoFullName
   );
 
@@ -1301,11 +1297,11 @@ function parseRepoConfig(raw: unknown, repoFullName: string): EffectiveConfig {
   return {
     version: typeof config?.version === "number" ? config.version : 1,
     governance: {
-      alignment: { autoGather },
       proposals: {
         discussion: {
           exits: discussionExits,
           durationMs: deriveDiscussionDurationMs(discussionExits),
+          autoGather,
         },
         voting: {
           exits,
@@ -1332,17 +1328,15 @@ export function getDefaultConfig(): EffectiveConfig {
   return {
     version: 1,
     governance: {
-      alignment: {
-        autoGather: {
-          enabled: false,
-          minNewComments: CONFIG_BOUNDS.autoGather.minNewComments.default,
-          cooldownMinutes: CONFIG_BOUNDS.autoGather.cooldownMinutes.default,
-        },
-      },
       proposals: {
         discussion: {
           exits: [DEFAULT_MANUAL_DISCUSSION_EXIT],
           durationMs: 0,
+          autoGather: {
+            enabled: false,
+            minNewComments: CONFIG_BOUNDS.autoGather.minNewComments.default,
+            cooldownMinutes: CONFIG_BOUNDS.autoGather.cooldownMinutes.default,
+          },
         },
         voting: {
           exits: [DEFAULT_MANUAL_VOTING_EXIT],

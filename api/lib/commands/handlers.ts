@@ -26,7 +26,7 @@ import type { PreflightCheckItem, PreflightResult } from "../merge-readiness.js"
 import { CommitMessageGenerator, formatCommitMessage } from "../llm/commit-message.js";
 import type { PRContext } from "../llm/types.js";
 import type { IssueRef, PRRef } from "../types.js";
-import type { EffectiveConfig, AlignmentAutoGatherConfig } from "../repo-config.js";
+import type { EffectiveConfig, AutoGatherConfig } from "../repo-config.js";
 import { getErrorStatus } from "../github-client.js";
 import { isTransientError } from "../transient-error.js";
 
@@ -1728,7 +1728,7 @@ export interface AutoGatherParams {
   installationId?: number;
   /** Labels currently on the issue, used to gate on discussion phase. */
   issueLabels: Array<{ name: string }>;
-  autoGatherConfig: AlignmentAutoGatherConfig;
+  autoGatherConfig: AutoGatherConfig;
   appId: number;
   log: {
     info: (...args: unknown[]) => void;

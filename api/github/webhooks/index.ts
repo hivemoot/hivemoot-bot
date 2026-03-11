@@ -411,7 +411,7 @@ export function app(probotApp: Probot): void {
         const isDiscussion = issueLabels.some((l) => isLabelMatch(l.name, LABELS.DISCUSSION));
         if (isDiscussion) {
           const repoConfig = await loadRepositoryConfig(context.octokit, owner, repo);
-          if (repoConfig?.governance.alignment.autoGather.enabled) {
+          if (repoConfig?.governance.proposals.discussion.autoGather.enabled) {
             await autoGatherIfEligible({
               octokit: context.octokit as Parameters<typeof autoGatherIfEligible>[0]["octokit"],
               owner,
@@ -419,7 +419,7 @@ export function app(probotApp: Probot): void {
               issueNumber: issue.number,
               installationId: context.payload.installation?.id,
               issueLabels,
-              autoGatherConfig: repoConfig.governance.alignment.autoGather,
+              autoGatherConfig: repoConfig.governance.proposals.discussion.autoGather,
               appId,
               log: context.log,
             });

@@ -89,7 +89,8 @@ export async function processPR(
  * Process a single repository - find implementation PRs and check for staleness.
  * Exported for testing.
  *
- * Loads per-repo config from .github/hivemoot.yml if present.
+ * Loads per-repo config from .github/hivemoot.yml if present and only runs
+ * when `governance.pr.staleDays` is explicitly configured for the repo.
  *
  * @param appId - GitHub App ID for filtering out bot comments
  */
@@ -118,6 +119,12 @@ export async function processRepository(
       return;
     }
 
+    const staleDays = repoConfig.governance.pr.staleDays;
+    if (staleDays === null) {
+      logger.debug("Stale PR cleanup disabled (no pr.staleDays in config). Skipping.");
+      return;
+    }
+
     const prs = createPROperations(octokit, { appId });
 
     // Find all open PRs with 'implementation' label
@@ -136,7 +143,7 @@ export async function processRepository(
       try {
         const ref: PRRef = { owner, repo: repoName, prNumber: pr.number };
         const lastActivityDate = await prs.getLatestActivityDate(ref, pr.createdAt);
-        await processPR(prs, ref, pr, repoConfig.governance.pr.staleDays, lastActivityDate);
+        await processPR(prs, ref, pr, staleDays, lastActivityDate);
       } catch (error) {
         failedPRs.push(pr.number);
         logger.error(`Failed to process PR #${pr.number}`, error as Error);
@@ -159,7 +166,7 @@ export async function processRepository(
 async function main(): Promise<void> {
   await runForAllRepositories({
     scriptName: "scheduled stale PR cleanup",
-    startMessage: "Per-repo config loaded from .github/hivemoot.yml (default: 3 days stale, 6 days close)",
+    startMessage: "Per-repo config loaded from .github/hivemoot.yml (runs only when governance.pr.staleDays is set)",
     processRepository,
   });
 }

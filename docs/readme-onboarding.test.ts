@@ -10,6 +10,8 @@ describe("README onboarding contract", () => {
   it("front-loads a local quick start with prerequisites", () => {
     expect(readme).toContain("## Quick Start");
     expect(readme).toContain("Node.js 22.x");
+    expect(readme).toContain(".nvmrc");
+    expect(readme).toContain("otherwise install Node 22.x directly");
     expect(readme).toContain("npm");
     expect(readme).toContain("gh auth status");
   });
@@ -21,5 +23,6 @@ describe("README onboarding contract", () => {
     expect(readme).toContain("npm run lint");
     expect(readme).toContain("npm run build");
     expect(readme).toContain("Success signal:");
+    expect(readme).toContain("node --version");
   });
 });

@@ -21,7 +21,7 @@ Use the main Hivemoot guide to install the bot on a repository. If you want to r
 
 **Prerequisites**
 
-- Node.js 22.x (`nvm use` reads the pinned version from `.nvmrc`)
+- Node.js 22.x (`.nvmrc` pins the version; use `nvm use` if you have `nvm`, otherwise install Node 22.x directly)
 - npm
 - GitHub CLI authenticated with `gh auth status` if you plan to use the contribution workflow
 
@@ -35,6 +35,7 @@ npm run build
 ```
 
 Success signal: all five commands pass with no errors. That confirms the webhook handlers, scripts, and docs contract tests are in a healthy local state.
+If `npm install` only shows an engine warning, check `node --version` before continuing. This repo supports Node 22.x; newer versions can install dependencies without giving you a supported runtime.
 
 ## Overview
 

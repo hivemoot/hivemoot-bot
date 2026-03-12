@@ -4,6 +4,25 @@ export interface InstallationRepoPayload {
   full_name: string;
 }
 
+export interface RepoContext {
+  owner: string;
+  repo: string;
+  fullName: string;
+}
+
+export function getRepoContext(repository: InstallationRepoPayload): RepoContext {
+  const ownerFromFullName = repository.full_name.split("/")[0];
+  const owner = repository.owner?.login ?? ownerFromFullName;
+  if (!owner) {
+    throw new Error(`Unable to determine repository owner from '${repository.full_name}'`);
+  }
+  return {
+    owner,
+    repo: repository.name,
+    fullName: repository.full_name,
+  };
+}
+
 export interface InstallationPayload {
   repositories?: readonly InstallationRepoPayload[];
   repositories_added?: readonly InstallationRepoPayload[];

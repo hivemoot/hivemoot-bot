@@ -665,13 +665,19 @@ export function app(probotApp: Probot): void {
           log: context.log,
         });
 
+        let reviewMergeable: boolean | null | undefined;
+        if (repoConfig.governance.pr.automerge) {
+          const prState = await prs.get({ owner, repo, prNumber: number });
+          reviewMergeable = prState.mergeable;
+        }
+
         await evaluateAutomerge({
           prs,
           ref: { owner, repo, prNumber: number },
           config: repoConfig.governance.pr.automerge,
           trustedReviewers: repoConfig.governance.pr.trustedReviewers,
           draft: context.payload.pull_request.draft,
-          // mergeable is omitted from SimplePullRequest review payloads.
+          mergeable: reviewMergeable,
           log: context.log,
         });
       }
@@ -711,13 +717,19 @@ export function app(probotApp: Probot): void {
           log: context.log,
         });
 
+        let dismissedMergeable: boolean | null | undefined;
+        if (repoConfig.governance.pr.automerge) {
+          const prState = await prs.get({ owner, repo, prNumber: number });
+          dismissedMergeable = prState.mergeable;
+        }
+
         await evaluateAutomerge({
           prs,
           ref: { owner, repo, prNumber: number },
           config: repoConfig.governance.pr.automerge,
           trustedReviewers: repoConfig.governance.pr.trustedReviewers,
           draft: context.payload.pull_request.draft,
-          // mergeable is omitted from SimplePullRequest review payloads.
+          mergeable: dismissedMergeable,
           log: context.log,
         });
       }
@@ -975,6 +987,12 @@ export function app(probotApp: Probot): void {
             headSha: sha,
             log: context.log,
           });
+          let statusMergeable: boolean | null | undefined;
+          if (repoConfig.governance.pr.automerge) {
+            const prState = await prs.get({ owner, repo, prNumber: pr.number });
+            statusMergeable = prState.mergeable;
+          }
+
           await evaluateAutomerge({
             prs,
             ref: { owner, repo, prNumber: pr.number },
@@ -983,6 +1001,7 @@ export function app(probotApp: Probot): void {
             currentLabels,
             headSha: sha,
             draft: pr.draft,
+            mergeable: statusMergeable,
             log: context.log,
           });
 

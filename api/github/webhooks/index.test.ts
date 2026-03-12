@@ -1426,6 +1426,169 @@ describe("Queen Bot", () => {
         })
       );
     });
+
+    it("pull_request_review.submitted: threads mergeable from prs.get() when automerge is configured", async () => {
+      const { handlers } = createWebhookHarness();
+      const handler = handlers.get("pull_request_review.submitted");
+      expect(handler).toBeDefined();
+
+      const octokit = createReviewOctokit();
+      octokit.rest.pulls.get.mockResolvedValue({
+        data: {
+          number: 77,
+          state: "open",
+          merged: false,
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+          user: { login: "author" },
+          head: { sha: "abc123" },
+          mergeable: false,
+        },
+      });
+      const log = { info: vi.fn(), error: vi.fn() };
+      const repoConfig = {
+        governance: {
+          pr: {
+            maxPRsPerIssue: 3,
+            trustedReviewers: ["maintainer-a"],
+            intake: {},
+            mergeReady: { minApprovals: 1 },
+            automerge: { dryRun: true, minApprovals: 1, allowedPaths: ["**/*.md"], maxFiles: 5, maxChangedLines: 50, requireChecks: false },
+          },
+        },
+      };
+
+      vi.mocked(getLinkedIssues).mockResolvedValueOnce([]);
+      vi.mocked(loadRepositoryConfig).mockResolvedValueOnce(repoConfig as any);
+
+      await handler!({
+        octokit,
+        log,
+        payload: {
+          review: { state: "approved" },
+          pull_request: { number: 77, draft: false },
+          repository: {
+            name: "test-repo",
+            full_name: "hivemoot/test-repo",
+            owner: { login: "hivemoot" },
+          },
+        },
+      });
+
+      expect(octokit.rest.pulls.get).toHaveBeenCalledWith(
+        expect.objectContaining({ owner: "hivemoot", repo: "test-repo", pull_number: 77 })
+      );
+      expect(evaluateAutomerge).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ref: { owner: "hivemoot", repo: "test-repo", prNumber: 77 },
+          draft: false,
+          mergeable: false,
+          log,
+        })
+      );
+    });
+
+    it("pull_request_review.dismissed: threads mergeable from prs.get() when automerge is configured", async () => {
+      const { handlers } = createWebhookHarness();
+      const handler = handlers.get("pull_request_review.dismissed");
+      expect(handler).toBeDefined();
+
+      const octokit = createReviewOctokit();
+      octokit.rest.pulls.get.mockResolvedValue({
+        data: {
+          number: 88,
+          state: "open",
+          merged: false,
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+          user: { login: "author" },
+          head: { sha: "abc123" },
+          mergeable: false,
+        },
+      });
+      const log = { info: vi.fn(), error: vi.fn() };
+      const repoConfig = {
+        governance: {
+          pr: {
+            maxPRsPerIssue: 3,
+            trustedReviewers: ["maintainer-b"],
+            intake: {},
+            mergeReady: { minApprovals: 1 },
+            automerge: { dryRun: true, minApprovals: 1, allowedPaths: ["**/*.md"], maxFiles: 5, maxChangedLines: 50, requireChecks: false },
+          },
+        },
+      };
+      vi.mocked(loadRepositoryConfig).mockResolvedValueOnce(repoConfig as any);
+
+      await handler!({
+        octokit,
+        log,
+        payload: {
+          review: { state: "dismissed" },
+          pull_request: { number: 88, draft: false },
+          repository: {
+            name: "test-repo",
+            full_name: "hivemoot/test-repo",
+            owner: { login: "hivemoot" },
+          },
+        },
+      });
+
+      expect(octokit.rest.pulls.get).toHaveBeenCalledWith(
+        expect.objectContaining({ owner: "hivemoot", repo: "test-repo", pull_number: 88 })
+      );
+      expect(evaluateAutomerge).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ref: { owner: "hivemoot", repo: "test-repo", prNumber: 88 },
+          draft: false,
+          mergeable: false,
+          log,
+        })
+      );
+    });
+
+    it("pull_request_review.submitted: skips prs.get() when automerge is not configured", async () => {
+      const { handlers } = createWebhookHarness();
+      const handler = handlers.get("pull_request_review.submitted");
+      expect(handler).toBeDefined();
+
+      const octokit = createReviewOctokit();
+      const log = { info: vi.fn(), error: vi.fn() };
+      const repoConfig = {
+        governance: {
+          pr: {
+            maxPRsPerIssue: 3,
+            trustedReviewers: [],
+            intake: {},
+            mergeReady: { minApprovals: 1 },
+            // automerge: not set
+          },
+        },
+      };
+
+      vi.mocked(getLinkedIssues).mockResolvedValueOnce([]);
+      vi.mocked(loadRepositoryConfig).mockResolvedValueOnce(repoConfig as any);
+
+      await handler!({
+        octokit,
+        log,
+        payload: {
+          review: { state: "approved" },
+          pull_request: { number: 99, draft: false },
+          repository: {
+            name: "test-repo",
+            full_name: "hivemoot/test-repo",
+            owner: { login: "hivemoot" },
+          },
+        },
+      });
+
+      // No extra prs.get() call when automerge is not configured
+      expect(octokit.rest.pulls.get).not.toHaveBeenCalled();
+      expect(evaluateAutomerge).toHaveBeenCalledWith(
+        expect.objectContaining({ mergeable: undefined })
+      );
+    });
   });
 
   describe("pull_request.closed handler", () => {

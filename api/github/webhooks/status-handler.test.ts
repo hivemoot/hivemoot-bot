@@ -398,4 +398,63 @@ describe("status webhook handler", () => {
       "run-sha"
     );
   });
+
+  it("status: fetches mergeable from prs.get() and threads it to evaluateAutomerge when automerge is configured", async () => {
+    const { handlers } = createWebhookHarness();
+    const handler = handlers.get("status");
+    expect(handler).toBeDefined();
+
+    const getMock = vi.fn().mockResolvedValue({ headSha: "abc123", draft: false, mergeable: false });
+    const getLabels = vi.fn().mockResolvedValue([]);
+    mocks.createPROperations.mockReturnValue({ getLabels, get: getMock });
+
+    mocks.loadRepositoryConfig.mockResolvedValueOnce({
+      governance: {
+        pr: {
+          mergeReady: { requiredApprovals: 1 },
+          trustedReviewers: ["hivemoot-builder"],
+          automerge: { dryRun: true, minApprovals: 1, allowedPaths: ["**/*.md"], maxFiles: 5, maxChangedLines: 50, requireChecks: false },
+        },
+      },
+    });
+
+    const context = createStatusContext({
+      sha: "abc123",
+      pullRequests: [{ number: 42, head: { sha: "abc123" }, draft: false }] as any,
+    });
+
+    await handler!(context);
+
+    expect(getMock).toHaveBeenCalledWith({ owner: "hivemoot", repo: "hivemoot-bot", prNumber: 42 });
+    expect(mocks.evaluateAutomerge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ref: { owner: "hivemoot", repo: "hivemoot-bot", prNumber: 42 },
+        mergeable: false,
+      })
+    );
+  });
+
+  it("status: skips prs.get() when automerge is not configured", async () => {
+    const { handlers } = createWebhookHarness();
+    const handler = handlers.get("status");
+    expect(handler).toBeDefined();
+
+    const getMock = vi.fn();
+    const getLabels = vi.fn().mockResolvedValue([]);
+    mocks.createPROperations.mockReturnValue({ getLabels, get: getMock });
+
+    // Default config in beforeEach has no automerge
+
+    const context = createStatusContext({
+      sha: "abc123",
+      pullRequests: [{ number: 55, head: { sha: "abc123" }, draft: false }] as any,
+    });
+
+    await handler!(context);
+
+    expect(getMock).not.toHaveBeenCalled();
+    expect(mocks.evaluateAutomerge).toHaveBeenCalledWith(
+      expect.objectContaining({ mergeable: undefined })
+    );
+  });
 });

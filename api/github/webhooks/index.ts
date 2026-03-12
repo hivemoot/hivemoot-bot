@@ -354,6 +354,7 @@ export function app(probotApp: Probot): void {
           draft: false,
           mergeable: context.payload.pull_request.mergeable,
           log: context.log,
+          graphql: context.octokit,
         });
       }
     } catch (error) {

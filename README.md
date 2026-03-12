@@ -34,7 +34,7 @@ npm run lint
 npm run build
 ```
 
-Success signal: all five commands pass with no errors. That confirms the webhook handlers, scripts, and docs contract tests are in a healthy local state.
+Success signal: the verification commands pass with no errors. That confirms the webhook handlers, scripts, and docs contract tests are in a healthy local state.
 If `npm install` only shows an engine warning, check `node --version` before continuing. This repo supports Node 22.x; newer versions can install dependencies without giving you a supported runtime.
 
 ## Overview

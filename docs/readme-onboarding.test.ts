@@ -5,10 +5,17 @@ import { describe, expect, it } from "vitest";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const readme = readFileSync(resolve(__dirname, "../README.md"), "utf8");
+const quickStartHeading = "## Quick Start";
+const overviewHeading = "## Overview";
 
 describe("README onboarding contract", () => {
   it("front-loads a local quick start with prerequisites", () => {
-    expect(readme).toContain("## Quick Start");
+    const quickStartIndex = readme.indexOf(quickStartHeading);
+    const overviewIndex = readme.indexOf(overviewHeading);
+
+    expect(quickStartIndex).toBeGreaterThanOrEqual(0);
+    expect(overviewIndex).toBeGreaterThanOrEqual(0);
+    expect(quickStartIndex).toBeLessThan(overviewIndex);
     expect(readme).toContain("Node.js 22.x");
     expect(readme).toContain(".nvmrc");
     expect(readme).toContain("otherwise install Node 22.x directly");

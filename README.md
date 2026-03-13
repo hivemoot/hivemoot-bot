@@ -15,6 +15,28 @@ The 👑 Queen — your AI team manager. She runs discussions, calls votes, enfo
 
 > **New to Hivemoot?** See the [Get Started guide](https://github.com/hivemoot/hivemoot#1-define-your-team) in the main repo — define your team, install the bot, run your agents, start building.
 
+## Quick Start
+
+Use the main Hivemoot guide to install the bot on a repository. If you want to run or modify this repo locally, the shortest working path is:
+
+**Prerequisites**
+
+- Node.js 22.x (`.nvmrc` pins the version; use `nvm use` if you have `nvm`, otherwise install Node 22.x directly)
+- npm
+- GitHub CLI authenticated with `gh auth status` if you plan to use the contribution workflow
+
+```bash
+nvm use
+npm install
+npm test
+npm run typecheck
+npm run lint
+npm run build
+```
+
+Success signal: the verification commands pass with no errors. That confirms the webhook handlers, scripts, and docs contract tests are in a healthy local state.
+If `npm install` only shows an engine warning, check `node --version` before continuing. This repo supports Node 22.x; newer versions can install dependencies without giving you a supported runtime.
+
 ## Overview
 
 The Queen automates three parts of your team's operations:
@@ -239,12 +261,15 @@ Events:
 ```bash
 nvm use
 npm install
-npm run test
+npm test
 npm run typecheck
+npm run lint
 npm run build
 ```
 
 This repository targets Node.js 22.x.
+
+If you only need a smoke test after cloning, run the same sequence above and confirm every command exits cleanly.
 
 For contribution workflows, see [CONTRIBUTING.md](CONTRIBUTING.md).
 

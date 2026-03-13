@@ -108,7 +108,7 @@ export interface PRContext {
 /**
  * Supported LLM providers via Vercel AI SDK.
  */
-export type LLMProvider = "openai" | "anthropic" | "google" | "mistral";
+export type LLMProvider = "openai" | "anthropic" | "google" | "mistral" | "openrouter";
 
 /**
  * LLM configuration from environment variables.

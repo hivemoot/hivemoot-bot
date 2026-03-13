@@ -1,8 +1,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createCipheriv, randomBytes } from "node:crypto";
+import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { isLLMConfigured, getLLMConfig, createModel, createModelFromEnv, getLLMReadiness } from "./provider.js";
 import { _resetMasterKeysCache } from "./byok.js";
 import type { LLMConfig, LLMProvider } from "./types.js";
+
+vi.mock("@openrouter/ai-sdk-provider", async () => {
+  const actual = await vi.importActual<typeof import("@openrouter/ai-sdk-provider")>("@openrouter/ai-sdk-provider");
+  return {
+    ...actual,
+    createOpenRouter: vi.fn(actual.createOpenRouter),
+  };
+});
 
 /**
  * Tests for LLM Provider Factory
@@ -13,6 +22,7 @@ describe("LLM Provider", () => {
 
   beforeEach(() => {
     vi.resetModules();
+    vi.clearAllMocks();
     process.env = { ...originalEnv };
   });
 
@@ -72,7 +82,7 @@ describe("LLM Provider", () => {
       expect(isLLMConfigured()).toBe(true);
     });
 
-    it.each(["openai", "anthropic", "google", "mistral"])(
+    it.each(["openai", "anthropic", "google", "mistral", "openrouter"])(
       "should return true for valid provider: %s",
       (provider) => {
         process.env.LLM_PROVIDER = provider;
@@ -261,6 +271,19 @@ describe("LLM Provider", () => {
       );
     });
 
+    it("should throw when OpenRouter API key is missing", () => {
+      delete process.env.OPENROUTER_API_KEY;
+      const config: LLMConfig = {
+        provider: "openrouter",
+        model: "openai/gpt-4o-mini",
+        maxTokens: 2000,
+      };
+
+      expect(() => createModel(config)).toThrow(
+        "OPENROUTER_API_KEY environment variable is not set"
+      );
+    });
+
     it("should throw when provider is unsupported at runtime", () => {
       const config: LLMConfig = {
         provider: "unsupported-provider" as LLMProvider,
@@ -343,6 +366,30 @@ describe("LLM Provider", () => {
       expect(model).toBeDefined();
       expect(model.modelId).toBe("mistral-small");
     });
+
+    it("should create OpenRouter model with official routing, attribution headers, and tool-based object generation", () => {
+      process.env.OPENROUTER_API_KEY = "openrouter-test-key";
+      const config: LLMConfig = {
+        provider: "openrouter",
+        model: "openai/gpt-4o-mini",
+        maxTokens: 2000,
+      };
+
+      const model = createModel(config);
+
+      expect(model).toBeDefined();
+      expect(model.modelId).toBe("openai/gpt-4o-mini");
+      expect(model.defaultObjectGenerationMode).toBe("tool");
+      expect(createOpenRouter).toHaveBeenCalledWith({
+        apiKey: "openrouter-test-key",
+        compatibility: "strict",
+        headers: {
+          "HTTP-Referer": "https://github.com/hivemoot/hivemoot-bot",
+          "X-OpenRouter-Title": "Hivemoot Bot",
+          "X-Title": "Hivemoot Bot",
+        },
+      });
+    });
   });
 
   describe("getLLMReadiness", () => {
@@ -377,6 +424,14 @@ describe("LLM Provider", () => {
       expect(getLLMReadiness()).toEqual({ ready: false, reason: "api_key_missing" });
     });
 
+    it("should return api_key_missing for openrouter when key is absent", () => {
+      process.env.LLM_PROVIDER = "openrouter";
+      process.env.LLM_MODEL = "openai/gpt-4o-mini";
+      delete process.env.OPENROUTER_API_KEY;
+
+      expect(getLLMReadiness()).toEqual({ ready: false, reason: "api_key_missing" });
+    });
+
     it("should return ready when provider, model, and key are present", () => {
       process.env.LLM_PROVIDER = "anthropic";
       process.env.LLM_MODEL = "claude-3-haiku";
@@ -400,6 +455,14 @@ describe("LLM Provider", () => {
       process.env.OPENAI_API_KEY = "   ";
 
       expect(getLLMReadiness()).toEqual({ ready: false, reason: "api_key_missing" });
+    });
+
+    it("should return ready for openrouter when provider, model, and key are present", () => {
+      process.env.LLM_PROVIDER = "openrouter";
+      process.env.LLM_MODEL = "openai/gpt-4o-mini";
+      process.env.OPENROUTER_API_KEY = "openrouter-key";
+
+      expect(getLLMReadiness()).toEqual({ ready: true });
     });
   });
 
@@ -519,6 +582,47 @@ describe("LLM Provider", () => {
       expect(fetchMock.mock.calls[0]?.[0]).toBe(
         "https://example-redis.upstash.io/get/hive%3Abyok%3A42",
       );
+    });
+
+    it("should route installation-scoped OpenRouter BYOK config through the official provider", async () => {
+      const masterKey = randomBytes(32);
+      const { ciphertext, iv, tag } = encryptPayload(
+        { apiKey: "sk-openrouter", provider: "openrouter", model: "openai/gpt-4o-mini" },
+        masterKey,
+      );
+
+      process.env.HIVEMOOT_REDIS_REST_URL = "https://example-redis.upstash.io";
+      process.env.HIVEMOOT_REDIS_REST_TOKEN = "byok-token";
+      process.env.BYOK_MASTER_KEYS = JSON.stringify({
+        v1: masterKey.toString("hex"),
+      });
+
+      mockRedisLookup(
+        JSON.stringify({
+          ciphertext,
+          iv,
+          tag,
+          keyVersion: "v1",
+          status: "active",
+        }),
+      );
+
+      const result = await createModelFromEnv({ installationId: 42 });
+
+      expect(result).not.toBeNull();
+      expect(result?.config.provider).toBe("openrouter");
+      expect(result?.config.model).toBe("openai/gpt-4o-mini");
+      expect(result?.model.modelId).toBe("openai/gpt-4o-mini");
+      expect(result?.model.defaultObjectGenerationMode).toBe("tool");
+      expect(createOpenRouter).toHaveBeenCalledWith({
+        apiKey: "sk-openrouter",
+        compatibility: "strict",
+        headers: {
+          "HTTP-Referer": "https://github.com/hivemoot/hivemoot-bot",
+          "X-OpenRouter-Title": "Hivemoot Bot",
+          "X-Title": "Hivemoot Bot",
+        },
+      });
     });
 
     it("should return null when BYOK record is missing for installation", async () => {

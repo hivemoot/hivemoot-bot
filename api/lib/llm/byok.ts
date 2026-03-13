@@ -81,6 +81,7 @@ function parseProvider(raw: unknown): LLMProvider {
     case "anthropic":
     case "openai":
     case "google":
+    case "openrouter":
       return normalized;
     case "gemini":
       return "google";

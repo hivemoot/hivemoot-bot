@@ -150,6 +150,24 @@ describe("resolveInstallationBYOKConfig", () => {
     );
   });
 
+  it("accepts openrouter as a supported BYOK provider", async () => {
+    const masterKey = randomBytes(32);
+    setRedisEnv();
+    setMasterKeys({ v1: masterKey.toString("hex") });
+    stubRedisResponse({
+      result: buildEnvelope(
+        { apiKey: "sk-openrouter", provider: "openrouter", model: "openai/gpt-4o-mini" },
+        masterKey,
+      ),
+    });
+
+    await expect(resolveInstallationBYOKConfig(99)).resolves.toEqual({
+      apiKey: "sk-openrouter",
+      provider: "openrouter",
+      model: "openai/gpt-4o-mini",
+    });
+  });
+
   it("throws when Redis request fails", async () => {
     setRedisEnv();
     stubRedisResponse({}, { ok: false, status: 503 });

@@ -96,7 +96,7 @@ function getRepoContext(repository: RepoPayload): RepoContext {
 }
 
 export function app(probotApp: Probot): void {
-  probotApp.log.info("Queen bot initialized");
+  probotApp.log.info("Hivemoot bot initialized");
   registerHandlerDispatcher(probotApp, { eventMap: handlerEventMap });
 
   probotApp.on("issues.opened", async (context) => {
@@ -1114,7 +1114,7 @@ export default function handler(req: IncomingMessage, res: ServerResponse): void
     res.end(
       JSON.stringify({
         status: validation.valid ? "ok" : "misconfigured",
-        bot: "Queen",
+        bot: "hivemoot",
         checks: {
           githubApp: { ready: validation.valid },
           llm: getLLMReadiness(),

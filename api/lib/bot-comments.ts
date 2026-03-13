@@ -65,7 +65,7 @@ export interface StatusMetadata extends BaseMetadata {
 }
 
 /**
- * Human help comment metadata - posted when the Queen needs human intervention.
+ * Human help comment metadata - posted when the bot needs human intervention.
  * Used for error conditions that require manual resolution.
  */
 export interface HumanHelpMetadata extends BaseMetadata {

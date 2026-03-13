@@ -16,6 +16,7 @@ import type { LanguageModel } from "ai";
 import type { Logger } from "../logger.js";
 import { logger as defaultLogger } from "../logger.js";
 import { repairMalformedJsonText } from "./json-repair.js";
+import { formatBYOKErrorContext } from "./byok.js";
 import { createModelFromEnv, type ModelResolutionOptions } from "./provider.js";
 import { withLLMRetry } from "./retry.js";
 import type { ImplementationPlan, IssueContext, LLMConfig } from "./types.js";
@@ -303,7 +304,7 @@ export class BlueprintGenerator {
       return { success: true, plan };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.error(`Blueprint generation failed: ${message}`);
+      this.logger.error(`Blueprint generation failed: ${message}${formatBYOKErrorContext(error)}`);
       return { success: false, reason: message };
     }
   }

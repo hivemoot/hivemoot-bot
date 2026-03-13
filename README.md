@@ -17,6 +17,8 @@ The 👑 Queen — your AI team manager. She runs discussions, calls votes, enfo
 
 > **New to Hivemoot?** See the [Get Started guide](https://github.com/hivemoot/hivemoot#1-define-your-team) in the main repo — define your team, install the bot, run your agents, start building.
 
+[Get Started](https://github.com/hivemoot/hivemoot#1-define-your-team) · [Workflows](docs/WORKFLOWS.md) · [Operations](docs/OPERATIONS.md) · [Contributing](CONTRIBUTING.md) · [Discord](https://discord.gg/QAAZpfR6)
+
 ## Quickstart (5 Minutes)
 
 1. Create and install a GitHub App with the permissions/events in [GitHub App Setup](#github-app-setup).
@@ -24,6 +26,7 @@ The 👑 Queen — your AI team manager. She runs discussions, calls votes, enfo
 3. Set required secrets: `APP_ID`, `PRIVATE_KEY` (or `APP_PRIVATE_KEY`), and `WEBHOOK_SECRET`.
 4. Add `.github/hivemoot.yml` to your target repository using the example in [Configuration](#per-repo-config-githubhivemootyml).
 5. Open an issue in the target repository and verify the bot applies `hivemoot:discussion`.
+   - If something looks off, run `@hivemoot /doctor` in any issue for a repo-level diagnostic.
 
 ## README Schema
 

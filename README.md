@@ -95,7 +95,14 @@ Votes are counted on the Queen's voting comment:
 - 👍 `ready` - approve for implementation
 - 👎 `not ready` - reject proposal
 - 😕 `needs discussion` - return to discussion
-- 👀 `needs human input` - keep issue open/unlocked with `hivemoot:needs-human`
+- 👀 `needs human input` - escalate for human review
+
+**Priority order:** Outcomes are determined first-match-wins:
+1. 👀 > all others → needs human input
+2. 😕 > (👍 + 👎) → needs more discussion
+3. 👍 > 👎 → ready to implement
+4. 👎 > 👍 → rejected
+5. tie → inconclusive (enters extended voting)
 
 ## PR Workflow
 

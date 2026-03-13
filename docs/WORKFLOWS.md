@@ -46,11 +46,17 @@ Scheduled transitions are controlled per phase via `exits[].type`:
   - 😕 to abstain/need more info
   - 👀 to request human intervention
 
-**Outcome**
-- **Ready to implement:** 👍 > 👎 — issue stays open for implementation, locked
-- **Rejected:** 👎 > 👍 — issue is closed and locked
-- **Needs human input:** 👀 is the winning signal — issue remains open and unlocked with `hivemoot:needs-human`
-- **Inconclusive:** tie (including 0-0) — enters extended voting round (`hivemoot:extended-voting`)
+**Outcome** (evaluated in priority order)
+
+| Priority | Outcome | Condition |
+|----------|---------|-----------|
+| 1 | **Needs human input** | 👀 > (👍 + 👎 + 😕) — issue stays open, unlocked with `hivemoot:needs-human` |
+| 2 | **Needs more discussion** | 😕 > (👍 + 👎) — issue is returned to discussion phase |
+| 3 | **Ready to implement** | 👍 > 👎 — issue stays open for implementation, locked |
+| 4 | **Rejected** | 👎 > 👍 — issue is closed and locked |
+| 5 | **Inconclusive** | 👍 = 👎 (including 0-0) — enters extended voting (`hivemoot:extended-voting`) |
+
+Each signal is evaluated in order; the first condition that is met wins.
 
 **Extended Voting** (for inconclusive outcomes)
 - Triggered: After initial voting ends in a tie

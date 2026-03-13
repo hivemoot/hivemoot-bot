@@ -23,6 +23,7 @@ import type { PRRef } from "./types.js";
 import type { PROperations } from "./pr-operations.js";
 import type { AutomergeConfig } from "./repo-config.js";
 import { isCIPassing } from "./merge-readiness.js";
+import type { CIStatus } from "./merge-readiness.js";
 
 // ───────────────────────────────────────────────────────────────────────────────
 // Types
@@ -229,8 +230,11 @@ export async function evaluateAutomerge(
       headSha = pr.headSha;
     }
 
-    const ciPassing = await isCIPassing(prs, ref, headSha);
-    if (!ciPassing) {
+    const ciStatus: CIStatus = await isCIPassing(prs, ref, headSha);
+    if (ciStatus === "pending") {
+      return { action: "skipped", reason: "CI in progress" };
+    }
+    if (ciStatus === "failing") {
       return removeIfLabeled("CI not passing");
     }
   }

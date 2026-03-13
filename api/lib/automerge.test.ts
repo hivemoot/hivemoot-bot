@@ -384,6 +384,63 @@ describe("evaluateAutomerge", () => {
     expect(prs.removeLabel).toHaveBeenCalledWith(baseRef, LABELS.AUTOMERGE);
   });
 
+  it("skips (does not add or remove label) when CI is in progress", async () => {
+    const config = makeConfig();
+    const prs = createMockPROperations({
+      listFiles: vi.fn().mockResolvedValue([makeFile("README.md", 5)]),
+      getApproverLogins: vi.fn().mockResolvedValue(new Set(["alice", "bob"])),
+      getLabels: vi.fn().mockResolvedValue([]),
+      getCheckRunsForRef: vi.fn().mockResolvedValue({
+        totalCount: 1,
+        checkRuns: [{ id: 1, status: "in_progress", conclusion: null }],
+      }),
+      getCombinedStatus: vi.fn().mockResolvedValue({
+        state: "success",
+        totalCount: 0,
+      }),
+    });
+
+    const result = await evaluateAutomerge({
+      prs,
+      ref: baseRef,
+      config,
+      trustedReviewers,
+      headSha: "sha123",
+    });
+
+    expect(result).toEqual({ action: "skipped", reason: "CI in progress" });
+    expect(prs.addLabels).not.toHaveBeenCalled();
+    expect(prs.removeLabel).not.toHaveBeenCalled();
+  });
+
+  it("does not remove automerge label when CI is still in progress (no label flap)", async () => {
+    const config = makeConfig();
+    const prs = createMockPROperations({
+      listFiles: vi.fn().mockResolvedValue([makeFile("README.md", 5)]),
+      getApproverLogins: vi.fn().mockResolvedValue(new Set(["alice", "bob"])),
+      getLabels: vi.fn().mockResolvedValue([LABELS.AUTOMERGE]),
+      getCheckRunsForRef: vi.fn().mockResolvedValue({
+        totalCount: 1,
+        checkRuns: [{ id: 1, status: "in_progress", conclusion: null }],
+      }),
+      getCombinedStatus: vi.fn().mockResolvedValue({
+        state: "success",
+        totalCount: 0,
+      }),
+    });
+
+    const result = await evaluateAutomerge({
+      prs,
+      ref: baseRef,
+      config,
+      trustedReviewers,
+      headSha: "sha123",
+    });
+
+    expect(result).toEqual({ action: "skipped", reason: "CI in progress" });
+    expect(prs.removeLabel).not.toHaveBeenCalled();
+  });
+
   it("does not add label when CI is failing", async () => {
     const config = makeConfig();
     const prs = createMockPROperations({

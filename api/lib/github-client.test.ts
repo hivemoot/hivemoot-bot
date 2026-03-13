@@ -291,34 +291,7 @@ describe("IssueOperations", () => {
       await expect(issueOps.removeLabel(testRef, "label")).rejects.toThrow("Server Error");
     });
 
-    it("should fall back to legacy alias when canonical returns 404", async () => {
-      const notFound = new Error("Not Found") as Error & { status: number };
-      notFound.status = 404;
-
-      // First call (canonical "hivemoot:voting") → 404
-      // Second call (legacy "phase:voting") → success
-      vi.mocked(mockClient.rest.issues.removeLabel)
-        .mockRejectedValueOnce(notFound)
-        .mockResolvedValueOnce({});
-
-      await issueOps.removeLabel(testRef, "hivemoot:voting");
-
-      expect(mockClient.rest.issues.removeLabel).toHaveBeenCalledTimes(2);
-      expect(mockClient.rest.issues.removeLabel).toHaveBeenNthCalledWith(1, {
-        owner: "test-org",
-        repo: "test-repo",
-        issue_number: 42,
-        name: "hivemoot:voting",
-      });
-      expect(mockClient.rest.issues.removeLabel).toHaveBeenNthCalledWith(2, {
-        owner: "test-org",
-        repo: "test-repo",
-        issue_number: 42,
-        name: "phase:voting",
-      });
-    });
-
-    it("should silently ignore when neither canonical nor legacy labels exist", async () => {
+    it("should silently ignore when label does not exist (404)", async () => {
       const notFound = new Error("Not Found") as Error & { status: number };
       notFound.status = 404;
 
@@ -327,21 +300,6 @@ describe("IssueOperations", () => {
       await expect(issueOps.removeLabel(testRef, "hivemoot:voting")).resolves.toBeUndefined();
     });
 
-    it("should rethrow non-404 errors from alias fallback", async () => {
-      const notFound = new Error("Not Found") as Error & { status: number };
-      notFound.status = 404;
-      const serverError = new Error("Gateway Timeout") as Error & { status: number };
-      serverError.status = 504;
-
-      // Canonical call → 404 triggers alias loop; alias call → 504 should propagate
-      vi.mocked(mockClient.rest.issues.removeLabel)
-        .mockRejectedValueOnce(notFound)
-        .mockRejectedValueOnce(serverError);
-
-      await expect(issueOps.removeLabel(testRef, "hivemoot:voting")).rejects.toThrow(
-        "Gateway Timeout"
-      );
-    });
   });
 
   describe("comment", () => {
@@ -1253,26 +1211,6 @@ describe("IssueOperations", () => {
         },
       });
 
-      const result = await issueOps.getLabelAddedTime(testRef, "hivemoot:discussion");
-
-      expect(result).toEqual(new Date(labeledDate));
-    });
-
-    it("should match legacy label name when searching for canonical name", async () => {
-      const labeledDate = "2024-01-15T10:30:00Z";
-
-      mockClient.paginate.iterator = vi.fn().mockReturnValue({
-        async *[Symbol.asyncIterator]() {
-          yield {
-            data: [
-              { event: "opened", created_at: "2024-01-15T10:00:00Z" },
-              { event: "labeled", label: { name: "phase:discussion" }, created_at: labeledDate },
-            ],
-          };
-        },
-      });
-
-      // Search by canonical name, but timeline has legacy name
       const result = await issueOps.getLabelAddedTime(testRef, "hivemoot:discussion");
 
       expect(result).toEqual(new Date(labeledDate));

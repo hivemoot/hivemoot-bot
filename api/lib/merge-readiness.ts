@@ -23,7 +23,7 @@
  * → mergeable → CI (2 calls)
  */
 
-import { LABELS, isLabelMatch } from "../config.js";
+import { LABELS } from "../config.js";
 import type { PRRef } from "./types.js";
 import type { PROperations } from "./pr-operations.js";
 import type { MergeReadyConfig } from "./repo-config.js";
@@ -173,7 +173,7 @@ export async function evaluatePreflightChecks(
 
   // 5. Implementation label (advisory)
   const labels = params.currentLabels ?? await prs.getLabels(ref);
-  const hasImplementation = labels.some(l => isLabelMatch(l, LABELS.IMPLEMENTATION));
+  const hasImplementation = labels.some(l => l === LABELS.IMPLEMENTATION);
   checks.push({
     name: "Implementation label",
     passed: hasImplementation,
@@ -184,7 +184,7 @@ export async function evaluatePreflightChecks(
   });
 
   // 6. Merge-ready label (advisory)
-  const hasMergeReady = labels.some(l => isLabelMatch(l, LABELS.MERGE_READY));
+  const hasMergeReady = labels.some(l => l === LABELS.MERGE_READY);
   checks.push({
     name: "Merge-ready label",
     passed: hasMergeReady,
@@ -318,8 +318,8 @@ export async function evaluateMergeReadiness(
 
   // 2. Check implementation label (use pre-fetched labels or fetch)
   const labels = params.currentLabels ?? await prs.getLabels(ref);
-  const hasImplementation = labels.some(l => isLabelMatch(l, LABELS.IMPLEMENTATION));
-  const hasMergeReady = labels.some(l => isLabelMatch(l, LABELS.MERGE_READY));
+  const hasImplementation = labels.some(l => l === LABELS.IMPLEMENTATION);
+  const hasMergeReady = labels.some(l => l === LABELS.MERGE_READY);
 
   // Draft PRs are never merge-ready.
   if (params.draft === true) {

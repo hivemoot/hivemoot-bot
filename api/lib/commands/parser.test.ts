@@ -135,6 +135,17 @@ describe("parseCommand", () => {
       expect(parseCommand(body)).toBeNull();
     });
 
+    it("should ignore commands inside unclosed fenced code blocks", () => {
+      const body = "Example:\n```bash\n@hivemoot /vote";
+      expect(parseCommand(body)).toBeNull();
+    });
+
+    it("should still match commands after a fenced block closes", () => {
+      const body = "```bash\necho \"sample\"\n```\n@hivemoot /implement";
+      const result = parseCommand(body);
+      expect(result).toEqual({ verb: "implement", freeText: undefined });
+    });
+
     it("should still match commands outside code contexts", () => {
       const body = "Here is an example: `@hivemoot /vote`\n@hivemoot /implement";
       const result = parseCommand(body);

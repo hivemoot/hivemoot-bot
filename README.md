@@ -248,6 +248,16 @@ This repository targets Node.js 22.x.
 
 For contribution workflows, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## Troubleshooting First Run
+
+If the bot does not respond after setup, check these three things first:
+
+1. Health endpoint: open `/api/github/webhooks` on your deployment. A healthy bot returns JSON with `"status":"ok"`. `"status":"misconfigured"` or HTTP `503` means the app is missing `APP_ID`, `PRIVATE_KEY`/`APP_PRIVATE_KEY`, or `WEBHOOK_SECRET`.
+2. GitHub App wiring: re-check the permissions and event subscriptions in [GitHub App Setup](#github-app-setup). Missing `Issues`, `Pull requests`, `Checks`, or `Statuses` access will leave the bot installed but unable to react to normal repo activity.
+3. Repository diagnosis: on any issue or PR, run `@hivemoot /doctor`. The report checks labels, config, PR workflow settings, permissions, standup config, and optional LLM readiness.
+
+Success signal after setup: opening a new issue should add the `hivemoot:discussion` label and a bot welcome comment.
+
 Useful scripts:
 
 - `npm run close-discussions`

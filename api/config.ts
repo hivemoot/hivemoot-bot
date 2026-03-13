@@ -605,7 +605,7 @@ This PR isn't tracked yet. Try again after a slot opens.${SIGNATURE}`,
   issueNotReadyToImplement: (issueNumber: number) =>
     `# 🐝 Not Ready Yet ⚠️
 
-Issue #${issueNumber} hasn't passed voting. This PR won't be tracked until it does.${SIGNATURE}`,
+Issue #${issueNumber} isn't approved for implementation yet. This PR won't be tracked until it reaches the ready-to-implement phase.${SIGNATURE}`,
 
   /**
    * Posted to a PR when it links to an issue in a terminal closed state

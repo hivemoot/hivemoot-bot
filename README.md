@@ -254,6 +254,7 @@ Useful scripts:
 - `npm run cleanup-stale-prs`
 - `npm run reconcile-pr-notifications`
 - `npm run reconcile-merge-ready`
+- `npm run reconcile-repository-labels`
 - `npm run daily-standup`
 
 ## Labels

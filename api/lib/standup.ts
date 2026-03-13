@@ -882,7 +882,7 @@ export function formatStandupComment(
       const isMergeReady = data.mergeReadyPRs?.some((mr) => mr.number === pr.number);
       const isStale = data.stalePRs?.some((s) => s.number === pr.number);
       const status = isMergeReady ? "✅ Merge-ready" : isStale ? "⏰ Stale" : "🔨 Active";
-      const safeTitle = pr.title.replace(/\|/g, "\\|");
+      const safeTitle = pr.title.replace(/\\/g, "\\\\").replace(/\|/g, "\\|");
       sections.push(`| #${pr.number} ${safeTitle} | @${pr.author} | ${status} |`);
     }
     sections.push("");

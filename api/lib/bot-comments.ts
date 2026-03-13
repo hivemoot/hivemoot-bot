@@ -16,7 +16,7 @@
  * All possible bot comment types.
  * Single source of truth: the array drives both runtime validation and the type.
  */
-const COMMENT_TYPES = ["voting", "leaderboard", "welcome", "alignment", "status", "error", "notification", "standup"] as const;
+const COMMENT_TYPES = ["voting", "leaderboard", "welcome", "alignment", "status", "error", "notification", "standup", "readiness"] as const;
 export type CommentType = (typeof COMMENT_TYPES)[number];
 
 /**
@@ -94,6 +94,14 @@ export interface StandupMetadata extends BaseMetadata {
 }
 
 /**
+ * Readiness signal advisory comment metadata.
+ * Posted when enough participants have invoked /ready on a discussion issue.
+ */
+export interface ReadinessMetadata extends BaseMetadata {
+  type: "readiness";
+}
+
+/**
  * Discriminated union of all comment metadata types.
  */
 export type CommentMetadata =
@@ -104,7 +112,8 @@ export type CommentMetadata =
   | StatusMetadata
   | HumanHelpMetadata
   | NotificationMetadata
-  | StandupMetadata;
+  | StandupMetadata
+  | ReadinessMetadata;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Signatures for Comment Detection
@@ -261,6 +270,18 @@ export function createStandupMetadata(day: number, date: string, repo: string): 
   };
 }
 
+/**
+ * Create readiness advisory comment metadata.
+ */
+export function createReadinessMetadata(issueNumber: number): ReadinessMetadata {
+  return {
+    version: 1,
+    type: "readiness",
+    createdAt: new Date().toISOString(),
+    issueNumber,
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Comment Builders
 // ─────────────────────────────────────────────────────────────────────────────
@@ -324,6 +345,28 @@ export function buildNotificationComment(
 ): string {
   const metadata = createNotificationMetadata(issueNumber, notificationType);
   return `${generateMetadataTag(metadata)}\n${content}`;
+}
+
+/**
+ * Build a readiness advisory comment with embedded metadata.
+ * Posted/updated when enough participants signal readiness via /ready.
+ */
+export function buildReadinessComment(content: string, issueNumber: number): string {
+  const metadata = createReadinessMetadata(issueNumber);
+  return `${generateMetadataTag(metadata)}\n${content}`;
+}
+
+/**
+ * Check if a comment is a readiness advisory comment from our app.
+ */
+export function isReadinessComment(
+  body: string | undefined | null,
+  appId: number,
+  performedViaAppId: number | undefined | null
+): boolean {
+  if (performedViaAppId !== appId) return false;
+  if (typeof body !== "string") return false;
+  return hasMetadataType(body, "readiness");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

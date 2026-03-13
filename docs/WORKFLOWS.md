@@ -36,6 +36,17 @@ Scheduled transitions are controlled per phase via `exits[].type`:
 - Triggered: When issue is opened
 - Actions: Add "hivemoot:discussion" label, post welcome comment
 - Community: Analyze, propose, discuss
+- **Readiness signal (opt-in):** Any participant can comment `@hivemoot ready` to signal the thread has converged. When `minEndorsements` distinct users have signaled, the bot posts (and updates) an advisory comment listing them. A maintainer still runs `/vote` to advance — the advisory is soft-only. Endorsements are scoped to the current cycle and reset after a `needs-more-discussion` round-trip.
+
+  Enable in `.github/hivemoot.yml`:
+  ```yaml
+  governance:
+    proposals:
+      discussion:
+        readinessSignal:
+          enabled: true
+          minEndorsements: 3  # default
+  ```
 
 **Voting Phase**
 - Triggered: After discussion duration expires

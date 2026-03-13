@@ -97,6 +97,27 @@ Votes are counted on the Queen's voting comment:
 - 😕 `needs discussion` - return to discussion
 - 👀 `needs human input` - keep issue open/unlocked with `hivemoot:needs-human`
 
+### Discussion Commands
+
+Any participant can signal readiness during the discussion phase using the `/ready` command:
+
+```
+@hivemoot ready
+```
+
+When `minEndorsements` distinct participants have signaled, the bot posts an advisory comment listing them. This is soft-only — a maintainer still runs `/vote` to advance the issue. The advisory updates as more signals arrive. Endorsements are scoped to the current discussion cycle: they reset automatically if the issue returns to discussion after a `needs-more-discussion` outcome.
+
+Enable it in `.github/hivemoot.yml`:
+
+```yaml
+governance:
+  proposals:
+    discussion:
+      readinessSignal:
+        enabled: true
+        minEndorsements: 3   # default
+```
+
 ## PR Workflow
 
 ```
@@ -127,6 +148,9 @@ governance:
       exits:
         - type: auto
           afterMinutes: 1440
+      readinessSignal:
+        enabled: true
+        minEndorsements: 3
     voting:
       exits:
         - type: auto
@@ -158,6 +182,13 @@ standup:
   enabled: true
   category: "Hivemoot Reports"
 ```
+
+### Discussion Config
+
+| Key                                                              | Type      | Default | Description                                                                                                                               |
+| ---------------------------------------------------------------- | --------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `governance.proposals.discussion.readinessSignal.enabled`        | `boolean` | `false` | Enable the `/ready` command for discussion participants to signal readiness. Opt-in — absent or `false` disables the command entirely.    |
+| `governance.proposals.discussion.readinessSignal.minEndorsements`| `number`  | `3`     | Number of distinct `/ready` signals required before the bot posts an advisory comment. Endorsements reset on each new discussion cycle.   |
 
 ### PR Config
 

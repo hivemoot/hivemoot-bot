@@ -53,6 +53,9 @@ export const CONFIG_BOUNDS = {
     max: 32_768,
     default: 4_096,
   },
+  readinessSignal: {
+    minEndorsements: { min: 1, max: 50, default: 3 },
+  },
 } as const;
 
 // ───────────────────────────────────────────────────────────────────────────────

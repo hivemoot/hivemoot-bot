@@ -231,6 +231,37 @@ The CI workflow captures the deployment URL from `vercel deploy` output, then pe
 
 This keeps core bot availability checks fail-closed while allowing optional LLM readiness to degrade without blocking production deployment.
 
+## Merge Queue
+
+To prevent cascade rebase cycles when merging approved PRs, use **GitHub's native Merge Queue** (free for public repos; available on GitHub Team/Enterprise for private repos).
+
+### How It Works
+
+Instead of merging PRs directly, maintainers click "Merge when ready" to queue a PR. GitHub:
+
+1. Creates a temporary branch: `gh-readonly-queue/main/pr-N-sha`
+2. Runs CI on that branch (not the PR branch)
+3. If CI passes, fast-forwards `main` automatically
+4. If CI fails, removes the PR from the queue and notifies the author
+
+PRs queue in FIFO order. Each entry is tested on top of all previously queued merges, catching integration conflicts before they reach `main`.
+
+### Enabling the Merge Queue
+
+**Step 1: Enable in branch protection**
+
+Go to `Settings → Branches → main → Edit`:
+- Check **"Require merge queue"**
+- Set merge method (Squash recommended for clean history)
+- Under "Status checks that are required", add: `Build`, `Lint`, `Test & Type Check`, `Coverage Gate`
+
+**Step 2: CI workflow is already updated** — `merge_group:` trigger was added to `.github/workflows/ci.yml` so CI runs on queue entries. Without this, the queue would stall waiting for status checks that never fire.
+
+### Limitations
+
+- The native queue has no awareness of `hivemoot:merge-ready` labels. Maintainers queue PRs manually via the GitHub UI.
+- Auto-queueing when `hivemoot:merge-ready` is set is possible via a small `pull_request.labeled` webhook handler if needed — not the ~400-line merge train runner discussed in [#196](https://github.com/hivemoot/hivemoot-bot/issues/196).
+
 ## Configuration
 
 Environment variables for customization:

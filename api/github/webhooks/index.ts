@@ -794,11 +794,13 @@ export function app(probotApp: Probot): void {
         try {
           const prRef = { owner, repo, prNumber: pr.number };
           context.log.info(`Evaluating merge-readiness for PR #${pr.number} after check_suite in ${fullName}`);
+          const currentLabels = await prs.getLabels({ owner, repo, prNumber: pr.number });
           await evaluateMergeReadiness({
             prs,
             ref: prRef,
             config: repoConfig.governance.pr.mergeReady,
             trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+            currentLabels,
             headSha,
             log: context.log,
           });
@@ -814,11 +816,31 @@ export function app(probotApp: Probot): void {
             ref: prRef,
             config: repoConfig.governance.pr.automerge,
             trustedReviewers: repoConfig.governance.pr.trustedReviewers,
+            currentLabels,
             headSha,
             draft: prDraft,
             mergeable: prMergeable,
             log: context.log,
           });
+
+          if (currentLabels.some((label) => isLabelMatch(label, LABELS.SQUASH_QUEUED))) {
+            context.log.info(`Retrying queued squash for PR #${pr.number} after check_suite in ${fullName}`);
+            await retryQueuedSquash({
+              octokit: context.octokit as Parameters<typeof retryQueuedSquash>[0]["octokit"],
+              owner,
+              repo,
+              issueNumber: pr.number,
+              installationId: context.payload.installation?.id,
+              commentId: 0,
+              senderLogin: "hivemoot",
+              verb: "squash",
+              freeText: undefined,
+              issueLabels: currentLabels.map((label) => ({ name: label })),
+              isPullRequest: true,
+              appId,
+              log: context.log,
+            }, headSha);
+          }
         } catch (error) {
           context.log.error({ err: error, pr: pr.number, repo: fullName }, "Failed to evaluate merge-readiness after check_suite");
           errors.push(error as Error);

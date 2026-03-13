@@ -20,7 +20,7 @@ import {
   isVotingComment,
   isLeaderboardComment,
   isAlignmentComment,
-
+  isWelcomeComment,
   isHumanHelpComment,
   isNotificationComment,
   selectCurrentVotingComment,
@@ -496,6 +496,45 @@ ${SIGNATURES.ALIGNMENT}`;
   it("should return false when app ID doesn't match", () => {
     const body = `<!-- hivemoot-metadata: {"version":1,"type":"alignment","createdAt":"2024-01-15T10:00:00.000Z","issueNumber":42} -->`;
     expect(isAlignmentComment(body, TEST_APP_ID, 99999)).toBe(false);
+  });
+});
+
+describe("isWelcomeComment", () => {
+  it("should return true for comment with welcome metadata", () => {
+    const body = buildDiscussionComment("Welcome to hivemoot!", 42);
+    expect(isWelcomeComment(body, TEST_APP_ID, TEST_APP_ID)).toBe(true);
+  });
+
+  it("should return true for raw welcome metadata without body text", () => {
+    const body = `<!-- hivemoot-metadata: {"version":1,"type":"welcome","createdAt":"2024-01-15T10:00:00.000Z","issueNumber":42} -->`;
+    expect(isWelcomeComment(body, TEST_APP_ID, TEST_APP_ID)).toBe(true);
+  });
+
+  it("should return false when metadata missing", () => {
+    expect(isWelcomeComment("plain text, no metadata", TEST_APP_ID, TEST_APP_ID)).toBe(false);
+  });
+
+  it("should return false for wrong metadata type", () => {
+    const body = `<!-- hivemoot-metadata: {"version":1,"type":"voting","cycle":1,"createdAt":"2024-01-15T10:00:00.000Z","issueNumber":42} -->`;
+    expect(isWelcomeComment(body, TEST_APP_ID, TEST_APP_ID)).toBe(false);
+  });
+
+  it("should return false when app ID doesn't match", () => {
+    const body = buildDiscussionComment("Welcome!", 42);
+    expect(isWelcomeComment(body, TEST_APP_ID, 99999)).toBe(false);
+  });
+
+  it("should return false when performedViaAppId is null", () => {
+    const body = buildDiscussionComment("Welcome!", 42);
+    expect(isWelcomeComment(body, TEST_APP_ID, null)).toBe(false);
+  });
+
+  it("should return false for null body", () => {
+    expect(isWelcomeComment(null, TEST_APP_ID, TEST_APP_ID)).toBe(false);
+  });
+
+  it("should return false for undefined body", () => {
+    expect(isWelcomeComment(undefined, TEST_APP_ID, TEST_APP_ID)).toBe(false);
   });
 });
 

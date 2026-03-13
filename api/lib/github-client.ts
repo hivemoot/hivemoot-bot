@@ -14,6 +14,7 @@ import {
   isAlignmentComment,
   isHumanHelpComment,
   isNotificationComment,
+  isWelcomeComment,
   selectCurrentVotingComment,
   type VotingCommentInfo,
 } from "./bot-comments.js";
@@ -516,6 +517,38 @@ export class IssueOperations {
             comment.performed_via_github_app?.id,
             notificationType,
             issueNumber
+          )
+        ) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Check if a welcome comment from our app already exists on an issue.
+   * Used by startDiscussion for replay-safe idempotency.
+   */
+  async hasWelcomeComment(ref: IssueRef): Promise<boolean> {
+    const iterator = this.client.paginate.iterator<IssueComment>(
+      this.client.rest.issues.listComments,
+      {
+        owner: ref.owner,
+        repo: ref.repo,
+        issue_number: ref.issueNumber,
+        per_page: 100,
+      }
+    );
+
+    for await (const { data: comments } of iterator) {
+      for (const comment of comments) {
+        if (
+          isWelcomeComment(
+            comment.body,
+            this.appId,
+            comment.performed_via_github_app?.id
           )
         ) {
           return true;

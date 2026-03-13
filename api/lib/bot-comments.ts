@@ -451,6 +451,24 @@ export function isAlignmentComment(
 }
 
 /**
+ * Check if a comment is a welcome comment from our app.
+ * Uses metadata type for stable detection - signatures are purely cosmetic.
+ */
+export function isWelcomeComment(
+  body: string | undefined | null,
+  appId: number,
+  performedViaAppId: number | undefined | null
+): boolean {
+  if (performedViaAppId !== appId) {
+    return false;
+  }
+  if (typeof body !== "string") {
+    return false;
+  }
+  return hasMetadataType(body, "welcome");
+}
+
+/**
  * Check if a comment is a human help comment from our app.
  * Uses metadata type for stable detection - signatures are purely cosmetic.
  * Optionally filter by specific error code.

@@ -138,11 +138,17 @@ export class GovernanceService {
    * Defaults to the voting-mode welcome text unless a caller provides an override.
    */
   async startDiscussion(ref: IssueRef, welcomeMessage = MESSAGES.ISSUE_WELCOME_VOTING): Promise<void> {
-    const commentBody = buildDiscussionComment(welcomeMessage, ref.issueNumber);
-    await Promise.all([
-      this.issues.addLabels(ref, [LABELS.DISCUSSION]),
-      this.issues.comment(ref, commentBody),
-    ]);
+    // Always apply the label first — addLabels is idempotent, so it is safe to
+    // re-apply on replay. Doing it before the comment-duplicate check ensures
+    // that a partial failure (comment posted, label call failed) is fully
+    // recovered on redelivery.
+    await this.issues.addLabels(ref, [LABELS.DISCUSSION]);
+    const exists = await this.issues.hasWelcomeComment(ref);
+    if (exists) {
+      this.logger.info(`Welcome comment already exists for issue #${ref.issueNumber}, skipping`);
+      return;
+    }
+    await this.issues.comment(ref, buildDiscussionComment(welcomeMessage, ref.issueNumber));
   }
 
   /**

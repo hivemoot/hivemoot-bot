@@ -21,6 +21,7 @@ import {
   buildAlignmentComment,
   buildHumanHelpComment,
   buildNotificationComment,
+  buildDiscussionComment,
   NOTIFICATION_TYPES,
 } from "./bot-comments.js";
 
@@ -1036,6 +1037,82 @@ describe("IssueOperations", () => {
         NOTIFICATION_TYPES.IMPLEMENTATION_WELCOME,
         42
       );
+
+      expect(result).toBe(false);
+    });
+  });
+
+  describe("hasWelcomeComment", () => {
+    it("should return true when welcome comment from our app exists", async () => {
+      mockClient.paginate.iterator = vi.fn().mockReturnValue({
+        async *[Symbol.asyncIterator]() {
+          yield {
+            data: [
+              { id: 100, body: "Regular comment", performed_via_github_app: null },
+              {
+                id: 200,
+                body: buildDiscussionComment("Welcome to hivemoot!", 42),
+                performed_via_github_app: { id: TEST_APP_ID },
+              },
+            ],
+          };
+        },
+      });
+
+      const result = await issueOps.hasWelcomeComment(testRef);
+
+      expect(result).toBe(true);
+    });
+
+    it("should return false when no comments exist", async () => {
+      mockClient.paginate.iterator = vi.fn().mockReturnValue({
+        async *[Symbol.asyncIterator]() {
+          yield { data: [] };
+        },
+      });
+
+      const result = await issueOps.hasWelcomeComment(testRef);
+
+      expect(result).toBe(false);
+    });
+
+    it("should return false when welcome comment has wrong app ID (spoofing protection)", async () => {
+      const DIFFERENT_APP_ID = 99999;
+      mockClient.paginate.iterator = vi.fn().mockReturnValue({
+        async *[Symbol.asyncIterator]() {
+          yield {
+            data: [
+              {
+                id: 100,
+                body: buildDiscussionComment("Spoofed welcome!", 42),
+                performed_via_github_app: { id: DIFFERENT_APP_ID },
+              },
+            ],
+          };
+        },
+      });
+
+      const result = await issueOps.hasWelcomeComment(testRef);
+
+      expect(result).toBe(false);
+    });
+
+    it("should return false when comment has wrong metadata type", async () => {
+      mockClient.paginate.iterator = vi.fn().mockReturnValue({
+        async *[Symbol.asyncIterator]() {
+          yield {
+            data: [
+              {
+                id: 100,
+                body: buildVotingComment(42, 1),
+                performed_via_github_app: { id: TEST_APP_ID },
+              },
+            ],
+          };
+        },
+      });
+
+      const result = await issueOps.hasWelcomeComment(testRef);
 
       expect(result).toBe(false);
     });

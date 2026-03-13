@@ -312,6 +312,26 @@ describe("runIfMain", () => {
     expect(exitSpy).not.toHaveBeenCalled();
   });
 
+  it("runs main when argv[1] is a relative path resolving to the caller", async () => {
+    const { resolve: resolvePath } = await import("node:path");
+    const { pathToFileURL: toFileURL } = await import("node:url");
+
+    // Use a relative path that, when resolved from cwd, matches the caller URL.
+    const absolutePath = resolvePath("scripts/shared/run-installations.ts");
+    const relPath = "scripts/shared/run-installations.ts";
+    process.argv[1] = relPath;
+
+    const callerUrl = toFileURL(absolutePath).href;
+    const main = vi.fn().mockResolvedValue(undefined);
+
+    runIfMain(callerUrl, main);
+    await Promise.resolve();
+
+    expect(main).toHaveBeenCalledTimes(1);
+    expect(core.setFailed).not.toHaveBeenCalled();
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
   it("marks workflow failed when main rejects", async () => {
     process.argv[1] = "/tmp/scripts/example.ts";
     exitSpy.mockImplementationOnce((() => undefined) as never);

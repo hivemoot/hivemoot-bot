@@ -16,6 +16,7 @@
     "cleanup-stale-prs": "node dist/scripts/cleanup-stale-prs.js",
     "reconcile-pr-notifications": "node dist/scripts/reconcile-pr-notifications.js",
     "reconcile-merge-ready": "node dist/scripts/reconcile-merge-ready.js",
+    "reconcile-repository-labels": "node dist/scripts/reconcile-repository-labels.js",
     "daily-standup": "node dist/scripts/daily-standup.js"
   },
   "dependencies": {

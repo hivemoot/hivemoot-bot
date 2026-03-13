@@ -1,5 +1,5 @@
 import { createRepositoryLabelService } from "../lib/index.js";
-import { listAccessibleInstallationRepositories } from "./installation-repos.js";
+import { getRepoContext, listAccessibleInstallationRepositories } from "./installation-repos.js";
 import type { InstallationPayload, InstallationRepoPayload } from "./installation-repos.js";
 import type { Handler, HandlerEvent } from "./types.js";
 
@@ -29,27 +29,8 @@ interface LabelBootstrapWebhookContext {
   payload: InstallationPayload;
 }
 
-interface RepoContext {
-  owner: string;
-  repo: string;
-  fullName: string;
-}
-
 function getLabelBootstrapWebhookContext(event: HandlerEvent): LabelBootstrapWebhookContext {
   return event.context as LabelBootstrapWebhookContext;
-}
-
-function getRepoContext(repository: InstallationRepoPayload): RepoContext {
-  const ownerFromFullName = repository.full_name.split("/")[0];
-  const owner = repository.owner?.login ?? ownerFromFullName;
-  if (!owner) {
-    throw new Error(`Unable to determine repository owner from '${repository.full_name}'`);
-  }
-  return {
-    owner,
-    repo: repository.name,
-    fullName: repository.full_name,
-  };
 }
 
 async function ensureLabelsForRepositories(

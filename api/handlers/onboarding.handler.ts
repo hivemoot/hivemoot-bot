@@ -1,5 +1,5 @@
 import { createOnboardingService } from "../lib/index.js";
-import { listAccessibleInstallationRepositories } from "./installation-repos.js";
+import { getRepoContext, listAccessibleInstallationRepositories } from "./installation-repos.js";
 import type { InstallationPayload, InstallationRepoPayload } from "./installation-repos.js";
 import type { Handler, HandlerEvent } from "./types.js";
 
@@ -14,11 +14,6 @@ interface OnboardingWebhookContext {
 
 function getOnboardingWebhookContext(event: HandlerEvent): OnboardingWebhookContext {
   return event.context as OnboardingWebhookContext;
-}
-
-function getOwner(repository: InstallationRepoPayload): string {
-  const ownerFromFullName = repository.full_name.split("/")[0];
-  return repository.owner?.login ?? ownerFromFullName ?? "";
 }
 
 async function createOnboardingForRepositories(
@@ -50,8 +45,7 @@ async function createOnboardingForRepositories(
   }
 
   for (const repository of targetRepositories) {
-    const owner = getOwner(repository);
-    const { name: repo, full_name: fullName } = repository;
+    const { owner, repo, fullName } = getRepoContext(repository);
     try {
       const result = await service.createOnboardingPR(owner, repo);
       if (result.skipped) {

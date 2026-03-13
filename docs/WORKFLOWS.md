@@ -205,7 +205,9 @@ When `governance.pr.staleDays` is set, implementation PRs are monitored for acti
 | PR merged | Webhook | Real-time |
 | Issue phase transitions | Scheduled script | Every 5 min |
 | Stale PR cleanup | Scheduled script | Every hour (repos with `governance.pr.staleDays`) |
-| Repository label reconciliation | Scheduled script | Daily |
+| Repository label reconciliation | Scheduled script | Daily at `03:20 UTC` |
+
+Repository label reconciliation exists to repair drift in older installations after new required labels are added or existing label metadata changes. Maintainers can also run `reconcile-repository-labels` manually from the Actions tab when they need the repair immediately instead of waiting for the next scheduled window.
 
 ## CI Deploy Health Gate
 

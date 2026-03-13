@@ -294,6 +294,8 @@ Useful scripts:
 
 All labels above are automatically bootstrapped when the app is installed (or when repositories are added to an existing installation), with predefined colors and descriptions.
 
+If a repo was installed before a new required label was introduced, the scheduled `reconcile-repository-labels` workflow repairs that drift once per day at `03:20 UTC`. Maintainers can also trigger the same workflow manually from the Actions tab for an immediate backfill.
+
 ## 💬 Community
 
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/QAAZpfR6)

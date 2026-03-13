@@ -13,8 +13,7 @@
  * Phase 1 (dryRun: true) = label only, no merge action.
  *
  * Short-circuit order optimized by API cost:
- * config → draft/mergeable gates (zero cost from webhook payload) → files
- * → approvals (1 call) → CI (2 calls)
+ * config → draft/mergeable gates (zero cost from webhook payload) → files → approvals (1 call) → CI (2 calls)
  */
 
 import { minimatch } from "minimatch";
@@ -50,7 +49,7 @@ export interface AutomergeParams {
   currentLabels?: string[];
   /** Draft state from webhook payload. True → skip classification. */
   draft?: boolean;
-  /** Mergeable state from webhook payload. False → skip; null = unknown. */
+  /** Mergeable state from webhook payload. False → skip; null = unknown (GitHub still computing). */
   mergeable?: boolean | null;
   log?: { info: (msg: string) => void };
 }

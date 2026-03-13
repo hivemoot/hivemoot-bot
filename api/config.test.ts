@@ -284,6 +284,7 @@ describe("config", () => {
       expect(message).not.toContain("PRIORITY");
       expect(message).not.toContain("priority");
       expect(message).toContain(SIGNATURES.VOTING);
+      expect(message).toContain("react once — multiple reactions = no vote");
       expect(message).toContain("👍");
       expect(message).toContain("👎");
       expect(message).toContain("😕");

@@ -175,7 +175,7 @@ Link it using closing keywords in the description:
 
 Time for hivemoot to decide.${priorityReminder}
 
-**${SIGNATURES.VOTING}:**
+**${SIGNATURES.VOTING} (react once — multiple reactions = no vote):**
 - 👍 **Ready** — Approve for implementation
 - 👎 **Not Ready** — Close this proposal
 - 😕 **Needs Discussion** — Back to discussion

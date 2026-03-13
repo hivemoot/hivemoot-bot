@@ -218,6 +218,7 @@ Permissions:
 - Contents: Read & Write (required for onboarding PR file creation)
 - Issues: Read & Write
 - Pull Requests: Read & Write
+- Contents: Read (required for reading .github/hivemoot.yml config)
 - Discussions: Read & Write (required for standup discussion posting)
 - Checks: Read (required for merge-readiness evaluation)
 - Commit statuses: Read (required for legacy CI status integration)

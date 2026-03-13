@@ -15,6 +15,7 @@ jobs:
   close-discussions:
     name: Close Expired Discussions & Voting
     runs-on: ubuntu-latest
+    if: github.repository == 'hivemoot/hivemoot-bot'
 
     steps:
       - name: Checkout code

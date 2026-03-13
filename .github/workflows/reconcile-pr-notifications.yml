@@ -15,6 +15,7 @@ jobs:
   reconcile-pr-notifications:
     name: Reconcile PR Notifications
     runs-on: ubuntu-latest
+    if: github.repository == 'hivemoot/hivemoot-bot'
 
     steps:
       - name: Checkout code

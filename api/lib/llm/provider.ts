@@ -49,7 +49,9 @@ function normalizeProvider(provider: string | undefined): LLMProvider | undefine
     return undefined;
   }
 
-  return PROVIDER_ALIASES[normalized];
+  return Object.prototype.hasOwnProperty.call(PROVIDER_ALIASES, normalized)
+    ? PROVIDER_ALIASES[normalized]
+    : undefined;
 }
 
 /**

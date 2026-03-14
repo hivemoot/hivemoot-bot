@@ -283,7 +283,9 @@ export async function evaluateAutomerge(
   // Runs on both label-add and label-already-present paths so that:
   // - PRs labeled during dryRun mode enter the native queue when dryRun flips to false
   // - config changes (mergeMethod, commitHeadline, commitBody) are applied to existing PRs
-  if (!config.dryRun && params.graphql) {
+  // Skip when mergeable is null: GitHub is still computing the merge state.
+  // The next check_suite or push event will re-evaluate once the state is known.
+  if (!config.dryRun && params.graphql && params.mergeable !== null) {
     // Fetch nodeId only if not already captured from an earlier prs.get() call
     if (!capturedNodeId) {
       try {

@@ -759,6 +759,30 @@ describe("evaluateAutomerge — Phase 2 (dryRun: false)", () => {
     expect(mockGraphQL.graphql).not.toHaveBeenCalled();
   });
 
+  it("does NOT call enablePullRequestAutoMerge when mergeable is null (GitHub still computing)", async () => {
+    const config = makeConfig({ dryRun: false, mergeMethod: "squash" });
+    const prs = makeEligiblePROperations();
+    const mockGraphQL = { graphql: vi.fn().mockResolvedValue({}) };
+
+    const result = await evaluateAutomerge({
+      prs,
+      ref: baseRef,
+      config,
+      trustedReviewers,
+      graphql: mockGraphQL,
+      mergeable: null,
+    });
+
+    // Label is added — the PR is eligible, just merge state is unknown
+    expect(result).toEqual({ action: "labeled" });
+    expect(prs.addLabels).toHaveBeenCalledWith(baseRef, [LABELS.AUTOMERGE]);
+    // Phase 2 mutation must NOT fire when merge state is unknown
+    expect(mockGraphQL.graphql).not.toHaveBeenCalledWith(
+      expect.stringContaining("enablePullRequestAutoMerge"),
+      expect.anything()
+    );
+  });
+
   it("does NOT call GraphQL mutations when graphql param is absent (dryRun: false without graphql)", async () => {
     const config = makeConfig({ dryRun: false });
     const prs = makeEligiblePROperations();

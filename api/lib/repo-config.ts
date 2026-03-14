@@ -55,6 +55,8 @@ export interface MergeReadyConfig {
 
 // ── Automerge Config ────────────────────────────────────────────────────
 
+export type MergeMethod = "squash" | "merge" | "rebase";
+
 export interface AutomergeConfig {
   dryRun: boolean;
   allowedPaths: string[];
@@ -63,6 +65,20 @@ export interface AutomergeConfig {
   maxChangedLines: number;
   minApprovals: number;
   requireChecks: boolean;
+  /** Merge method used when enabling GitHub native auto-merge. Default: "squash". */
+  mergeMethod: MergeMethod;
+  /**
+   * Custom commit headline for the auto-merge commit.
+   * Only applies to SQUASH and MERGE methods; ignored for REBASE.
+   * When absent, GitHub uses its default (PR title for squash, standard merge message for merge).
+   */
+  commitHeadline?: string;
+  /**
+   * Custom commit body for the auto-merge commit.
+   * Only applies to SQUASH and MERGE methods; ignored for REBASE.
+   * When absent, GitHub uses its default.
+   */
+  commitBody?: string;
 }
 
 // ── Standup Config ──────────────────────────────────────────────────────
@@ -1097,6 +1113,9 @@ function parseAutomergeConfig(
     maxChangedLines?: unknown;
     minApprovals?: unknown;
     requireChecks?: unknown;
+    mergeMethod?: unknown;
+    commitHeadline?: unknown;
+    commitBody?: unknown;
   };
 
   // Check enabled flag — absent defaults to true (presence of section = opt-in)
@@ -1174,6 +1193,24 @@ function parseAutomergeConfig(
     Math.min(CONFIG_BOUNDS.automerge.minApprovals.max, trustedReviewers.length)
   );
 
+  // Parse mergeMethod (default "squash")
+  const VALID_MERGE_METHODS: MergeMethod[] = ["squash", "merge", "rebase"];
+  let mergeMethod: MergeMethod = "squash";
+  if (obj.mergeMethod !== undefined && obj.mergeMethod !== null) {
+    if (typeof obj.mergeMethod === "string" && VALID_MERGE_METHODS.includes(obj.mergeMethod as MergeMethod)) {
+      mergeMethod = obj.mergeMethod as MergeMethod;
+    } else {
+      logger.warn(
+        `[${repoFullName}] Invalid automerge.mergeMethod: "${String(obj.mergeMethod)}". ` +
+        `Expected "squash", "merge", or "rebase". Using default ("squash").`
+      );
+    }
+  }
+
+  // Parse optional commit message fields (only used when dryRun: false and mergeMethod is squash/merge)
+  const commitHeadline = typeof obj.commitHeadline === "string" ? obj.commitHeadline : undefined;
+  const commitBody = typeof obj.commitBody === "string" ? obj.commitBody : undefined;
+
   return {
     dryRun,
     allowedPaths,
@@ -1182,6 +1219,9 @@ function parseAutomergeConfig(
     maxChangedLines,
     minApprovals,
     requireChecks,
+    mergeMethod,
+    commitHeadline,
+    commitBody,
   };
 }
 

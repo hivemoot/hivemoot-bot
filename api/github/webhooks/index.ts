@@ -223,6 +223,7 @@ export function app(probotApp: Probot): void {
           draft: context.payload.pull_request.draft,
           mergeable: context.payload.pull_request.mergeable,
           log: context.log,
+          graphql: context.octokit,
         });
       }
     } catch (error) {
@@ -300,6 +301,7 @@ export function app(probotApp: Probot): void {
           draft: context.payload.pull_request.draft,
           mergeable: context.payload.pull_request.mergeable,
           log: context.log,
+          graphql: context.octokit,
         });
       }
     } catch (error) {
@@ -352,6 +354,7 @@ export function app(probotApp: Probot): void {
           draft: false,
           mergeable: context.payload.pull_request.mergeable,
           log: context.log,
+          graphql: context.octokit,
         });
       }
     } catch (error) {
@@ -701,6 +704,7 @@ export function app(probotApp: Probot): void {
           draft: context.payload.pull_request.draft,
           mergeable: reviewPRMergeable,
           log: context.log,
+          graphql: context.octokit,
         });
       }
     } catch (error) {
@@ -752,6 +756,7 @@ export function app(probotApp: Probot): void {
           draft: context.payload.pull_request.draft,
           mergeable: dismissedPRMergeable,
           log: context.log,
+          graphql: context.octokit,
         });
       }
     } catch (error) {
@@ -853,6 +858,7 @@ export function app(probotApp: Probot): void {
             draft: prDraft,
             mergeable: prMergeable,
             log: context.log,
+            graphql: context.octokit,
           });
         } catch (error) {
           context.log.error({ err: error, pr: pr.number, repo: fullName }, "Failed to evaluate merge-readiness after check_suite");
@@ -927,6 +933,7 @@ export function app(probotApp: Probot): void {
             draft: prDraft,
             mergeable: prMergeable,
             log: context.log,
+            graphql: context.octokit,
           });
 
           if (currentLabels.some((label) => isLabelMatch(label, LABELS.SQUASH_QUEUED))) {
@@ -1028,6 +1035,7 @@ export function app(probotApp: Probot): void {
             draft: pr.draft,
             mergeable: statusPRMergeable,
             log: context.log,
+            graphql: context.octokit,
           });
 
           if (currentLabels.some((label) => isLabelMatch(label, LABELS.SQUASH_QUEUED))) {

@@ -2380,7 +2380,7 @@ describe("Queen Bot", () => {
           owner: "hivemoot",
           repo: "test-repo",
           issue_number: 6,
-          body: expect.stringContaining(`\`${LABELS.SQUASH_QUEUED}\``),
+          body: expect.stringContaining("Run `/squash` again to re-queue a merge once this PR is ready."),
         })
       );
     });
@@ -2417,6 +2417,11 @@ describe("Queen Bot", () => {
         expect.objectContaining({ name: LABELS.SQUASH_QUEUED })
       );
       expect(octokit.rest.issues.createComment).toHaveBeenCalledOnce();
+      expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.stringContaining("Run `/squash` again to re-queue a merge once this PR is ready."),
+        })
+      );
     });
   });
 

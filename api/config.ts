@@ -643,12 +643,17 @@ Closed after ${daysSinceActivity} days of inactivity. Issue remains open for oth
 
   /**
    * Posted to a PR when it is converted to draft and merge-ready labels are removed.
+   * Pass hadSquashQueued=true to include a reminder to re-run /squash once the PR is ready.
    */
-  prConvertedToDraft: (removedLabels: string[]) =>
-    `# 🐝 Back to Draft 📝
-
-Converted to draft, so removed ${removedLabels.map((label) => `\`${label}\``).join(" and ")}.
-Mark this PR ready for review to re-run merge-readiness and automerge checks.${SIGNATURE}`,
+  prConvertedToDraft: (removedLabels: string[], hadSquashQueued = false) => {
+    const removed = removedLabels.map((label) => `\`${label}\``).join(" and ");
+    const lines: string[] = [`Converted to draft, so removed ${removed}.`];
+    lines.push("Mark this PR ready for review to re-run merge-readiness and automerge checks.");
+    if (hadSquashQueued) {
+      lines.push("Run `/squash` again to re-queue a merge once this PR is ready.");
+    }
+    return `# 🐝 Back to Draft 📝\n\n${lines.join("\n")}${SIGNATURE}`;
+  },
 
   /**
    * Posted to competing PRs when another PR is merged for the same issue.

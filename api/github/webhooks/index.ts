@@ -407,7 +407,7 @@ export function app(probotApp: Probot): void {
       }
 
       if (hadMergeReady || hadSquashQueued) {
-        await prs.comment(prRef, PR_MESSAGES.prConvertedToDraft(removedLabels));
+        await prs.comment(prRef, PR_MESSAGES.prConvertedToDraft(removedLabels, hadSquashQueued));
       }
     } catch (error) {
       context.log.error({ err: error, pr: number, repo: fullName }, "Failed to process converted_to_draft");

@@ -61,6 +61,16 @@ describe("LLM Provider", () => {
       expect(isLLMConfigured()).toBe(false);
     });
 
+    it.each(["constructor", "hasOwnProperty", "toString", "valueOf"])(
+      "should return false for inherited Object.prototype property name: %s",
+      (inheritedName) => {
+        process.env.LLM_PROVIDER = inheritedName;
+        process.env.LLM_MODEL = "some-model";
+
+        expect(isLLMConfigured()).toBe(false);
+      }
+    );
+
     it("should return true when valid provider and model are set", () => {
       process.env.LLM_PROVIDER = "anthropic";
       process.env.LLM_MODEL = "claude-3-haiku";

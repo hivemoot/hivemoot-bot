@@ -362,7 +362,9 @@ export function app(probotApp: Probot): void {
 
   /**
    * Handle ready -> draft transition.
-   * Draft PRs cannot be merge-ready/automerge, so remove both labels immediately.
+   * Draft PRs cannot be merge-ready/automerge/squash-queued, so remove all three
+   * labels immediately. Clearing squash-queued prevents a spurious retry when CI
+   * completes while the PR is in draft state.
    */
   probotApp.on("pull_request.converted_to_draft", async (context) => {
     const { number } = context.payload.pull_request;
@@ -384,8 +386,9 @@ export function app(probotApp: Probot): void {
       const currentLabels = context.payload.pull_request.labels?.map((l: { name: string }) => l.name) ?? [];
       const hadMergeReady = currentLabels.some((label) => isLabelMatch(label, LABELS.MERGE_READY));
       const hadAutomerge = currentLabels.some((label) => isLabelMatch(label, LABELS.AUTOMERGE));
+      const hadSquashQueued = currentLabels.some((label) => isLabelMatch(label, LABELS.SQUASH_QUEUED));
 
-      if (!hadMergeReady && !hadAutomerge) return;
+      if (!hadMergeReady && !hadAutomerge && !hadSquashQueued) return;
 
       const prRef = { owner, repo, prNumber: number };
       const removedLabels: string[] = [];
@@ -398,9 +401,13 @@ export function app(probotApp: Probot): void {
         await prs.removeLabel(prRef, LABELS.AUTOMERGE);
         removedLabels.push(LABELS.AUTOMERGE);
       }
+      if (hadSquashQueued) {
+        await prs.removeLabel(prRef, LABELS.SQUASH_QUEUED);
+        removedLabels.push(LABELS.SQUASH_QUEUED);
+      }
 
-      if (hadMergeReady) {
-        await prs.comment(prRef, PR_MESSAGES.prConvertedToDraft(removedLabels));
+      if (hadMergeReady || hadSquashQueued) {
+        await prs.comment(prRef, PR_MESSAGES.prConvertedToDraft(removedLabels, hadSquashQueued));
       }
     } catch (error) {
       context.log.error({ err: error, pr: number, repo: fullName }, "Failed to process converted_to_draft");

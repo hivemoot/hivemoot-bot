@@ -2398,6 +2398,81 @@ describe("Queen Bot", () => {
       expect(octokit.rest.issues.removeLabel).not.toHaveBeenCalled();
       expect(octokit.rest.issues.createComment).not.toHaveBeenCalled();
     });
+
+    it("should remove squash-queued and post comment on pull_request.converted_to_draft", async () => {
+      const { handlers } = createWebhookHarness();
+      const octokit = mkOctokit();
+      vi.mocked(loadRepositoryConfig).mockResolvedValue(prConfig as any);
+
+      await handlers.get("pull_request.converted_to_draft")!({
+        octokit,
+        log: mkLog(),
+        payload: {
+          pull_request: {
+            number: 6,
+            draft: true,
+            labels: [{ name: LABELS.SQUASH_QUEUED }],
+          },
+          repository: testRepo,
+        },
+      });
+
+      expect(octokit.rest.issues.removeLabel).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: "hivemoot",
+          repo: "test-repo",
+          issue_number: 6,
+          name: LABELS.SQUASH_QUEUED,
+        })
+      );
+      expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: "hivemoot",
+          repo: "test-repo",
+          issue_number: 6,
+          body: expect.stringContaining("Run `/squash` again to re-queue a merge once this PR is ready."),
+        })
+      );
+    });
+
+    it("should remove all three labels and post comment when squash-queued, merge-ready, and automerge are all present on pull_request.converted_to_draft", async () => {
+      const { handlers } = createWebhookHarness();
+      const octokit = mkOctokit();
+      vi.mocked(loadRepositoryConfig).mockResolvedValue(prConfig as any);
+
+      await handlers.get("pull_request.converted_to_draft")!({
+        octokit,
+        log: mkLog(),
+        payload: {
+          pull_request: {
+            number: 7,
+            draft: true,
+            labels: [
+              { name: LABELS.MERGE_READY },
+              { name: LABELS.AUTOMERGE },
+              { name: LABELS.SQUASH_QUEUED },
+            ],
+          },
+          repository: testRepo,
+        },
+      });
+
+      expect(octokit.rest.issues.removeLabel).toHaveBeenCalledWith(
+        expect.objectContaining({ name: LABELS.MERGE_READY })
+      );
+      expect(octokit.rest.issues.removeLabel).toHaveBeenCalledWith(
+        expect.objectContaining({ name: LABELS.AUTOMERGE })
+      );
+      expect(octokit.rest.issues.removeLabel).toHaveBeenCalledWith(
+        expect.objectContaining({ name: LABELS.SQUASH_QUEUED })
+      );
+      expect(octokit.rest.issues.createComment).toHaveBeenCalledOnce();
+      expect(octokit.rest.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.stringContaining("Run `/squash` again to re-queue a merge once this PR is ready."),
+        })
+      );
+    });
   });
 
   describe("Message Templates", () => {

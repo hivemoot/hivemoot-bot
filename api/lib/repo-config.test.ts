@@ -1552,6 +1552,26 @@ governance:
         expect(config.governance.pr!.maxPRsPerIssue).toBe(5);
       });
 
+      it("should disable stale cleanup when staleDays is explicitly null", async () => {
+        const configYaml = `
+governance:
+  pr:
+    staleDays: null
+`;
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(configYaml),
+            encoding: "base64",
+          },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+
+        expect(config.governance.pr).not.toBeNull();
+        expect(config.governance.pr!.staleDays).toBeNull();
+      });
+
       it("should use default when staleDays is an object", async () => {
         const configYaml = `
 governance:

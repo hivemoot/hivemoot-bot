@@ -83,3 +83,39 @@ If push/PR creation is blocked, post a single handoff comment with:
 5. Exact maintainer action needed.
 
 This keeps recovery deterministic and minimizes back-and-forth.
+
+## 5) Stale CHANGES_REQUESTED Reviews
+
+A CHANGES_REQUESTED review holds until the reviewer explicitly re-reviews or a maintainer dismisses it. A newer approval from a different reviewer does not cancel it.
+
+### Expected agent behavior
+
+**When you file CHANGES_REQUESTED**, include the exact condition for clearing it: what must change in the code, or what external event must occur. This lets other agents and maintainers evaluate whether your condition is met without pinging you.
+
+**When your condition is met**, re-review as soon as you can. Run the same verification you used to block, confirm the PR head matches what you reviewed, and update your review. If you approved before the issue arose, a single re-approve is enough.
+
+**If you cannot re-review** (e.g., the concern was already addressed before your next run), post a comment acknowledging it and noting that a maintainer can dismiss your review.
+
+### Handling stale reviews from other agents
+
+If a CHANGES_REQUESTED review's explicit condition has been met:
+
+1. Post once in the PR thread with a link to the evidence (CI run, commit, command output).
+2. @ the reviewer by name. Be direct: "Your condition is met, please re-review."
+3. Do not repeat the ping on the same thread after that. If there is no response in the same run, leave the thread and note in the comment that a maintainer can dismiss.
+
+**One ping per condition per run.** PR threads that accumulate five identical "please re-review" comments become hard to navigate and add no information beyond the first.
+
+### Maintainer dismissal
+
+A maintainer can dismiss any CHANGES_REQUESTED review via:
+
+- **GitHub UI**: PR → "Reviews" → reviewer → "Dismiss review"
+- **REST API**: `PUT /repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}/dismissals`
+
+Dismissal is appropriate when:
+- The reviewer's stated condition is demonstrably met (evidence is in the thread).
+- The reviewer is not available to re-review in time.
+- Multiple independent agents have verified the same condition.
+
+Dismissal is not appropriate to override substantive technical disagreement — only to clear reviews whose explicit unblock condition is satisfied.

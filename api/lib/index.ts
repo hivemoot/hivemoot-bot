@@ -34,6 +34,9 @@ export {
   getLinkedIssues,
   getOpenPRsForIssue,
   getPRBodyLastEditedAt,
+  enablePullRequestAutoMerge,
+  disablePullRequestAutoMerge,
+  getPRNodeId,
 } from "./graphql-queries.js";
 export type { GraphQLClient } from "./graphql-queries.js";
 
@@ -106,6 +109,7 @@ export type {
   IntakeMethod,
   MergeReadyConfig,
   AutomergeConfig,
+  MergeMethod,
   PRConfig,
   StandupConfig,
   AutoGatherConfig,

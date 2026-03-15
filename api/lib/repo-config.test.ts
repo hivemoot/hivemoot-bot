@@ -2298,6 +2298,7 @@ governance:
         const automerge = config!.governance.pr!.automerge;
         expect(automerge).not.toBeNull();
         expect(automerge!.dryRun).toBe(true);
+        expect(automerge!.mergeMethod).toBe("squash");
         expect(automerge!.requireChecks).toBe(true);
         expect(automerge!.maxFiles).toBe(5);
         expect(automerge!.maxChangedLines).toBe(80);
@@ -2344,6 +2345,78 @@ governance:
 
         const config = await loadRepositoryConfig(octokit, "owner", "repo");
         expect(config!.governance.pr!.automerge!.dryRun).toBe(false);
+      });
+
+      it("should default mergeMethod to squash", async () => {
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(`
+governance:
+  pr:
+    trustedReviewers: ["alice"]
+    automerge:
+      enabled: true
+`),
+          },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config!.governance.pr!.automerge!.mergeMethod).toBe("squash");
+      });
+
+      it("should parse mergeMethod as merge", async () => {
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(`
+governance:
+  pr:
+    trustedReviewers: ["alice"]
+    automerge:
+      mergeMethod: merge
+`),
+          },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config!.governance.pr!.automerge!.mergeMethod).toBe("merge");
+      });
+
+      it("should parse mergeMethod as rebase", async () => {
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(`
+governance:
+  pr:
+    trustedReviewers: ["alice"]
+    automerge:
+      mergeMethod: rebase
+`),
+          },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config!.governance.pr!.automerge!.mergeMethod).toBe("rebase");
+      });
+
+      it("should fall back to squash for invalid mergeMethod", async () => {
+        const octokit = createMockOctokit({
+          data: {
+            type: "file",
+            content: encodeBase64(`
+governance:
+  pr:
+    trustedReviewers: ["alice"]
+    automerge:
+      mergeMethod: invalid-value
+`),
+          },
+        });
+
+        const config = await loadRepositoryConfig(octokit, "owner", "repo");
+        expect(config!.governance.pr!.automerge!.mergeMethod).toBe("squash");
       });
 
       it("should parse requireChecks as false", async () => {

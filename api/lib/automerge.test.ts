@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { isFileAllowed, classifyFiles, evaluateAutomerge } from "./automerge.js";
 import type { AutomergeConfig } from "./repo-config.js";
 import { LABELS } from "../config.js";
+import * as graphqlQueries from "./graphql-queries.js";
 
 // ───────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -10,6 +11,7 @@ import { LABELS } from "../config.js";
 function makeConfig(overrides?: Partial<AutomergeConfig>): AutomergeConfig {
   return {
     dryRun: true,
+    mergeMethod: "squash",
     allowedPaths: ["**/*.md", "**/*.txt", "docs/**"],
     denyPaths: [".github/**", "package.json"],
     maxFiles: 5,
@@ -17,6 +19,12 @@ function makeConfig(overrides?: Partial<AutomergeConfig>): AutomergeConfig {
     minApprovals: 2,
     requireChecks: true,
     ...overrides,
+  };
+}
+
+function createMockGraphQLClient() {
+  return {
+    graphql: vi.fn().mockResolvedValue({}),
   };
 }
 
@@ -648,5 +656,170 @@ describe("evaluateAutomerge", () => {
 
     // Only alice counts (bob not approved, charlie not trusted)
     expect(result).toEqual({ action: "noop", labeled: false });
+  });
+
+  describe("Phase 2: native auto-merge (dryRun: false)", () => {
+    const enableSpy = vi.spyOn(graphqlQueries, "enablePullRequestAutoMerge");
+    const disableSpy = vi.spyOn(graphqlQueries, "disablePullRequestAutoMerge");
+    const getNodeIdSpy = vi.spyOn(graphqlQueries, "getPRNodeId");
+
+    beforeEach(() => {
+      enableSpy.mockResolvedValue(undefined);
+      disableSpy.mockResolvedValue(undefined);
+      getNodeIdSpy.mockResolvedValue("PR_node_id_abc");
+    });
+
+    it("enables native auto-merge when label is added and dryRun is false", async () => {
+      const config = makeConfig({ dryRun: false, requireChecks: false });
+      const graphqlClient = createMockGraphQLClient();
+      const prs = createMockPROperations({
+        listFiles: vi.fn().mockResolvedValue([makeFile("README.md", 5)]),
+        getApproverLogins: vi.fn().mockResolvedValue(new Set(["alice", "bob"])),
+        getLabels: vi.fn().mockResolvedValue([]),
+      });
+
+      const result = await evaluateAutomerge({
+        prs,
+        ref: baseRef,
+        config,
+        trustedReviewers,
+        graphqlClient,
+        prNodeId: "PR_node_id_abc",
+      });
+
+      expect(result.action).toBe("labeled");
+      expect(enableSpy).toHaveBeenCalledWith(graphqlClient, "PR_node_id_abc", "SQUASH");
+      expect(disableSpy).not.toHaveBeenCalled();
+    });
+
+    it("uses mergeMethod from config when enabling auto-merge", async () => {
+      const config = makeConfig({ dryRun: false, requireChecks: false, mergeMethod: "rebase" });
+      const graphqlClient = createMockGraphQLClient();
+      const prs = createMockPROperations({
+        listFiles: vi.fn().mockResolvedValue([makeFile("README.md", 5)]),
+        getApproverLogins: vi.fn().mockResolvedValue(new Set(["alice", "bob"])),
+        getLabels: vi.fn().mockResolvedValue([]),
+      });
+
+      await evaluateAutomerge({
+        prs,
+        ref: baseRef,
+        config,
+        trustedReviewers,
+        graphqlClient,
+        prNodeId: "PR_node_id_abc",
+      });
+
+      expect(enableSpy).toHaveBeenCalledWith(graphqlClient, "PR_node_id_abc", "REBASE");
+    });
+
+    it("fetches prNodeId via GraphQL when not provided", async () => {
+      const config = makeConfig({ dryRun: false, requireChecks: false });
+      const graphqlClient = createMockGraphQLClient();
+      const prs = createMockPROperations({
+        listFiles: vi.fn().mockResolvedValue([makeFile("README.md", 5)]),
+        getApproverLogins: vi.fn().mockResolvedValue(new Set(["alice", "bob"])),
+        getLabels: vi.fn().mockResolvedValue([]),
+      });
+
+      await evaluateAutomerge({
+        prs,
+        ref: baseRef,
+        config,
+        trustedReviewers,
+        graphqlClient,
+        // prNodeId intentionally not provided
+      });
+
+      expect(getNodeIdSpy).toHaveBeenCalledWith(graphqlClient, baseRef.owner, baseRef.repo, baseRef.prNumber);
+      expect(enableSpy).toHaveBeenCalledWith(graphqlClient, "PR_node_id_abc", "SQUASH");
+    });
+
+    it("disables native auto-merge when label is removed", async () => {
+      const config = makeConfig({ dryRun: false, requireChecks: false });
+      const graphqlClient = createMockGraphQLClient();
+      const prs = createMockPROperations({
+        listFiles: vi.fn().mockResolvedValue([makeFile("src/index.ts", 5)]), // ineligible
+        getLabels: vi.fn().mockResolvedValue([LABELS.AUTOMERGE]),
+      });
+
+      const result = await evaluateAutomerge({
+        prs,
+        ref: baseRef,
+        config,
+        trustedReviewers,
+        graphqlClient,
+        prNodeId: "PR_node_id_abc",
+      });
+
+      expect(result.action).toBe("unlabeled");
+      expect(disableSpy).toHaveBeenCalledWith(graphqlClient, "PR_node_id_abc");
+      expect(enableSpy).not.toHaveBeenCalled();
+    });
+
+    it("does not call auto-merge mutations when dryRun is true", async () => {
+      const config = makeConfig({ dryRun: true, requireChecks: false });
+      const graphqlClient = createMockGraphQLClient();
+      const prs = createMockPROperations({
+        listFiles: vi.fn().mockResolvedValue([makeFile("README.md", 5)]),
+        getApproverLogins: vi.fn().mockResolvedValue(new Set(["alice", "bob"])),
+        getLabels: vi.fn().mockResolvedValue([]),
+      });
+
+      const result = await evaluateAutomerge({
+        prs,
+        ref: baseRef,
+        config,
+        trustedReviewers,
+        graphqlClient,
+        prNodeId: "PR_node_id_abc",
+      });
+
+      expect(result.action).toBe("labeled");
+      expect(enableSpy).not.toHaveBeenCalled();
+      expect(disableSpy).not.toHaveBeenCalled();
+    });
+
+    it("does not call auto-merge mutations when graphqlClient is not provided", async () => {
+      const config = makeConfig({ dryRun: false, requireChecks: false });
+      const prs = createMockPROperations({
+        listFiles: vi.fn().mockResolvedValue([makeFile("README.md", 5)]),
+        getApproverLogins: vi.fn().mockResolvedValue(new Set(["alice", "bob"])),
+        getLabels: vi.fn().mockResolvedValue([]),
+      });
+
+      const result = await evaluateAutomerge({
+        prs,
+        ref: baseRef,
+        config,
+        trustedReviewers,
+        // graphqlClient intentionally not provided
+      });
+
+      expect(result.action).toBe("labeled");
+      expect(enableSpy).not.toHaveBeenCalled();
+      expect(disableSpy).not.toHaveBeenCalled();
+    });
+
+    it("does not call disable when label is absent and conditions fail", async () => {
+      const config = makeConfig({ dryRun: false, requireChecks: false });
+      const graphqlClient = createMockGraphQLClient();
+      const prs = createMockPROperations({
+        listFiles: vi.fn().mockResolvedValue([makeFile("src/index.ts", 5)]),
+        getLabels: vi.fn().mockResolvedValue([]), // label not present
+      });
+
+      const result = await evaluateAutomerge({
+        prs,
+        ref: baseRef,
+        config,
+        trustedReviewers,
+        graphqlClient,
+        prNodeId: "PR_node_id_abc",
+      });
+
+      expect(result).toEqual({ action: "noop", labeled: false });
+      expect(disableSpy).not.toHaveBeenCalled();
+    });
   });
 });

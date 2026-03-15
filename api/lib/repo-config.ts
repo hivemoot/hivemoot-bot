@@ -55,8 +55,11 @@ export interface MergeReadyConfig {
 
 // ── Automerge Config ────────────────────────────────────────────────────
 
+export type MergeMethod = "squash" | "merge" | "rebase";
+
 export interface AutomergeConfig {
   dryRun: boolean;
+  mergeMethod: MergeMethod;
   allowedPaths: string[];
   denyPaths: string[];
   maxFiles: number;
@@ -1091,6 +1094,7 @@ function parseAutomergeConfig(
   const obj = value as {
     enabled?: unknown;
     dryRun?: unknown;
+    mergeMethod?: unknown;
     allowedPaths?: unknown;
     denyPaths?: unknown;
     maxFiles?: unknown;
@@ -1128,6 +1132,19 @@ function parseAutomergeConfig(
     } else {
       logger.warn(
         `[${repoFullName}] Invalid automerge.dryRun: expected boolean. Using default (true).`
+      );
+    }
+  }
+
+  // Parse mergeMethod (default "squash")
+  const VALID_MERGE_METHODS = ["squash", "merge", "rebase"] as const;
+  let mergeMethod: MergeMethod = "squash";
+  if (obj.mergeMethod !== undefined && obj.mergeMethod !== null) {
+    if (typeof obj.mergeMethod === "string" && (VALID_MERGE_METHODS as readonly string[]).includes(obj.mergeMethod)) {
+      mergeMethod = obj.mergeMethod as MergeMethod;
+    } else {
+      logger.warn(
+        `[${repoFullName}] Invalid automerge.mergeMethod: expected "squash", "merge", or "rebase". Using default ("squash").`
       );
     }
   }
@@ -1176,6 +1193,7 @@ function parseAutomergeConfig(
 
   return {
     dryRun,
+    mergeMethod,
     allowedPaths,
     denyPaths,
     maxFiles,

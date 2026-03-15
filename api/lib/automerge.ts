@@ -22,6 +22,12 @@ import type { PRRef } from "./types.js";
 import type { PROperations } from "./pr-operations.js";
 import type { AutomergeConfig } from "./repo-config.js";
 import { isCIPassing } from "./merge-readiness.js";
+import type { GraphQLClient } from "./graphql-queries.js";
+import {
+  enablePullRequestAutoMerge,
+  disablePullRequestAutoMerge,
+  getPRNodeId,
+} from "./graphql-queries.js";
 
 // ───────────────────────────────────────────────────────────────────────────────
 // Types
@@ -51,6 +57,18 @@ export interface AutomergeParams {
   draft?: boolean;
   /** Mergeable state from webhook payload. False → skip; null = unknown (GitHub still computing). */
   mergeable?: boolean | null;
+  /**
+   * GraphQL client for Phase 2: enabling/disabling GitHub native auto-merge.
+   * Required when config.dryRun is false. When omitted, auto-merge mutations
+   * are skipped even if dryRun is false (label-only fallback).
+   */
+  graphqlClient?: GraphQLClient;
+  /**
+   * GraphQL node ID of the PR (pull_request.node_id from webhook payload).
+   * Used to avoid an extra API call when calling auto-merge mutations.
+   * Fetched automatically if graphqlClient is provided but prNodeId is not.
+   */
+  prNodeId?: string;
   log?: { info: (msg: string) => void };
 }
 
@@ -168,6 +186,10 @@ export function classifyFiles(
  * 5. If requireChecks → check CI via isCIPassing()
  * 6. All pass → add label; any fail → remove label if present
  *
+ * Phase 2 (dryRun: false): when graphqlClient is provided, also enables or
+ * disables GitHub's native auto-merge via GraphQL mutations so GitHub handles
+ * merge ordering and state freshness reliably.
+ *
  * Idempotent: safe to call multiple times for the same PR.
  */
 export async function evaluateAutomerge(
@@ -180,15 +202,36 @@ export async function evaluateAutomerge(
     return { action: "skipped", reason: "feature disabled" };
   }
 
+  const { graphqlClient } = params;
+  const useNativeMerge = !config.dryRun && graphqlClient !== undefined;
+
+  // Resolve the PR node ID lazily — only needed for Phase 2 mutations.
+  let resolvedNodeId: string | undefined = params.prNodeId;
+  const resolveNodeId = async (): Promise<string | undefined> => {
+    if (resolvedNodeId !== undefined) return resolvedNodeId;
+    if (!graphqlClient) return undefined;
+    resolvedNodeId = (await getPRNodeId(graphqlClient, ref.owner, ref.repo, ref.prNumber)) ?? undefined;
+    return resolvedNodeId;
+  };
+
   // Resolve current labels (use pre-fetched or fetch)
   const labels = params.currentLabels ?? await prs.getLabels(ref);
   const hasAutomerge = labels.some(l => isLabelMatch(l, LABELS.AUTOMERGE));
 
-  // Helper to remove label if present
+  // Helper to remove label if present, and disable native auto-merge if Phase 2.
   const removeIfLabeled = async (reason: string): Promise<AutomergeResult> => {
     if (hasAutomerge) {
       await prs.removeLabel(ref, LABELS.AUTOMERGE);
       log?.info(`[PR #${ref.prNumber}] Removed automerge: ${reason}`);
+
+      if (useNativeMerge) {
+        const nodeId = await resolveNodeId();
+        if (nodeId) {
+          await disablePullRequestAutoMerge(graphqlClient!, nodeId);
+          log?.info(`[PR #${ref.prNumber}] Disabled native auto-merge`);
+        }
+      }
+
       return { action: "unlabeled", reason };
     }
     return { action: "noop", labeled: false };
@@ -238,6 +281,16 @@ export async function evaluateAutomerge(
   if (!hasAutomerge) {
     await prs.addLabels(ref, [LABELS.AUTOMERGE]);
     log?.info(`[PR #${ref.prNumber}] Added automerge label`);
+
+    if (useNativeMerge) {
+      const nodeId = await resolveNodeId();
+      if (nodeId) {
+        const mergeMethod = config.mergeMethod.toUpperCase() as "SQUASH" | "MERGE" | "REBASE";
+        await enablePullRequestAutoMerge(graphqlClient!, nodeId, mergeMethod);
+        log?.info(`[PR #${ref.prNumber}] Enabled native auto-merge (${config.mergeMethod})`);
+      }
+    }
+
     return { action: "labeled" };
   }
 

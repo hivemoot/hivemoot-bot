@@ -1510,3 +1510,116 @@ describe("getOpenPRsForIssue", () => {
     expect(linkedIssuesCalls).toHaveLength(2);
   });
 });
+
+// ──────────────────────────────────────────────────────────────────────────────
+// enablePullRequestAutoMerge / disablePullRequestAutoMerge / getPRNodeId
+// ──────────────────────────────────────────────────────────────────────────────
+
+import {
+  enablePullRequestAutoMerge,
+  disablePullRequestAutoMerge,
+  getPRNodeId,
+} from "./graphql-queries.js";
+
+describe("enablePullRequestAutoMerge", () => {
+  let mockClient: GraphQLClient;
+
+  beforeEach(() => {
+    mockClient = { graphql: vi.fn().mockResolvedValue({}) };
+  });
+
+  it("calls the GraphQL mutation with the correct variables", async () => {
+    await enablePullRequestAutoMerge(mockClient, "PR_node_abc", "SQUASH");
+
+    expect(mockClient.graphql).toHaveBeenCalledOnce();
+    const [query, vars] = vi.mocked(mockClient.graphql).mock.calls[0];
+    expect((query as string)).toContain("enablePullRequestAutoMerge");
+    expect(vars).toEqual({ pullRequestId: "PR_node_abc", mergeMethod: "SQUASH" });
+  });
+
+  it("passes the mergeMethod as-is to the mutation", async () => {
+    await enablePullRequestAutoMerge(mockClient, "PR_node_abc", "REBASE");
+
+    const [, vars] = vi.mocked(mockClient.graphql).mock.calls[0];
+    expect(vars).toMatchObject({ mergeMethod: "REBASE" });
+  });
+
+  it("propagates unexpected errors", async () => {
+    vi.mocked(mockClient.graphql).mockRejectedValue(new Error("GraphQL error"));
+    await expect(enablePullRequestAutoMerge(mockClient, "PR_node_abc", "MERGE")).rejects.toThrow("GraphQL error");
+  });
+});
+
+describe("disablePullRequestAutoMerge", () => {
+  let mockClient: GraphQLClient;
+
+  beforeEach(() => {
+    mockClient = { graphql: vi.fn().mockResolvedValue({}) };
+  });
+
+  it("calls the GraphQL mutation with the correct variable", async () => {
+    await disablePullRequestAutoMerge(mockClient, "PR_node_abc");
+
+    expect(mockClient.graphql).toHaveBeenCalledOnce();
+    const [query, vars] = vi.mocked(mockClient.graphql).mock.calls[0];
+    expect((query as string)).toContain("disablePullRequestAutoMerge");
+    expect(vars).toEqual({ pullRequestId: "PR_node_abc" });
+  });
+
+  it("suppresses 'auto-merge is not enabled' errors", async () => {
+    vi.mocked(mockClient.graphql).mockRejectedValue(
+      new Error("Pull request does not have auto-merge enabled")
+    );
+    await expect(disablePullRequestAutoMerge(mockClient, "PR_node_abc")).resolves.toBeUndefined();
+  });
+
+  it("suppresses case-insensitive auto-merge-not-enabled errors", async () => {
+    vi.mocked(mockClient.graphql).mockRejectedValue(
+      new Error("Auto-merge is not enabled on this pull request")
+    );
+    await expect(disablePullRequestAutoMerge(mockClient, "PR_node_abc")).resolves.toBeUndefined();
+  });
+
+  it("propagates unexpected errors", async () => {
+    vi.mocked(mockClient.graphql).mockRejectedValue(new Error("rate limit exceeded"));
+    await expect(disablePullRequestAutoMerge(mockClient, "PR_node_abc")).rejects.toThrow("rate limit exceeded");
+  });
+});
+
+describe("getPRNodeId", () => {
+  let mockClient: GraphQLClient;
+
+  beforeEach(() => {
+    mockClient = { graphql: vi.fn() };
+  });
+
+  it("returns the node ID when the PR exists", async () => {
+    vi.mocked(mockClient.graphql).mockResolvedValue({
+      repository: { pullRequest: { id: "PR_node_xyz" } },
+    });
+
+    const result = await getPRNodeId(mockClient, "owner", "repo", 42);
+    expect(result).toBe("PR_node_xyz");
+  });
+
+  it("returns null when the PR does not exist", async () => {
+    vi.mocked(mockClient.graphql).mockResolvedValue({
+      repository: { pullRequest: null },
+    });
+
+    const result = await getPRNodeId(mockClient, "owner", "repo", 9999);
+    expect(result).toBeNull();
+  });
+
+  it("calls the query with the correct variables", async () => {
+    vi.mocked(mockClient.graphql).mockResolvedValue({
+      repository: { pullRequest: { id: "PR_node_xyz" } },
+    });
+
+    await getPRNodeId(mockClient, "myorg", "myrepo", 17);
+
+    const [query, vars] = vi.mocked(mockClient.graphql).mock.calls[0];
+    expect((query as string)).toContain("GetPRNodeId");
+    expect(vars).toEqual({ owner: "myorg", repo: "myrepo", pr: 17 });
+  });
+});

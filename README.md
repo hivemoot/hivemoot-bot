@@ -153,6 +153,7 @@ governance:
     automerge:
       enabled: true
       dryRun: true
+      mergeMethod: squash
       allowedPaths: ["**/*.md", "**/*.txt", "docs/**"]
       maxFiles: 5
       maxChangedLines: 80
@@ -173,7 +174,8 @@ standup:
 | `governance.pr.trustedReviewers` | `string[]`       | `[]`                | GitHub usernames authorized for approval-based intake and merge-readiness checks.                                                                                                                                                                                                                       |
 | `governance.pr.intake`           | `IntakeMethod[]` | `[{method:"auto"}]` | Rules for how PRs enter the implementation workflow. Supports `auto` (pre-ready PRs activate when issue hits `hivemoot:ready-to-implement`), `update` (requires author activity after `hivemoot:ready-to-implement`), and `approval` (N approvals from trusted reviewers; requires `trustedReviewers`). |
 | `governance.pr.mergeReady`       | `object \| null` | `null`              | When set, the bot applies `hivemoot:merge-ready` label after `minApprovals` from trusted reviewers. Omit to disable.                                                                                                                                                                                    |
-| `governance.pr.automerge`        | `object \| null` | `null`              | When set, classifies PRs for automatic merge based on file paths, file count, changed lines, approvals, and CI. Labels qualifying PRs with `hivemoot:automerge`. `dryRun: true` (default) labels only; `dryRun: false` will also trigger merge (Phase 2). Requires `trustedReviewers`. |
+| `governance.pr.automerge`        | `object \| null` | `null`              | When set, classifies PRs for automatic merge based on file paths, file count, changed lines, approvals, and CI. Labels qualifying PRs with `hivemoot:automerge`. `dryRun: true` (default) labels only; `dryRun: false` enables GitHub's native auto-merge via GraphQL — GitHub handles merge ordering and state freshness. Requires `trustedReviewers` and at least one branch protection rule. |
+| `governance.pr.automerge.mergeMethod` | `"squash" \| "merge" \| "rebase"` | `"squash"` | Merge strategy used when `dryRun: false` triggers GitHub native auto-merge. |
 | `governance.proposals.discussion.autoGather.enabled`          | `boolean` | `false` | Enable automatic `/gather` on discussion issues after N new comments.                                       |
 | `governance.proposals.discussion.autoGather.minNewComments`   | `number`  | `5`     | Minimum non-bot comments since last gather before triggering. Range: 1–100.                                 |
 | `governance.proposals.discussion.autoGather.cooldownMinutes`  | `number`  | `60`    | Minimum minutes between auto-gather runs per issue. Range: 5–10080 (7 days).                               |

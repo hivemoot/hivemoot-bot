@@ -320,6 +320,136 @@ export async function getOpenPRsForIssue(
   return verified;
 }
 
+// ───────────────────────────────────────────────────────────────────────────────
+// Mutation: Enable Pull Request Auto-Merge
+// ───────────────────────────────────────────────────────────────────────────────
+
+const ENABLE_AUTO_MERGE_MUTATION = `
+  mutation EnableAutoMerge($pullRequestId: ID!, $mergeMethod: PullRequestMergeMethod!) {
+    enablePullRequestAutoMerge(input: {
+      pullRequestId: $pullRequestId,
+      mergeMethod: $mergeMethod
+    }) {
+      pullRequest { number }
+    }
+  }
+`;
+
+interface EnableAutoMergeResponse {
+  enablePullRequestAutoMerge: {
+    pullRequest: { number: number } | null;
+  };
+}
+
+/**
+ * Enable GitHub's native auto-merge for a pull request.
+ *
+ * Requires the repo to have at least one branch protection rule with required
+ * reviews or required status checks. The PR author must also have write access.
+ *
+ * @param pullRequestId - GraphQL node ID of the pull request (PR.node_id in REST)
+ * @param mergeMethod - How to merge: "SQUASH", "MERGE", or "REBASE"
+ */
+export async function enablePullRequestAutoMerge(
+  client: GraphQLClient,
+  pullRequestId: string,
+  mergeMethod: "SQUASH" | "MERGE" | "REBASE"
+): Promise<void> {
+  await client.graphql<EnableAutoMergeResponse>(ENABLE_AUTO_MERGE_MUTATION, {
+    pullRequestId,
+    mergeMethod,
+  });
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
+// Mutation: Disable Pull Request Auto-Merge
+// ───────────────────────────────────────────────────────────────────────────────
+
+const DISABLE_AUTO_MERGE_MUTATION = `
+  mutation DisableAutoMerge($pullRequestId: ID!) {
+    disablePullRequestAutoMerge(input: { pullRequestId: $pullRequestId }) {
+      pullRequest { number }
+    }
+  }
+`;
+
+interface DisableAutoMergeResponse {
+  disablePullRequestAutoMerge: {
+    pullRequest: { number: number } | null;
+  };
+}
+
+/**
+ * Disable GitHub's native auto-merge for a pull request.
+ *
+ * Safe to call when auto-merge is already disabled — GitHub returns an error
+ * in that case, which this function suppresses (intent is already satisfied).
+ *
+ * @param pullRequestId - GraphQL node ID of the pull request
+ */
+export async function disablePullRequestAutoMerge(
+  client: GraphQLClient,
+  pullRequestId: string
+): Promise<void> {
+  try {
+    await client.graphql<DisableAutoMergeResponse>(DISABLE_AUTO_MERGE_MUTATION, {
+      pullRequestId,
+    });
+  } catch (err) {
+    // GitHub returns an error when auto-merge is not enabled. This is not a
+    // problem — the desired state (auto-merge off) is already satisfied.
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/auto-merge is not enabled/i.test(msg) || /pull request does not have auto-merge enabled/i.test(msg)) {
+      return;
+    }
+    throw err;
+  }
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
+// Query: Get PR GraphQL node ID
+// ───────────────────────────────────────────────────────────────────────────────
+
+const GET_PR_NODE_ID_QUERY = `
+  query GetPRNodeId($owner: String!, $repo: String!, $pr: Int!) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $pr) {
+        id
+      }
+    }
+  }
+`;
+
+interface PRNodeIdResponse {
+  repository: {
+    pullRequest: { id: string } | null;
+  };
+}
+
+/**
+ * Get the GraphQL node ID for a pull request.
+ *
+ * Needed when calling enablePullRequestAutoMerge / disablePullRequestAutoMerge
+ * and the node ID was not available from the webhook payload.
+ *
+ * Returns null if the PR does not exist.
+ */
+export async function getPRNodeId(
+  client: GraphQLClient,
+  owner: string,
+  repo: string,
+  prNumber: number
+): Promise<string | null> {
+  const response = await client.graphql<PRNodeIdResponse>(GET_PR_NODE_ID_QUERY, {
+    owner,
+    repo,
+    pr: prNumber,
+  });
+  return response.repository.pullRequest?.id ?? null;
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
+
 /**
  * Internal helper: Get open PRs that cross-reference an issue.
  * This is the first step of getOpenPRsForIssue - finds candidates that mention the issue.
